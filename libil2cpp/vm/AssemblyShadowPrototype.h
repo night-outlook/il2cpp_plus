@@ -21,6 +21,7 @@ namespace il2cpp { namespace vm {
         static bool Activate(const char* name);
         static const Il2CppAssembly* ResolveName(const char* name, const char* site);
         static const Il2CppImage* ResolveImage(const Il2CppImage* image);
+        static Il2CppClass* ResolveUnityComparisonTarget(const Il2CppClass* actual, Il2CppClass* expected);
         static void TraceImage(const char* site, const Il2CppImage* image);
         static void TraceClass(const char* site, const Il2CppClass* klass);
         static void TraceTypeCheck(const char* site, const Il2CppClass* actual,

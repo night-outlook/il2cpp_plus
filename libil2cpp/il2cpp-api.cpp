@@ -270,6 +270,12 @@ bool il2cpp_class_is_subclass_of(Il2CppClass *klass, Il2CppClass *klassc, bool c
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
     bool result = Class::IsSubclassOf(klass, klassc, check_interfaces);
     AssemblyShadowPrototype::TraceTypeCheck("il2cpp_class_is_subclass_of.observed", klass, klassc, check_interfaces, result);
+    Il2CppClass* target = AssemblyShadowPrototype::ResolveUnityComparisonTarget(klass, klassc);
+    if (target != klassc)
+    {
+        result = Class::IsSubclassOf(klass, target, check_interfaces);
+        AssemblyShadowPrototype::TraceTypeCheck("il2cpp_class_is_subclass_of.resolved", klass, target, check_interfaces, result);
+    }
     return result;
 #else
     return Class::IsSubclassOf(klass, klassc, check_interfaces);

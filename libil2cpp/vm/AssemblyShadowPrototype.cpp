@@ -12,6 +12,7 @@
 #include "il2cpp-class-internals.h"
 #include "il2cpp-object-internals.h"
 #include "hybridclr/metadata/MetadataUtil.h"
+#include "vm/Image.h"
 #include "utils/Logging.h"
 #if defined(__APPLE__) || defined(__linux__)
 #include <dlfcn.h>
@@ -201,6 +202,22 @@ const Il2CppImage* AssemblyShadowPrototype::ResolveImage(const Il2CppImage* imag
     return shadow->image;
 }
 
+Il2CppClass* AssemblyShadowPrototype::ResolveUnityComparisonTarget(const Il2CppClass* actual, Il2CppClass* expected)
+{
+    auto& state = State();
+    if (!state.active.load() || !actual || !expected) return expected;
+    const Il2CppAssembly* baseline = state.baseline.load();
+    const Il2CppAssembly* shadow = state.shadow.load();
+    if (!baseline || !shadow || actual->image != shadow->image || expected->image != baseline->image ||
+        actual->is_generic || actual->generic_class || actual->declaringType ||
+        expected->is_generic || expected->generic_class || expected->declaringType) return expected;
+    // M01 only: Unity's string component lookup compares a physical shadow object
+    // against a cached baseline MonoScript class. Canonicalize only that target;
+    // never change the actual object's class or the VM's general casting rules.
+    Il2CppClass* mapped = Image::ClassFromName(shadow->image, expected->namespaze, expected->name);
+    return mapped ? mapped : expected;
+}
+
 void AssemblyShadowPrototype::TraceImage(const char* site, const Il2CppImage* image)
 {
     if (image && image->assembly && IsCandidateName(image->assembly->aname.name))
@@ -235,7 +252,7 @@ std::string AssemblyShadowPrototype::Diagnostics()
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
     std::string result = "{\"enabled\":true,\"canonicalName\":" + Quote(kName) +
-        ",\"mappingPolicy\":\"name-and-image-before-class-lookup\"" +
+        ",\"mappingPolicy\":\"name-image-and-unity-comparison-target\"" +
         ",\"active\":" + (state.active.load() ? "true" : "false") +
         ",\"baseline\":" + AssemblyInfo(state.baseline.load()) +
         ",\"shadow\":" + AssemblyInfo(state.shadow.load()) +
