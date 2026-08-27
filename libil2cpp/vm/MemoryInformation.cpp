@@ -5,6 +5,13 @@
 #include "metadata/ArrayMetadata.h"
 #include "metadata/GenericMetadata.h"
 #include "vm/Assembly.h"
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+#include "vm/AssemblyShadow.h"
+#include "vm/AssemblyShadowVisibility.h"
+#include "vm/GlobalMetadata.h"
+#include "vm/MetadataLock.h"
+#include "os/Mutex.h"
+#endif
 #include "vm/Class.h"
 #include "vm/MetadataCache.h"
 #include "vm/Type.h"
@@ -26,10 +33,18 @@ namespace MemoryInformation
     {
         uint32_t currentIndex;
         std::map<Il2CppClass*, uint32_t> allTypes;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        uint64_t visibilityGeneration;
+#endif
     };
 
     static void GatherMetadataCallback(Il2CppClass* type, void* context)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (!AssemblyShadowVisibility::IsClassVisible(type,
+            static_cast<GatherMetadataContext*>(context)->visibilityGeneration))
+            return;
+#endif
         if (type->initialized)
         {
             GatherMetadataContext* ctx = static_cast<GatherMetadataContext*>(context);
@@ -50,7 +65,18 @@ namespace MemoryInformation
     static inline void GatherMetadata(Il2CppMetadataSnapshot& metadata)
     {
         GatherMetadataContext gatherMetadataContext = { 0 };
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        const AssemblyVector* allAssemblies;
+        {
+            // Capture the assembly list and active visibility at the same commit
+            // boundary; no public callback runs under this additional lock.
+            os::FastAutoLock lock(&g_MetadataLock);
+            gatherMetadataContext.visibilityGeneration = AssemblyShadow::ActiveGeneration();
+            allAssemblies = Assembly::GetAllAssemblies();
+        }
+#else
         const AssemblyVector* allAssemblies = Assembly::GetAllAssemblies();
+#endif
 
         for (AssemblyVector::const_iterator it = allAssemblies->begin(); it != allAssemblies->end(); it++)
         {
@@ -59,6 +85,10 @@ namespace MemoryInformation
             for (uint32_t i = 0; i < image.typeCount; i++)
             {
                 Il2CppClass* type = MetadataCache::GetTypeInfoFromHandle(MetadataCache::GetAssemblyTypeHandle(&image, i));
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+                if (!AssemblyShadowVisibility::IsClassVisible(type, gatherMetadataContext.visibilityGeneration))
+                    continue;
+#endif
                 if (type->initialized)
                     gatherMetadataContext.allTypes.insert(std::make_pair(type, gatherMetadataContext.currentIndex++));
             }
@@ -98,6 +128,13 @@ namespace MemoryInformation
                     {
                         Il2CppMetadataField& field = metadata.types[index].fields[type.fieldCount];
                         FieldInfo* fieldInfo = typeInfo->fields + i;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+                        // Never materialize a private compound field type outside
+                        // the staging resolver just to discover it is excluded.
+                        if (!AssemblyShadowVisibility::IsTypeVisible(fieldInfo->type,
+                            gatherMetadataContext.visibilityGeneration))
+                            continue;
+#endif
                         field.typeIndex = FindTypeInfoIndexInMap(allTypes, Class::FromIl2CppType(fieldInfo->type));
 
                         // This will happen if fields type is not initialized
@@ -298,9 +335,37 @@ namespace MemoryInformation
         uint32_t size;
     };
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    struct VisibleClassReportContext
+    {
+        ClassReportFunc callback;
+        void* context;
+        uint64_t generation;
+    };
+
+    static void ReportVisibleClass(Il2CppClass* klass, void* context)
+    {
+        auto* report = static_cast<VisibleClassReportContext*>(context);
+        if (AssemblyShadowVisibility::IsClassVisible(klass, report->generation))
+            report->callback(klass, report->context);
+    }
+#endif
+
     void ReportIL2CppClasses(ClassReportFunc callback, void* context)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        VisibleClassReportContext report{ callback, context, 0 };
+        const AssemblyVector* allAssemblies;
+        {
+            os::FastAutoLock lock(&g_MetadataLock);
+            report.generation = AssemblyShadow::ActiveGeneration();
+            allAssemblies = Assembly::GetAllAssemblies();
+        }
+        callback = ReportVisibleClass;
+        context = &report;
+#else
         const AssemblyVector* allAssemblies = Assembly::GetAllAssemblies();
+#endif
 
         for (AssemblyVector::const_iterator it = allAssemblies->begin(); it != allAssemblies->end(); it++)
         {
@@ -308,8 +373,16 @@ namespace MemoryInformation
 
             for (uint32_t i = 0; i < image.typeCount; i++)
             {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+                // The public API reports only initialized definitions. Creating
+                // an uncached definition cannot make it reportable, but can
+                // resolve parent/declaring types and trip the baseline-use guard.
+                Il2CppClass* type = GlobalMetadata::GetInitializedTypeInfoFromAssembly(&image, i);
+                if (type)
+#else
                 Il2CppClass* type = MetadataCache::GetTypeInfoFromHandle(MetadataCache::GetAssemblyTypeHandle(&image, i));
                 if (type->initialized)
+#endif
                     callback(type, context);
             }
         }

@@ -8,7 +8,7 @@
 #include "vm/AndroidRuntime.h"
 #include "vm/Array.h"
 #include "vm/Assembly.h"
-#include "vm/AssemblyShadowPrototype.h"
+#include "vm/AssemblyShadow.h"
 #include "vm/Class.h"
 #include "vm/Domain.h"
 #include "vm/Exception.h"
@@ -269,12 +269,12 @@ bool il2cpp_class_is_subclass_of(Il2CppClass *klass, Il2CppClass *klassc, bool c
 {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
     bool result = Class::IsSubclassOf(klass, klassc, check_interfaces);
-    AssemblyShadowPrototype::TraceTypeCheck("il2cpp_class_is_subclass_of.observed", klass, klassc, check_interfaces, result);
-    Il2CppClass* target = AssemblyShadowPrototype::ResolveUnityComparisonTarget(klass, klassc);
+    AssemblyShadow::TraceTypeCheck("il2cpp_class_is_subclass_of.observed", klass, klassc, check_interfaces, result);
+    Il2CppClass* target = AssemblyShadow::ResolveUnityComparisonTarget(klass, klassc);
     if (target != klassc)
     {
         result = Class::IsSubclassOf(klass, target, check_interfaces);
-        AssemblyShadowPrototype::TraceTypeCheck("il2cpp_class_is_subclass_of.resolved", klass, target, check_interfaces, result);
+        AssemblyShadow::TraceTypeCheck("il2cpp_class_is_subclass_of.resolved", klass, target, check_interfaces, result);
     }
     return result;
 #else

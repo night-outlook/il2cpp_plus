@@ -1,5 +1,5 @@
 #include "il2cpp-config.h"
-#include "vm/AssemblyShadowPrototype.h"
+#include "vm/AssemblyShadow.h"
 #include <vector>
 #include <map>
 #include <limits>
@@ -242,8 +242,8 @@ namespace vm
     Il2CppClass* Image::ClassFromName(const Il2CppImage* image, const char* namespaze, const char* name)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        AssemblyShadowPrototype::TraceImage("Image::ClassFromName.input", image);
-        image = AssemblyShadowPrototype::ResolveImage(image);
+        image = AssemblyShadow::ResolveImage(image);
+        AssemblyShadow::TraceImage("Image::ClassFromName.input", image);
 #endif
         if (!image->nameToClassHashTable)
         {
@@ -255,7 +255,7 @@ namespace vm
         {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
             Il2CppClass* klass = MetadataCache::GetTypeInfoFromHandle(iter->second);
-            AssemblyShadowPrototype::TraceClass("Image::ClassFromName.output", klass);
+            AssemblyShadow::TraceClass("Image::ClassFromName.output", klass);
             return klass;
 #else
             return MetadataCache::GetTypeInfoFromHandle(iter->second);
@@ -405,7 +405,8 @@ namespace vm
     Il2CppClass* Image::FromTypeNameParseInfo(const Il2CppImage* image, const TypeNameParseInfo &info, bool ignoreCase)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        AssemblyShadowPrototype::TraceImage("Image::FromTypeNameParseInfo", image);
+        image = AssemblyShadow::ResolveImage(image);
+        AssemblyShadow::TraceImage("Image::FromTypeNameParseInfo", image);
 #endif
         const char* ns = info.ns().c_str();
         const char* name = info.name().c_str();

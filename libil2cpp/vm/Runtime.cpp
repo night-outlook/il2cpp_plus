@@ -17,6 +17,7 @@
 #include "metadata/GenericMetadata.h"
 #include "vm/Array.h"
 #include "vm/Assembly.h"
+#include "vm/AssemblyShadow.h"
 #include "vm/ClassLibraryPAL.h"
 #include "vm/COMEntryPoints.h"
 #include "vm/Class.h"
@@ -585,6 +586,9 @@ namespace vm
 
     Il2CppObject* Runtime::Invoke(const MethodInfo *method, void *obj, void **params, Il2CppException **exc)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireUserCodeAllowed();
+#endif
         if (exc)
             il2cpp::gc::WriteBarrier::GenericStoreNull(exc);
 
@@ -909,9 +913,15 @@ namespace vm
 // 4. Just before calling class instance constructor from a derived class instance constructor
     void Runtime::ClassInit(Il2CppClass *klass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::TraceClass("Runtime::ClassInit", klass);
+#endif
         // Nothing to do if class has no static constructor or already ran.
         if (klass->cctor_finished_or_no_cctor)
             return;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireUserCodeAllowed();
+#endif
 
         s_TypeInitializationLock.Acquire();
 

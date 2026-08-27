@@ -89,6 +89,11 @@ namespace vm
         static Il2CppClass* GetTypeInfoFromType(const Il2CppType* type);
         static Il2CppClass* GetTypeInfoFromTypeDefinitionIndex(TypeDefinitionIndex index);
         static Il2CppClass* GetTypeInfoFromHandle(Il2CppMetadataTypeHandle handle);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        // Ordinary enumeration only: reads existing AOT/published-interpreter
+        // cache slots under g_MetadataLock, without creating or initializing types.
+        static Il2CppClass* GetInitializedTypeInfoFromAssembly(const Il2CppImage* image, AssemblyTypeIndex index);
+#endif
         static const Il2CppType* GetInterfaceFromOffset(const Il2CppClass* klass, TypeInterfaceIndex offset);
         static Il2CppInterfaceOffsetInfo GetInterfaceOffsetInfo(const Il2CppClass* klass, TypeInterfaceOffsetIndex index);
         static Il2CppMetadataTypeHandle GetTypeHandleFromIndex(TypeDefinitionIndex typeIndex);

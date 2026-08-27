@@ -1,6 +1,6 @@
 #include "il2cpp-config.h"
 #include "vm/Assembly.h"
-#include "vm/AssemblyShadowPrototype.h"
+#include "vm/AssemblyShadow.h"
 #include "vm/AssemblyName.h"
 #include "vm/MetadataCache.h"
 #include "vm/Runtime.h"
@@ -69,7 +69,7 @@ namespace vm
     const Il2CppAssembly* Assembly::GetLoadedAssembly(const char* name)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        if (const Il2CppAssembly* shadow = AssemblyShadowPrototype::ResolveName(name, "Assembly::GetLoadedAssembly"))
+        if (const Il2CppAssembly* shadow = AssemblyShadow::ResolveName(name, "Assembly::GetLoadedAssembly"))
             return shadow;
 #endif
         os::FastAutoLock lock(&s_assemblyLock);
@@ -114,7 +114,7 @@ namespace vm
     const Il2CppAssembly* Assembly::Load(const char* name)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        if (const Il2CppAssembly* shadow = AssemblyShadowPrototype::ResolveName(name, "Assembly::Load"))
+        if (const Il2CppAssembly* shadow = AssemblyShadow::ResolveName(name, "Assembly::Load"))
             return shadow;
 #endif
         const Il2CppAssembly* loadedAssembly = MetadataCache::GetAssemblyByName(name);
@@ -165,6 +165,29 @@ namespace vm
 
         ++s_assemblyVersion;
     }
+
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    bool Assembly::PublishShadowBatch(const AssemblyVector& assemblies,
+        bool (*tryBegin)(void*), void (*publish)(void*), void* context)
+    {
+        os::FastAutoLock lock(&s_assemblyLock);
+        s_Assemblies.reserve(s_Assemblies.size() + assemblies.size());
+        if (!tryBegin(context)) return false;
+        // From here to publish there are only reserved pointer appends/stores.
+        // A reader cannot observe half a batch or a batch with the old mapping.
+        for (const Il2CppAssembly* assembly : assemblies) s_Assemblies.push_back(assembly);
+        publish(context);
+        ++s_assemblyVersion;
+        return true;
+    }
+
+    uint64_t Assembly::CaptureShadowEnumeration(AssemblyVector& assemblies)
+    {
+        os::FastAutoLock lock(&s_assemblyLock);
+        CopyValidAssemblies(assemblies, s_Assemblies);
+        return AssemblyShadow::ActiveGeneration();
+    }
+#endif
 
     void Assembly::ClearAllAssemblies()
     {

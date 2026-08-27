@@ -791,6 +791,36 @@ Il2CppClass* il2cpp::vm::GlobalMetadata::GetTypeInfoFromHandle(Il2CppMetadataTyp
     return GetTypeInfoFromTypeDefinitionIndex(GetIndexForTypeDefinitionInternal(typeDefinition));
 }
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+Il2CppClass* il2cpp::vm::GlobalMetadata::GetInitializedTypeInfoFromAssembly(const Il2CppImage* image, AssemblyTypeIndex index)
+{
+    il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+    if (!image || index < 0 || static_cast<uint32_t>(index) >= image->typeCount)
+        return nullptr;
+
+    Il2CppClass* klass;
+    if (hybridclr::metadata::IsInterpreterImage(image))
+    {
+        // Physical registered images only. MetadataModule::GetImage would also
+        // consult private staging TLS, which an ordinary enumeration must not do.
+        const auto* interpreterImage = hybridclr::metadata::InterpreterImage::GetImage(
+            hybridclr::metadata::DecodeImageIndex(image->token));
+        if (!interpreterImage || interpreterImage->GetIl2CppImage() != image)
+            return nullptr;
+        klass = interpreterImage->GetCachedTypeInfoFromTypeDefinitionRawIndex(static_cast<uint32_t>(index));
+    }
+    else
+    {
+        const Il2CppImageGlobalMetadata* imageMetadata = GetImageMetadata(image);
+        const TypeDefinitionIndex typeIndex = imageMetadata->typeStart + index;
+        IL2CPP_ASSERT(typeIndex >= 0 && static_cast<uint32_t>(typeIndex) <
+            s_GlobalMetadataHeader->typeDefinitionsSize / sizeof(Il2CppTypeDefinition));
+        klass = s_TypeInfoDefinitionTable[typeIndex];
+    }
+    return klass && klass->initialized ? klass : nullptr;
+}
+#endif
+
 Il2CppClass* il2cpp::vm::GlobalMetadata::GetTypeInfoFromType(const Il2CppType* type)
 {
     return GetTypeInfoFromHandle(type->data.typeHandle);

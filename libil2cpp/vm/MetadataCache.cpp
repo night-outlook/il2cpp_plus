@@ -1,5 +1,6 @@
 #include "il2cpp-config.h"
-#include "vm/AssemblyShadowPrototype.h"
+#include "vm/AssemblyShadow.h"
+#include "vm/AssemblyShadowName.h"
 #include "MetadataCache.h"
 #include "GlobalMetadata.h"
 
@@ -976,7 +977,7 @@ const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyFromIndex(AssemblyIn
 const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByName(const char* nameToFind)
 {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-    if (const Il2CppAssembly* shadow = AssemblyShadowPrototype::ResolveName(nameToFind, "MetadataCache::GetAssemblyByName"))
+    if (const Il2CppAssembly* shadow = AssemblyShadow::ResolveName(nameToFind, "MetadataCache::GetAssemblyByName"))
         return shadow;
 #endif
     const char* assemblyName = hybridclr::GetAssemblyNameFromPath(nameToFind);
@@ -1016,6 +1017,60 @@ void il2cpp::vm::MetadataCache::RegisterInterpreterAssembly(Il2CppAssembly* asse
     il2cpp::vm::Assembly::Register(assembly);
     s_cliAssemblies.push_back(assembly);
 }
+
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAotAssemblyByNamePhysical(const char* name)
+{
+    // Physical immutable metadata only: no active resolver, CLI side vector,
+    // ordinary Assembly::Load callback or Reflection object creation.
+    using namespace il2cpp::vm::assembly_shadow_detail;
+    NameView requested = ViewName(name);
+    size_t ignored;
+    if (!NameHash(requested, ignored)) return nullptr;
+    for (int index = 0; index < s_AssembliesCount; ++index)
+    {
+        const Il2CppAssembly* assembly = s_AssembliesTable + index;
+        if (NameEquals(requested, ViewName(assembly->aname.name))) return assembly;
+    }
+    return nullptr;
+}
+
+namespace
+{
+    struct ShadowPublicationContext
+    {
+        const std::vector<Il2CppAssembly*>* assemblies;
+        bool (*tryBegin)(void*);
+        void (*publishActive)(void*);
+        void* context;
+    };
+
+    bool BeginShadowPublication(void* opaque)
+    {
+        auto* publication = static_cast<ShadowPublicationContext*>(opaque);
+        return publication->tryBegin(publication->context);
+    }
+
+    void PublishShadowRegistries(void* opaque)
+    {
+        auto* publication = static_cast<ShadowPublicationContext*>(opaque);
+        for (Il2CppAssembly* assembly : *publication->assemblies) s_cliAssemblies.push_back(assembly);
+        publication->publishActive(publication->context);
+    }
+}
+
+bool il2cpp::vm::MetadataCache::PublishInterpreterAssembliesBatch(
+    const std::vector<Il2CppAssembly*>& assemblies,
+    bool (*tryBegin)(void*), void (*publishActive)(void*), void* context)
+{
+    il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+    s_cliAssemblies.reserve(s_cliAssemblies.size() + assemblies.size());
+    il2cpp::vm::AssemblyVector physical(assemblies.begin(), assemblies.end());
+    ShadowPublicationContext publication{ &assemblies, tryBegin, publishActive, context };
+    return il2cpp::vm::Assembly::PublishShadowBatch(physical,
+        BeginShadowPublication, PublishShadowRegistries, &publication);
+}
+#endif
 
 const Il2CppAssembly* il2cpp::vm::MetadataCache::LoadAssemblyFromBytes(const char* assemblyBytes, size_t length, const char* rawSymbolStoreBytes, size_t rawSymbolStoreLength)
 {

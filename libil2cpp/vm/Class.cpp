@@ -1,5 +1,5 @@
 #include "il2cpp-config.h"
-#include "vm/AssemblyShadowPrototype.h"
+#include "vm/AssemblyShadow.h"
 #include "mono-structs.h"
 #include <algorithm>
 #include "gc/GCHandle.h"
@@ -96,7 +96,7 @@ namespace vm
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
             {
                 Il2CppClass* klass = Type::GetClass(type);
-                AssemblyShadowPrototype::TraceClass("Class::FromIl2CppType", klass);
+                AssemblyShadow::TraceClass("Class::FromIl2CppType", klass);
                 return klass;
             }
 #else
@@ -1603,7 +1603,7 @@ namespace vm
     void Class::Init(Il2CppClass *klass)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        AssemblyShadowPrototype::TraceClass("Class::Init", klass);
+        AssemblyShadow::TraceClass("Class::Init", klass);
 #endif
         IL2CPP_ASSERT(klass);
 
