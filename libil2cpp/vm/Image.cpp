@@ -243,6 +243,7 @@ namespace vm
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
         AssemblyShadowPrototype::TraceImage("Image::ClassFromName.input", image);
+        image = AssemblyShadowPrototype::ResolveImage(image);
 #endif
         if (!image->nameToClassHashTable)
         {

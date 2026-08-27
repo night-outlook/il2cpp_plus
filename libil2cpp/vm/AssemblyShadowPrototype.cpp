@@ -178,6 +178,20 @@ const Il2CppAssembly* AssemblyShadowPrototype::ResolveName(const char* name, con
     return assembly;
 }
 
+const Il2CppImage* AssemblyShadowPrototype::ResolveImage(const Il2CppImage* image)
+{
+    auto& state = State();
+    if (!state.active.load()) return image;
+    const Il2CppAssembly* baseline = state.baseline.load();
+    const Il2CppAssembly* shadow = state.shadow.load();
+    if (!baseline || !shadow || image != baseline->image) return image;
+    // M01's observed MonoManager/MonoScript path retains the baseline image.
+    // Redirect before class lookup, never after object layout/allocation.
+    Trace("ResolveImage.baseline", baseline, image, nullptr);
+    Trace("ResolveImage.shadow", shadow, shadow->image, nullptr);
+    return shadow->image;
+}
+
 void AssemblyShadowPrototype::TraceImage(const char* site, const Il2CppImage* image)
 {
     if (image && image->assembly && IsCandidateName(image->assembly->aname.name))
@@ -202,6 +216,7 @@ std::string AssemblyShadowPrototype::Diagnostics()
     auto& state = State();
     std::lock_guard<std::mutex> lock(state.mutex);
     std::string result = "{\"enabled\":true,\"canonicalName\":" + Quote(kName) +
+        ",\"mappingPolicy\":\"name-and-image-before-class-lookup\"" +
         ",\"active\":" + (state.active.load() ? "true" : "false") +
         ",\"baseline\":" + AssemblyInfo(state.baseline.load()) +
         ",\"shadow\":" + AssemblyInfo(state.shadow.load()) +
