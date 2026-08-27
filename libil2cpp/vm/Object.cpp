@@ -1,4 +1,5 @@
 #include "il2cpp-config.h"
+#include "vm/AssemblyShadowPrototype.h"
 #include <memory>
 
 #include "il2cpp-class-internals.h"
@@ -261,6 +262,9 @@ namespace vm
 
     Il2CppObject* Object::New(Il2CppClass *klass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadowPrototype::TraceClass("Object::New.input", klass);
+#endif
         // same as NewAllocSpecific as we only support a single domain
         return NewAllocSpecific(klass);
     }
@@ -276,6 +280,9 @@ namespace vm
 
     Il2CppObject * Object::NewAllocSpecific(Il2CppClass *klass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadowPrototype::TraceClass("Object::NewAllocSpecific.before-layout", klass);
+#endif
         Il2CppObject *o = NULL;
 
         IL2CPP_NOT_IMPLEMENTED_NO_ASSERT(Object::NewAllocSpecific, "We really shouldn't need this initialization");

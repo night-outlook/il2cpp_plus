@@ -1,4 +1,5 @@
 #include "il2cpp-config.h"
+#include "vm/AssemblyShadowPrototype.h"
 #include <vector>
 #include <map>
 #include <limits>
@@ -240,6 +241,9 @@ namespace vm
 
     Il2CppClass* Image::ClassFromName(const Il2CppImage* image, const char* namespaze, const char* name)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadowPrototype::TraceImage("Image::ClassFromName.input", image);
+#endif
         if (!image->nameToClassHashTable)
         {
             InitImageNameToTypeHandleHashTable(image);
@@ -247,7 +251,15 @@ namespace vm
 
         Il2CppNameToTypeHandleHashTable::const_iterator iter = image->nameToClassHashTable->find(std::make_pair(namespaze, name));
         if (iter != image->nameToClassHashTable->end())
+        {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+            Il2CppClass* klass = MetadataCache::GetTypeInfoFromHandle(iter->second);
+            AssemblyShadowPrototype::TraceClass("Image::ClassFromName.output", klass);
+            return klass;
+#else
             return MetadataCache::GetTypeInfoFromHandle(iter->second);
+#endif
+        }
 
         return NULL;
     }
@@ -391,6 +403,9 @@ namespace vm
 
     Il2CppClass* Image::FromTypeNameParseInfo(const Il2CppImage* image, const TypeNameParseInfo &info, bool ignoreCase)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadowPrototype::TraceImage("Image::FromTypeNameParseInfo", image);
+#endif
         const char* ns = info.ns().c_str();
         const char* name = info.name().c_str();
         Il2CppClass *parent_class = FindClassMatching(image, ns, name, ignoreCase);

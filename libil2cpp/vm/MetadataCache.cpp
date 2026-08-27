@@ -1,4 +1,5 @@
 #include "il2cpp-config.h"
+#include "vm/AssemblyShadowPrototype.h"
 #include "MetadataCache.h"
 #include "GlobalMetadata.h"
 
@@ -974,6 +975,10 @@ const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyFromIndex(AssemblyIn
 
 const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByName(const char* nameToFind)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    if (const Il2CppAssembly* shadow = AssemblyShadowPrototype::ResolveName(nameToFind, "MetadataCache::GetAssemblyByName"))
+        return shadow;
+#endif
     const char* assemblyName = hybridclr::GetAssemblyNameFromPath(nameToFind);
 
     il2cpp::utils::VmStringUtils::CaseInsensitiveComparer comparer;

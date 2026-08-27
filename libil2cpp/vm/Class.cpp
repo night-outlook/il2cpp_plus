@@ -1,4 +1,5 @@
 #include "il2cpp-config.h"
+#include "vm/AssemblyShadowPrototype.h"
 #include "mono-structs.h"
 #include <algorithm>
 #include "gc/GCHandle.h"
@@ -92,7 +93,15 @@ namespace vm
             }
             case IL2CPP_TYPE_CLASS:
             case IL2CPP_TYPE_VALUETYPE:
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+            {
+                Il2CppClass* klass = Type::GetClass(type);
+                AssemblyShadowPrototype::TraceClass("Class::FromIl2CppType", klass);
+                return klass;
+            }
+#else
                 return Type::GetClass(type);
+#endif
             case IL2CPP_TYPE_GENERICINST:
                 return GenericClass::GetClass(type->data.generic_class, throwOnError);
             case IL2CPP_TYPE_VAR:
@@ -1593,6 +1602,9 @@ namespace vm
 
     void Class::Init(Il2CppClass *klass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadowPrototype::TraceClass("Class::Init", klass);
+#endif
         IL2CPP_ASSERT(klass);
 
         if (!klass->initialized)

@@ -1,4 +1,5 @@
 #include "il2cpp-config.h"
+#include "vm/AssemblyShadowPrototype.h"
 #include "il2cpp-class-internals.h"
 #include "il2cpp-object-internals.h"
 #include "il2cpp-tabledefs.h"
@@ -117,6 +118,9 @@ namespace vm
 
     Il2CppReflectionAssembly* Reflection::GetAssemblyObject(const Il2CppAssembly *assembly)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (assembly) AssemblyShadowPrototype::TraceImage("Reflection::GetAssemblyObject", assembly->image);
+#endif
         Il2CppReflectionAssembly *res;
 
         AssemblyMap::key_type::wrapped_type key(assembly, (Il2CppClass*)NULL);
@@ -274,6 +278,10 @@ namespace vm
 
     Il2CppReflectionType* Reflection::GetTypeObject(const Il2CppType *type)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (type && (type->type == IL2CPP_TYPE_CLASS || type->type == IL2CPP_TYPE_VALUETYPE))
+            AssemblyShadowPrototype::TraceClass("Reflection::GetTypeObject", Class::FromIl2CppType(type, false));
+#endif
         Il2CppReflectionType* object = NULL;
 
         if (s_TypeMap->TryGetValue(type, &object))

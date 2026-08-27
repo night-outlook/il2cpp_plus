@@ -1,5 +1,6 @@
 #include "il2cpp-config.h"
 #include "vm/Assembly.h"
+#include "vm/AssemblyShadowPrototype.h"
 #include "vm/AssemblyName.h"
 #include "vm/MetadataCache.h"
 #include "vm/Runtime.h"
@@ -67,6 +68,10 @@ namespace vm
 
     const Il2CppAssembly* Assembly::GetLoadedAssembly(const char* name)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (const Il2CppAssembly* shadow = AssemblyShadowPrototype::ResolveName(name, "Assembly::GetLoadedAssembly"))
+            return shadow;
+#endif
         os::FastAutoLock lock(&s_assemblyLock);
         AssemblyVector& assemblies = s_Assemblies;
         for (AssemblyVector::const_reverse_iterator assembly = assemblies.rbegin(); assembly != assemblies.rend(); ++assembly)
@@ -108,6 +113,10 @@ namespace vm
 
     const Il2CppAssembly* Assembly::Load(const char* name)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (const Il2CppAssembly* shadow = AssemblyShadowPrototype::ResolveName(name, "Assembly::Load"))
+            return shadow;
+#endif
         const Il2CppAssembly* loadedAssembly = MetadataCache::GetAssemblyByName(name);
         if (loadedAssembly)
         {
