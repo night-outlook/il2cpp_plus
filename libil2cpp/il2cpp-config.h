@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AssemblyShadowConfig.h"
 #include <string.h>
 #include "hybridclr/generated/UnityVersion.h"
 
