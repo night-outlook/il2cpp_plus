@@ -23,6 +23,8 @@ namespace il2cpp { namespace vm {
         static const Il2CppImage* ResolveImage(const Il2CppImage* image);
         static void TraceImage(const char* site, const Il2CppImage* image);
         static void TraceClass(const char* site, const Il2CppClass* klass);
+        static void TraceTypeCheck(const char* site, const Il2CppClass* actual,
+            const Il2CppClass* expected, bool checkInterfaces, bool matches);
         static void SetPhase(const char* phase);
         static std::string Diagnostics();
         static std::string InspectObject(const Il2CppObject* object);

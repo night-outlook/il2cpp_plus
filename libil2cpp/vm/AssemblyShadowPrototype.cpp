@@ -98,7 +98,8 @@ namespace {
         return result + ']';
     }
 
-    void Trace(const char* site, const Il2CppAssembly* assembly, const Il2CppImage* image, const Il2CppClass* klass)
+    void Trace(const char* site, const Il2CppAssembly* assembly, const Il2CppImage* image, const Il2CppClass* klass,
+        const Il2CppClass* comparisonTarget = nullptr, int comparisonResult = -1, bool checkInterfaces = false)
     {
         // Logging callbacks can re-enter IL2CPP; never hold this lock over a callback.
         static thread_local bool tracing = false;
@@ -109,6 +110,8 @@ namespace {
         {
             std::lock_guard<std::mutex> lock(state.mutex);
             std::string key = state.phase + '|' + site + '|' + (klass ? klass->name : "") + '|' + Pointer(assembly);
+            if (comparisonResult >= 0)
+                key += '|' + Pointer(comparisonTarget) + '|' + std::to_string(comparisonResult) + (checkInterfaces ? "|interfaces" : "|class");
             // Bounded development evidence, not production telemetry.
             if (state.events.size() >= 1500 || state.counts[key]++ >= 2) return;
             line = "{\"sequence\":" + std::to_string(state.events.size() + 1) +
@@ -117,8 +120,14 @@ namespace {
                 ",\"assembly\":" + Pointer(assembly) + ",\"image\":" + Pointer(image) +
                 ",\"class\":" + Pointer(klass) +
                 ",\"type\":" + Quote(klass ? std::string(klass->namespaze) + "." + klass->name : "") +
-                ",\"isInterpreter\":" + (Interpreter(assembly) ? "true" : "false") +
-                ",\"stack\":" + Stack() + "}";
+                ",\"isInterpreter\":" + (Interpreter(assembly) ? "true" : "false");
+            if (comparisonResult >= 0)
+                line += ",\"comparisonTargetClass\":" + Pointer(comparisonTarget) +
+                    ",\"comparisonTargetType\":" + Quote(comparisonTarget ? std::string(comparisonTarget->namespaze) + "." + comparisonTarget->name : "") +
+                    ",\"comparisonTargetAssembly\":" + AssemblyInfo(comparisonTarget ? comparisonTarget->image->assembly : nullptr) +
+                    ",\"comparisonResult\":" + (comparisonResult ? "true" : "false") +
+                    ",\"checkInterfaces\":" + (checkInterfaces ? "true" : "false");
+            line += ",\"stack\":" + Stack() + "}";
             state.events.push_back(line);
         }
         utils::Logging::Write("[AssemblyShadowPoC] %s", line.c_str());
@@ -202,6 +211,16 @@ void AssemblyShadowPrototype::TraceClass(const char* site, const Il2CppClass* kl
 {
     if (klass && klass->image && klass->image->assembly && IsCandidateName(klass->image->assembly->aname.name))
         Trace(site, klass->image->assembly, klass->image, klass);
+}
+
+void AssemblyShadowPrototype::TraceTypeCheck(const char* site, const Il2CppClass* actual,
+    const Il2CppClass* expected, bool checkInterfaces, bool matches)
+{
+    const Il2CppAssembly* actualAssembly = actual && actual->image ? actual->image->assembly : nullptr;
+    const Il2CppAssembly* expectedAssembly = expected && expected->image ? expected->image->assembly : nullptr;
+    if ((actualAssembly && IsCandidateName(actualAssembly->aname.name)) ||
+        (expectedAssembly && IsCandidateName(expectedAssembly->aname.name)))
+        Trace(site, actualAssembly, actual ? actual->image : nullptr, actual, expected, matches ? 1 : 0, checkInterfaces);
 }
 
 void AssemblyShadowPrototype::SetPhase(const char* phase)

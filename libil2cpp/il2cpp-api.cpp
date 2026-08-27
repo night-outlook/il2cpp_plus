@@ -8,6 +8,7 @@
 #include "vm/AndroidRuntime.h"
 #include "vm/Array.h"
 #include "vm/Assembly.h"
+#include "vm/AssemblyShadowPrototype.h"
 #include "vm/Class.h"
 #include "vm/Domain.h"
 #include "vm/Exception.h"
@@ -266,7 +267,13 @@ bool il2cpp_class_is_assignable_from(Il2CppClass *klass, Il2CppClass *oklass)
 
 bool il2cpp_class_is_subclass_of(Il2CppClass *klass, Il2CppClass *klassc, bool check_interfaces)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    bool result = Class::IsSubclassOf(klass, klassc, check_interfaces);
+    AssemblyShadowPrototype::TraceTypeCheck("il2cpp_class_is_subclass_of.observed", klass, klassc, check_interfaces, result);
+    return result;
+#else
     return Class::IsSubclassOf(klass, klassc, check_interfaces);
+#endif
 }
 
 bool il2cpp_class_has_parent(Il2CppClass *klass, Il2CppClass *klassc)
