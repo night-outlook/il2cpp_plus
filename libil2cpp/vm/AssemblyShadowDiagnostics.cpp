@@ -33,6 +33,7 @@ const char* AssemblyShadowDiagnostics::UseKindName(BaselineUseKind kind)
         case BaselineUseKind::StaticField: return "StaticField";
         case BaselineUseKind::VTable: return "VTable";
         case BaselineUseKind::MonoScript: return "MonoScript";
+        case BaselineUseKind::ModuleReflection: return "ModuleReflection";
     }
     return "Unknown";
 }

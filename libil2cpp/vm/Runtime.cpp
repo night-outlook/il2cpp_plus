@@ -596,6 +596,11 @@ namespace vm
         // in every invoke call as that blows up the code size.
         try
         {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+            AssemblyShadow::RequireActiveClass(method->klass, BaselineUseKind::ClassInit, "Runtime::Invoke.owner");
+            if (obj && !(method->flags & METHOD_ATTRIBUTE_STATIC) && !method->klass->byval_arg.valuetype)
+                AssemblyShadow::RequireActiveClass(static_cast<Il2CppObject*>(obj)->klass, BaselineUseKind::ClassInit, "Runtime::Invoke.actual");
+#endif
             if ((method->flags & METHOD_ATTRIBUTE_STATIC) && method->klass && !method->klass->cctor_finished_or_no_cctor)
                 ClassInit(method->klass);
 
@@ -665,6 +670,9 @@ namespace vm
 
     void Runtime::ObjectInitException(Il2CppObject *object, Il2CppException **exc)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(object->klass, BaselineUseKind::ClassInit, "Runtime::ObjectInitException.actual");
+#endif
         const MethodInfo *method = NULL;
         Il2CppClass *klass = object->klass;
 
@@ -914,7 +922,7 @@ namespace vm
     void Runtime::ClassInit(Il2CppClass *klass)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        AssemblyShadow::TraceClass("Runtime::ClassInit", klass);
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::ClassInit, "Runtime::ClassInit");
 #endif
         // Nothing to do if class has no static constructor or already ran.
         if (klass->cctor_finished_or_no_cctor)

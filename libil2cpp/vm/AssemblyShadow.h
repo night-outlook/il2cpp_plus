@@ -11,6 +11,7 @@ struct Il2CppAssembly;
 struct Il2CppImage;
 struct Il2CppClass;
 struct Il2CppObject;
+struct Il2CppType;
 
 namespace il2cpp { namespace vm {
 
@@ -39,6 +40,7 @@ public:
     static AssemblyShadowError GetState(AssemblyShadowState& state);
     static AssemblyShadowError GetAssemblyExecutionMode(const char* name, AssemblyExecutionMode& mode);
     static AssemblyShadowError GetDiagnosticsJson(std::string& json);
+    static AssemblyShadowError GetTypeResolutionInfo(const Il2CppType* type, std::string& json);
     // Icall exception boundary: seal a mutating operation that unwound through
     // an unexpected failure. This path does not allocate or acquire VM locks.
     static AssemblyShadowError ReportUnexpectedFailure();
@@ -54,6 +56,16 @@ public:
         const Il2CppAssembly* physicalProvider, const char* referencedName,
         int32_t referenceIndex = -1, const char* site = "AssemblyRef");
     static const Il2CppImage* ResolveImage(const Il2CppImage* image);
+    static Il2CppClass* ResolveClassDefinition(Il2CppClass* klass);
+    static Il2CppClass* ResolveClass(Il2CppClass* klass);
+    static const Il2CppType* ResolveType(const Il2CppType* type);
+    static Il2CppClass* ResolveAllocationClass(Il2CppClass* klass, const char* site);
+    static void RequireActiveClass(Il2CppClass* klass, BaselineUseKind kind, const char* site);
+    static void RecordTypeUse(const Il2CppType* type, BaselineUseKind kind, const char* site);
+    // Physical metadata recursion only. Never an exemption for initialization,
+    // static storage, vtable, managed reflection exposure or object allocation.
+    static bool IsResolvingTypeMetadata();
+    static void FailTypeResolution(AssemblyShadowError error, const std::string& detail);
     static bool IsShadowedBaseline(const Il2CppAssembly* assembly);
     static bool IsActiveShadow(const Il2CppAssembly* assembly);
     static bool IsCandidate(const Il2CppAssembly* assembly);

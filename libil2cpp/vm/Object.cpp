@@ -56,6 +56,9 @@ namespace vm
 {
     Il2CppObject * Object::Allocate(size_t size, Il2CppClass *typeInfo)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(typeInfo, BaselineUseKind::ObjectAllocation, "Object::Allocate");
+#endif
         IL2CPP_ASSERT(typeInfo->initialized);
         Il2CppObject *o;
         ALLOC_OBJECT(o, typeInfo, size);
@@ -67,6 +70,9 @@ namespace vm
 
     Il2CppObject * Object::AllocatePtrFree(size_t size, Il2CppClass *typeInfo)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(typeInfo, BaselineUseKind::ObjectAllocation, "Object::AllocatePtrFree");
+#endif
         IL2CPP_ASSERT(typeInfo->initialized);
         Il2CppObject *o;
         ALLOC_PTRFREE(o, typeInfo, size);
@@ -78,6 +84,9 @@ namespace vm
 
     Il2CppObject * Object::AllocateSpec(size_t size, Il2CppClass *typeInfo)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(typeInfo, BaselineUseKind::ObjectAllocation, "Object::AllocateSpec");
+#endif
         IL2CPP_ASSERT(typeInfo->initialized);
         Il2CppObject *o;
         ALLOC_TYPED(o, size, typeInfo);
@@ -89,6 +98,15 @@ namespace vm
 
     Il2CppObject* Object::Box(Il2CppClass *typeInfo, void* val)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (!typeInfo->byval_arg.valuetype)
+        {
+            Il2CppObject* existing = *(Il2CppObject**)val;
+            if (existing) AssemblyShadow::RequireActiveClass(existing->klass, BaselineUseKind::ObjectAllocation, "Object::Box.existing");
+            return existing;
+        }
+        typeInfo = AssemblyShadow::ResolveAllocationClass(typeInfo, "Object::Box");
+#endif
         if (!typeInfo->byval_arg.valuetype)
             return *(Il2CppObject**)val;
 
@@ -135,6 +153,9 @@ namespace vm
 
     Il2CppObject* Object::Clone(Il2CppObject *obj)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(obj->klass, BaselineUseKind::ObjectAllocation, "Object::Clone.actual");
+#endif
         Il2CppObject *o;
         int size;
         IL2CPP_NOT_IMPLEMENTED_NO_ASSERT(Object::Clone, "Finish implementation");
@@ -213,6 +234,10 @@ namespace vm
 
     const MethodInfo* Object::GetVirtualMethod(Il2CppObject *obj, const MethodInfo *virtualMethod)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(obj->klass, BaselineUseKind::VTable, "Object::GetVirtualMethod.actual");
+        AssemblyShadow::RequireActiveClass(virtualMethod->klass, BaselineUseKind::VTable, "Object::GetVirtualMethod.owner");
+#endif
         if ((virtualMethod->flags & METHOD_ATTRIBUTE_FINAL) || !(virtualMethod->flags & METHOD_ATTRIBUTE_VIRTUAL))
             return virtualMethod;
 
@@ -239,6 +264,10 @@ namespace vm
             return NULL;
 
         Il2CppClass* objClass = Object::GetClass(obj);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(objClass, BaselineUseKind::TypeReflection, "Object::IsInst.actual");
+        klass = AssemblyShadow::ResolveClass(klass);
+#endif
         if (Class::IsAssignableFrom(klass, objClass))
             return obj;
 
@@ -262,9 +291,6 @@ namespace vm
 
     Il2CppObject* Object::New(Il2CppClass *klass)
     {
-#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        AssemblyShadow::TraceClass("Object::New.input", klass);
-#endif
         // same as NewAllocSpecific as we only support a single domain
         return NewAllocSpecific(klass);
     }
@@ -281,7 +307,7 @@ namespace vm
     Il2CppObject * Object::NewAllocSpecific(Il2CppClass *klass)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        AssemblyShadow::TraceClass("Object::NewAllocSpecific.before-layout", klass);
+        klass = AssemblyShadow::ResolveAllocationClass(klass, "Object::NewAllocSpecific");
 #endif
         Il2CppObject *o = NULL;
 
@@ -319,6 +345,9 @@ namespace vm
 
     Il2CppObject* Object::NewPtrFree(Il2CppClass *klass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::ObjectAllocation, "Object::NewPtrFree");
+#endif
         Il2CppObject *obj = {0};
 
         IL2CPP_ASSERT(klass->initialized);

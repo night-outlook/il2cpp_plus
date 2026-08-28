@@ -2,6 +2,7 @@
 #include "gc/gc_wrapper.h"
 #include "gc/GarbageCollector.h"
 #include "vm/Array.h"
+#include "vm/AssemblyShadow.h"
 #include "vm/Class.h"
 #include "vm/Exception.h"
 #include "vm/Object.h"
@@ -16,6 +17,9 @@ namespace vm
 {
     Il2CppArray* Array::Clone(Il2CppArray* arr)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(arr->klass, BaselineUseKind::ObjectAllocation, "Array::Clone.actual");
+#endif
         Il2CppClass *typeInfo = arr->klass;
         const uint32_t elem_size = il2cpp::vm::Array::GetElementSize(typeInfo);
 
@@ -82,6 +86,9 @@ namespace vm
 
     Il2CppArray* Array::New(Il2CppClass *elementTypeInfo, il2cpp_array_size_t length)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        elementTypeInfo = AssemblyShadow::ResolveAllocationClass(elementTypeInfo, "Array::New.element");
+#endif
         return NewSpecific(Class::GetArrayClass(elementTypeInfo, 1), length);
     }
 
@@ -92,6 +99,9 @@ namespace vm
 
     Il2CppArray* Array::NewSpecific(Il2CppClass *klass, il2cpp_array_size_t n)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klass = AssemblyShadow::ResolveAllocationClass(klass, "Array::NewSpecific");
+#endif
         Il2CppObject *o;
         Il2CppArray *ao;
         uint32_t elem_size;
@@ -162,6 +172,9 @@ namespace vm
 
     Il2CppArray* Array::NewFull(Il2CppClass *array_class, il2cpp_array_size_t *lengths, il2cpp_array_size_t *lower_bounds)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        array_class = AssemblyShadow::ResolveAllocationClass(array_class, "Array::NewFull");
+#endif
         il2cpp_array_size_t byte_len, len, bounds_size;
         Il2CppObject *o;
         Il2CppArray *array;

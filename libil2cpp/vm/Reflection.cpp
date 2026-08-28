@@ -105,6 +105,32 @@ namespace vm
     static Il2CppClass *s_System_Reflection_MethodInfo;
     static Il2CppClass *s_System_Reflection_ConstructorInfo;
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    static void RequireActiveMemberSignature(const Il2CppType* type, const char* site)
+    {
+        if (!type) return;
+        AssemblyShadow::RecordTypeUse(type, BaselineUseKind::TypeReflection, site);
+        if (AssemblyShadow::ResolveType(type) != type)
+            AssemblyShadow::FailTypeResolution(AssemblyShadowError::UnsupportedAssembly,
+                std::string("ShadowMemberRequiresCanonicalResolution: ") + site);
+    }
+
+    static void RequireActiveMethod(const MethodInfo* method, const char* site)
+    {
+        if (!method) return;
+        AssemblyShadow::RequireActiveClass(method->klass, BaselineUseKind::TypeReflection, site);
+        RequireActiveMemberSignature(method->return_type, site);
+        for (uint16_t index = 0; index < method->parameters_count; ++index)
+            RequireActiveMemberSignature(method->parameters[index], site);
+        if (method->is_inflated && method->genericMethod->context.method_inst)
+        {
+            const Il2CppGenericInst* inst = method->genericMethod->context.method_inst;
+            for (uint32_t index = 0; index < inst->type_argc; ++index)
+                RequireActiveMemberSignature(inst->type_argv[index], site);
+        }
+    }
+#endif
+
     static il2cpp::metadata::CustomAttributeFilter GetFilter(Il2CppClass*& attributeClass)
     {
         if (attributeClass == NULL)
@@ -148,6 +174,11 @@ namespace vm
 
     Il2CppReflectionField* Reflection::GetFieldObject(Il2CppClass *klass, FieldInfo *field)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(field->parent, BaselineUseKind::TypeReflection, "Reflection::GetFieldObject.owner");
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::TypeReflection, "Reflection::GetFieldObject.reflected");
+        RequireActiveMemberSignature(field->type, "Reflection::GetFieldObject.signature");
+#endif
         Il2CppReflectionField *res;
 
         FieldMap::key_type::wrapped_type key(field, klass);
@@ -178,6 +209,10 @@ namespace vm
 
         if (!refclass)
             refclass = method->klass;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        RequireActiveMethod(method, "Reflection::GetMethodObject");
+        AssemblyShadow::RequireActiveClass(refclass, BaselineUseKind::TypeReflection, "Reflection::GetMethodObject.reflected");
+#endif
 
         MethodMap::key_type::wrapped_type key(method, refclass);
         MethodMap::data_type value = NULL;
@@ -202,6 +237,10 @@ namespace vm
 
     Il2CppReflectionModule* Reflection::GetModuleObject(const Il2CppImage *image)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        image = AssemblyShadow::ResolveImage(image);
+        if (image) AssemblyShadow::RecordBaselineUse(image->assembly, BaselineUseKind::ModuleReflection, "Reflection::GetModuleObject");
+#endif
         Il2CppReflectionModule *res;
         //char* basename;
 
@@ -244,6 +283,12 @@ namespace vm
 
     Il2CppReflectionProperty* Reflection::GetPropertyObject(Il2CppClass *klass, const PropertyInfo *property)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(property->parent, BaselineUseKind::TypeReflection, "Reflection::GetPropertyObject.owner");
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::TypeReflection, "Reflection::GetPropertyObject.reflected");
+        RequireActiveMethod(property->get, "Reflection::GetPropertyObject.get");
+        RequireActiveMethod(property->set, "Reflection::GetPropertyObject.set");
+#endif
         Il2CppReflectionProperty *res;
 
         PropertyMap::key_type::wrapped_type key(property, klass);
@@ -261,6 +306,14 @@ namespace vm
 
     Il2CppReflectionEvent* Reflection::GetEventObject(Il2CppClass* klass, const EventInfo* event)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(event->parent, BaselineUseKind::TypeReflection, "Reflection::GetEventObject.owner");
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::TypeReflection, "Reflection::GetEventObject.reflected");
+        RequireActiveMemberSignature(event->eventType, "Reflection::GetEventObject.signature");
+        RequireActiveMethod(event->add, "Reflection::GetEventObject.add");
+        RequireActiveMethod(event->remove, "Reflection::GetEventObject.remove");
+        RequireActiveMethod(event->raise, "Reflection::GetEventObject.raise");
+#endif
         Il2CppReflectionEvent* result;
 
         EventMap::key_type::wrapped_type key(event, klass);
@@ -280,8 +333,9 @@ namespace vm
     Il2CppReflectionType* Reflection::GetTypeObject(const Il2CppType *type)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        if (type && (type->type == IL2CPP_TYPE_CLASS || type->type == IL2CPP_TYPE_VALUETYPE))
-            AssemblyShadow::TraceClass("Reflection::GetTypeObject", Class::FromIl2CppType(type, false));
+        // Resolve composites before touching reflection caches/locks.
+        type = AssemblyShadow::ResolveType(type);
+        AssemblyShadow::RecordTypeUse(type, BaselineUseKind::TypeReflection, "Reflection::GetTypeObject");
 #endif
         Il2CppReflectionType* object = NULL;
 
@@ -337,6 +391,11 @@ namespace vm
 
     Il2CppArray* Reflection::GetParamObjects(const MethodInfo *method, Il2CppClass *refclass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        RequireActiveMethod(method, "Reflection::GetParamObjects");
+        if (!refclass) refclass = method->klass;
+        AssemblyShadow::RequireActiveClass(refclass, BaselineUseKind::TypeReflection, "Reflection::GetParamObjects.reflected");
+#endif
         Il2CppArray *res = NULL;
         Il2CppReflectionMethod *member = NULL;
 

@@ -144,6 +144,9 @@ namespace vm
 
     const MethodInfo* Image::GetEntryPoint(const Il2CppImage* image)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        image = AssemblyShadow::ResolveImage(image);
+#endif
         return MetadataCache::GetAssemblyEntryPoint(image);
     }
 
@@ -255,6 +258,7 @@ namespace vm
         {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
             Il2CppClass* klass = MetadataCache::GetTypeInfoFromHandle(iter->second);
+            klass = AssemblyShadow::ResolveClass(klass);
             AssemblyShadow::TraceClass("Image::ClassFromName.output", klass);
             return klass;
 #else
@@ -319,6 +323,10 @@ namespace vm
 
     void Image::GetTypes(const Il2CppImage* image, bool exportedOnly, TypeVector* target)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        image = AssemblyShadow::ResolveImage(image);
+        AssemblyShadow::TraceImage("Image::GetTypes", image);
+#endif
         uint32_t typeCount = Image::GetNumTypes(image);
         target->reserve(typeCount);
 
@@ -440,6 +448,10 @@ namespace vm
                 return NULL;
         }
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        parent_class = AssemblyShadow::ResolveClass(parent_class);
+        AssemblyShadow::TraceClass("Image::FromTypeNameParseInfo.output", parent_class);
+#endif
         std::vector<std::string>::const_iterator it = info.nested().begin();
 
         while (it != info.nested().end())

@@ -3,6 +3,7 @@
 #include "gc/GarbageCollector.h"
 #include "gc/WriteBarrier.h"
 #include "vm/Class.h"
+#include "vm/AssemblyShadow.h"
 #include "vm/GenericClass.h"
 #include "vm/Field.h"
 #include "vm/Object.h"
@@ -44,6 +45,10 @@ namespace vm
 
     void Field::GetValue(Il2CppObject *obj, FieldInfo *field, void *value)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(field->parent, BaselineUseKind::TypeReflection, "Field::GetValue.owner");
+        if (obj) AssemblyShadow::RequireActiveClass(obj->klass, BaselineUseKind::TypeReflection, "Field::GetValue.actual");
+#endif
         void *src;
 
         IL2CPP_ASSERT(obj);
@@ -61,6 +66,12 @@ namespace vm
 
     Il2CppObject* Field::GetValueObject(FieldInfo *field, Il2CppObject *obj)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(field->parent,
+            (field->type->attrs & FIELD_ATTRIBUTE_STATIC) ? BaselineUseKind::StaticField : BaselineUseKind::TypeReflection,
+            "Field::GetValueObject.owner");
+        if (obj) AssemblyShadow::RequireActiveClass(obj->klass, BaselineUseKind::TypeReflection, "Field::GetValueObject.actual");
+#endif
         Il2CppClass* fieldType = Class::FromIl2CppType(field->type);
 
         if (field->type->attrs & FIELD_ATTRIBUTE_LITERAL)
@@ -121,6 +132,10 @@ namespace vm
 
     void Field::SetValue(Il2CppObject *obj, const FieldInfo *field, void *value)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(field->parent, BaselineUseKind::TypeReflection, "Field::SetValue.owner");
+        if (obj) AssemblyShadow::RequireActiveClass(obj->klass, BaselineUseKind::TypeReflection, "Field::SetValue.actual");
+#endif
         void *dest;
 
         IL2CPP_ASSERT(!(field->type->attrs & FIELD_ATTRIBUTE_STATIC));
@@ -150,6 +165,9 @@ namespace vm
 
     void Field::StaticGetValueInternal(FieldInfo* field, void* value, Il2CppInternalThread* thread)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(field->parent, BaselineUseKind::StaticField, "Field::StaticGetValueInternal");
+#endif
         void *src = NULL;
 
         IL2CPP_ASSERT(field->type->attrs & FIELD_ATTRIBUTE_STATIC);
@@ -182,6 +200,9 @@ namespace vm
 
     void Field::StaticSetValue(FieldInfo *field, void *value)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(field->parent, BaselineUseKind::StaticField, "Field::StaticSetValue");
+#endif
         void *dest = NULL;
 
         IL2CPP_ASSERT(field->type->attrs & FIELD_ATTRIBUTE_STATIC);
@@ -206,6 +227,10 @@ namespace vm
 
     void Field::SetInstanceFieldValueObject(Il2CppObject* objectInstance, FieldInfo* field, Il2CppObject* value)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(field->parent, BaselineUseKind::TypeReflection, "Field::SetInstanceFieldValueObject.owner");
+        AssemblyShadow::RequireActiveClass(objectInstance->klass, BaselineUseKind::TypeReflection, "Field::SetInstanceFieldValueObject.actual");
+#endif
         IL2CPP_ASSERT(!(field->type->attrs & FIELD_ATTRIBUTE_LITERAL));
         IL2CPP_ASSERT(!field->type->valuetype);
         gc::WriteBarrier::GenericStore((Il2CppObject**)(reinterpret_cast<uint8_t*>(objectInstance) + field->offset), value);

@@ -4,6 +4,7 @@
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowName.h"
 #include "AssemblyShadowVisibility.h"
+#include "AssemblyShadowTypeResolver.h"
 #include "il2cpp-class-internals.h"
 #include "il2cpp-object-internals.h"
 #include "vm/Assembly.h"
@@ -38,6 +39,7 @@ namespace {
         const Il2CppClass* klass = nullptr;
         uint64_t thread = 0;
         uint64_t timestamp = 0;
+        uint64_t sequence = 0;
     };
 
     struct Candidate
@@ -97,8 +99,18 @@ namespace {
     std::atomic<bool> s_unexpectedFailure{false};
     std::atomic<bool> s_referenceViolation{false};
     std::atomic<const std::string*> s_referenceViolationDetail{nullptr}; // One immutable process-lifetime failure.
+    struct TypeFailure { AssemblyShadowError error; std::string detail; };
+    std::atomic<const TypeFailure*> s_typeFailure{nullptr};
     std::atomic_flag s_usageLock = ATOMIC_FLAG_INIT;
     uint64_t s_usageGeneration = 0;
+
+    void RecordFirstGuardFailure(AssemblyShadowError error, const std::string& detail)
+    {
+        if (s_typeFailure.load(std::memory_order_acquire)) return;
+        std::unique_ptr<TypeFailure> failure(new TypeFailure{error, detail});
+        const TypeFailure* expected = nullptr;
+        if (s_typeFailure.compare_exchange_strong(expected, failure.get(), std::memory_order_acq_rel)) failure.release();
+    }
 
     Transaction& Current()
     {
@@ -319,6 +331,9 @@ namespace {
     void FailReference(const Il2CppAssembly* requester, const char* provider, int32_t index, const char* site)
     {
         std::string detail = ReferenceDetail(requester, provider, index, site);
+        // One process-lifetime first failure across reference and type guards.
+        // A later guard must not replace the diagnosis that sealed this process.
+        RecordFirstGuardFailure(AssemblyShadowError::ReferenceEscapesClosure, detail);
         // Allocate only on failure, outside VM/usage locks. Retain one complete
         // record, not a per-lookup event stream or a truncated dependency path.
         std::unique_ptr<std::string> retained(new std::string(detail));
@@ -552,12 +567,15 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
     lock.unlock();
     for (const auto& member : transaction.closure)
     {
-        if (s_lateBaselineUse.load(std::memory_order_acquire) || s_referenceViolation.load(std::memory_order_acquire))
+        if (s_lateBaselineUse.load(std::memory_order_acquire) || s_referenceViolation.load(std::memory_order_acquire) ||
+            s_typeFailure.load(std::memory_order_acquire))
         {
             lock.lock();
             s_state.store(AssemblyShadowState::FailedAfterCommit, std::memory_order_release);
-            return Result(transaction, s_referenceViolation.load() ? AssemblyShadowError::ReferenceEscapesClosure :
-                AssemblyShadowError::BaselineAlreadyUsed, "A guarded failure raced activation; restart is required.");
+            const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
+            return Result(transaction, failure ? failure->error : (s_referenceViolation.load() ?
+                AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::BaselineAlreadyUsed),
+                failure ? failure->detail : "A guarded failure raced activation; restart is required.");
         }
         {
             std::lock_guard<std::mutex> record(transaction.mutex);
@@ -571,8 +589,10 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
             {
                 s_state.store(AssemblyShadowState::FailedAfterCommit, std::memory_order_release);
                 Event(transaction, "initializer-failed", member.candidate->name);
-                return Result(transaction, s_referenceViolation.load(std::memory_order_acquire) ?
-                    AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::ModuleInitializerFailed, detail);
+                const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
+                return Result(transaction, failure ? failure->error : (s_referenceViolation.load(std::memory_order_acquire) ?
+                    AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::ModuleInitializerFailed),
+                    failure ? failure->detail : detail);
             }
             transaction.commitOrder.push_back(member.candidate->name);
             Event(transaction, "initializer-complete", member.candidate->name);
@@ -581,9 +601,12 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
     lock.lock();
     AssemblyShadowState expected = AssemblyShadowState::Committing;
     if (!s_state.compare_exchange_strong(expected, AssemblyShadowState::Committed, std::memory_order_acq_rel))
-        return Result(transaction, s_referenceViolation.load(std::memory_order_acquire) ?
-            AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::BaselineAlreadyUsed,
-            "A guarded failure raced initializers; restart is required.");
+    {
+        const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
+        return Result(transaction, failure ? failure->error : (s_referenceViolation.load(std::memory_order_acquire) ?
+            AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::BaselineAlreadyUsed),
+            failure ? failure->detail : "A guarded failure raced initializers; restart is required.");
+    }
     Event(transaction, "transaction-committed");
     return Result(transaction, AssemblyShadowError::Success);
 }
@@ -657,15 +680,15 @@ AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
         }
     }
     const CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
+    if (const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire))
+    {
+        snapshot.lastError = failure->error;
+        snapshot.detail = failure->detail;
+        snapshot.state = s_active.load(std::memory_order_acquire) ? AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed;
+    }
     if (registry)
     {
         snapshot.stableAotNames = registry->stableNames;
-        if (s_referenceViolation.load(std::memory_order_acquire))
-        {
-            snapshot.lastError = AssemblyShadowError::ReferenceEscapesClosure;
-            snapshot.detail = *s_referenceViolationDetail.load(std::memory_order_acquire);
-            snapshot.state = AssemblyShadowState::FailedAfterCommit;
-        }
         std::vector<UseRecord> uses(registry->entries.size());
         {
             UsageLock usage;
@@ -678,7 +701,7 @@ AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
             ShadowUseDiagnostic diagnostic;
             diagnostic.name = registry->entries[index]->name;
             diagnostic.kind = use.kind;
-            diagnostic.detail = use.detail;
+            diagnostic.detail = std::string(use.detail) + " FirstUseSequence=" + std::to_string(use.sequence);
             if (use.klass) diagnostic.type = std::string(use.klass->namespaze) + "." + use.klass->name;
             diagnostic.thread = use.thread;
             diagnostic.timestamp = use.timestamp;
@@ -828,7 +851,9 @@ uint64_t AssemblyShadow::ActiveGeneration()
 void AssemblyShadow::RecordBaselineUse(const Il2CppAssembly* assembly, BaselineUseKind kind,
     const char* detail, const Il2CppClass* klass)
 {
-    if (!assembly || StagingBridge::IsStaging()) return;
+    // Private interpreter identities are absent from this physical AOT map.
+    // A thread-local staging scope does not authorize baseline execution/use.
+    if (!assembly) return;
     const CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
     if (!registry) return;
     auto found = registry->byAssembly.find(assembly);
@@ -847,6 +872,7 @@ void AssemblyShadow::RecordBaselineUse(const Il2CppAssembly* assembly, BaselineU
             use.timestamp = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
             ++s_usageGeneration;
+            use.sequence = s_usageGeneration;
         }
         late = IsShadowedBaseline(assembly);
         if (late)
@@ -856,16 +882,74 @@ void AssemblyShadow::RecordBaselineUse(const Il2CppAssembly* assembly, BaselineU
         }
     }
     if (late)
-        Exception::Raise(Exception::GetInvalidOperationException(
-            "Assembly Shadow detected physical baseline use after activation. Business startup must terminate; restart is required."));
+        FailTypeResolution(AssemblyShadowError::BaselineAlreadyUsed, std::string("ShadowBaselineUse Assembly=") + assembly->aname.name +
+            " Type=" + (klass ? AssemblyShadowTypeKey::Format(&klass->byval_arg) : "<assembly>") +
+            " Kind=" + AssemblyShadowDiagnostics::UseKindName(kind) + " Site=" + (detail ? detail : ""));
 }
 
 void AssemblyShadow::RequireUserCodeAllowed()
 {
-    if (StagingBridge::IsStaging())
+    if (StagingBridge::IsStaging() || IsResolvingTypeMetadata())
         // Do not allocate a managed exception while guarding managed execution:
         // constructing that exception could itself require a class initializer.
-        throw std::runtime_error("Managed execution is forbidden during private Assembly Shadow metadata staging.");
+        throw std::runtime_error("Managed execution is forbidden during Assembly Shadow physical/private metadata resolution.");
+}
+
+void AssemblyShadow::FailTypeResolution(AssemblyShadowError error, const std::string& detail)
+{
+    AssemblyShadowTypeResolver::CountGuardFailure();
+    RecordFirstGuardFailure(error, detail);
+    s_state.store(s_active.load(std::memory_order_acquire) ? AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
+        std::memory_order_release);
+    // Allocating a managed exception inside the physical metadata scope would
+    // itself be an allocation exposure. Unwind that scope natively first.
+    if (IsResolvingTypeMetadata() || StagingBridge::IsStaging()) throw ShadowTypeResolutionFailure(error, detail);
+    Exception::Raise(Exception::GetInvalidOperationException(detail.c_str()));
+}
+
+Il2CppClass* AssemblyShadow::ResolveClassDefinition(Il2CppClass* klass)
+{
+    try { return AssemblyShadowTypeResolver::ResolveDefinition(klass); }
+    catch (const ShadowTypeResolutionFailure& error) { FailTypeResolution(error.error, error.what()); return nullptr; }
+}
+
+Il2CppClass* AssemblyShadow::ResolveClass(Il2CppClass* klass)
+{
+    try { return AssemblyShadowTypeResolver::ResolveClass(klass); }
+    catch (const ShadowTypeResolutionFailure& error) { FailTypeResolution(error.error, error.what()); return nullptr; }
+}
+
+const Il2CppType* AssemblyShadow::ResolveType(const Il2CppType* type)
+{
+    try { return AssemblyShadowTypeResolver::Resolve(type); }
+    catch (const ShadowTypeResolutionFailure& error) { FailTypeResolution(error.error, error.what()); return nullptr; }
+}
+
+Il2CppClass* AssemblyShadow::ResolveAllocationClass(Il2CppClass* klass, const char* site)
+{
+    try
+    {
+        Il2CppClass* result = AssemblyShadowTypeResolver::ResolveAllocation(klass, site);
+        AssemblyShadowTypeResolver::RecordUse(result ? &result->byval_arg : nullptr, BaselineUseKind::ObjectAllocation, site);
+        return result;
+    }
+    catch (const ShadowTypeResolutionFailure& error) { FailTypeResolution(error.error, error.what()); return nullptr; }
+}
+
+void AssemblyShadow::RequireActiveClass(Il2CppClass* klass, BaselineUseKind kind, const char* site)
+{
+    RecordTypeUse(klass ? &klass->byval_arg : nullptr, kind, site);
+}
+
+void AssemblyShadow::RecordTypeUse(const Il2CppType* type, BaselineUseKind kind, const char* site)
+{
+    try { AssemblyShadowTypeResolver::RecordUse(type, kind, site); }
+    catch (const ShadowTypeResolutionFailure& error) { FailTypeResolution(error.error, error.what()); }
+}
+
+AssemblyShadowError AssemblyShadow::GetTypeResolutionInfo(const Il2CppType* type, std::string& json)
+{
+    return AssemblyShadowTypeResolver::GetInfo(type, json);
 }
 
 AssemblyShadowError AssemblyShadow::ReportUnexpectedFailure()
@@ -879,10 +963,8 @@ AssemblyShadowError AssemblyShadow::ReportUnexpectedFailure()
 Il2CppClass* AssemblyShadow::ResolveUnityComparisonTarget(const Il2CppClass* actual, Il2CppClass* expected)
 {
     if (!actual || !expected || !IsActiveShadow(actual->image->assembly) || !IsShadowedBaseline(expected->image->assembly) ||
-        ResolveImage(expected->image) != actual->image || actual->is_generic || actual->generic_class || actual->declaringType ||
-        expected->is_generic || expected->generic_class || expected->declaringType) return expected;
-    Il2CppClass* mapped = Image::ClassFromName(actual->image, expected->namespaze, expected->name);
-    return mapped ? mapped : expected;
+        ResolveImage(expected->image) != actual->image) return expected;
+    return ResolveClass(expected); // Resolve only the comparison handle, never actual->klass.
 }
 
 void AssemblyShadow::TraceImage(const char* site, const Il2CppImage* image)
@@ -948,6 +1030,11 @@ AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
     ShadowDiagnosticSnapshot snapshot;
     snapshot.lastError = AssemblyShadowError::FeatureDisabled;
     json = AssemblyShadowDiagnostics::Serialize(snapshot);
+    return AssemblyShadowError::FeatureDisabled;
+}
+AssemblyShadowError AssemblyShadow::GetTypeResolutionInfo(const Il2CppType*, std::string& json)
+{
+    json.clear();
     return AssemblyShadowError::FeatureDisabled;
 }
 }}

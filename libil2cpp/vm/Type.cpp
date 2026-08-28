@@ -9,6 +9,7 @@
 #include "metadata/Il2CppTypeCompare.h"
 #include "utils/StringUtils.h"
 #include "vm/Assembly.h"
+#include "vm/AssemblyShadow.h"
 #include "vm/AssemblyName.h"
 #include "vm/Class.h"
 #include "vm/Field.h"
@@ -1170,9 +1171,15 @@ namespace vm
     Il2CppReflectionType* Type::GetTypeFromHandle(intptr_t handle)
     {
         const Il2CppType* type = (const Il2CppType*)handle;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        // Preserve byref/composite qualifiers; converting through byval_arg
+        // discards them before the reflection cache can form its active key.
+        return Reflection::GetTypeObject(AssemblyShadow::ResolveType(type));
+#else
         Il2CppClass *klass = vm::Class::FromIl2CppType(type);
 
         return il2cpp::vm::Reflection::GetTypeObject(&klass->byval_arg);
+#endif
     }
 
     uint32_t Type::GetToken(const Il2CppType *type)

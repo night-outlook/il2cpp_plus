@@ -60,6 +60,7 @@ enum class BaselineUseKind : int32_t
     StaticField = 4,
     VTable = 5,
     MonoScript = 6,
+    ModuleReflection = 7,
 };
 
 static const int32_t kAssemblyShadowRuntimeAbiVersion = 1;

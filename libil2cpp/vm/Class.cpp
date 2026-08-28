@@ -69,8 +69,22 @@ namespace vm
     static void SetupVTable(Il2CppClass *klass, const il2cpp::os::FastAutoLock& lock);
     static void AddStaticFieldData(Il2CppClass* klass);
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    static Il2CppClass* ResolveQueryClass(Il2CppClass* klass, const char* site)
+    {
+        if (AssemblyShadow::IsResolvingTypeMetadata()) return klass;
+        klass = AssemblyShadow::ResolveClass(klass);
+        if (klass) AssemblyShadow::RecordTypeUse(&klass->byval_arg, BaselineUseKind::TypeReflection, site);
+        return klass;
+    }
+#endif
+
     Il2CppClass* Class::FromIl2CppType(const Il2CppType* type, bool throwOnError)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (!AssemblyShadow::IsResolvingTypeMetadata())
+            type = AssemblyShadow::ResolveType(type);
+#endif
         Il2CppClass* defaultClass = FromIl2CppTypeEnum(type->type);
         if (defaultClass != NULL)
             return defaultClass;
@@ -96,7 +110,8 @@ namespace vm
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
             {
                 Il2CppClass* klass = Type::GetClass(type);
-                AssemblyShadow::TraceClass("Class::FromIl2CppType", klass);
+                if (!AssemblyShadow::IsResolvingTypeMetadata())
+                    AssemblyShadow::TraceClass("Class::FromIl2CppType", klass);
                 return klass;
             }
 #else
@@ -271,6 +286,9 @@ namespace vm
 
     Il2CppClass* Class::GetElementClass(Il2CppClass *klass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klass = ResolveQueryClass(klass, "Class::GetElementClass");
+#endif
         return klass->element_class;
     }
 
@@ -287,6 +305,9 @@ namespace vm
     {
         if (!iter)
             return NULL;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klass = ResolveQueryClass(klass, "Class::GetEvents");
+#endif
 
         if (!*iter)
         {
@@ -313,6 +334,9 @@ namespace vm
     {
         if (!iter)
             return NULL;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klass = ResolveQueryClass(klass, "Class::GetFields");
+#endif
 
         if (!*iter)
         {
@@ -337,6 +361,10 @@ namespace vm
 
     FieldInfo* Class::GetFieldFromName(Il2CppClass *klass, const char* name)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (!AssemblyShadow::IsResolvingTypeMetadata())
+            klass = AssemblyShadow::ResolveClass(klass);
+#endif
         while (klass)
         {
             void* iter = NULL;
@@ -379,6 +407,9 @@ namespace vm
     {
         if (!iter)
             return NULL;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klass = ResolveQueryClass(klass, "Class::GetInterfaces");
+#endif
 
         if (!*iter)
         {
@@ -405,6 +436,9 @@ namespace vm
     {
         if (!iter)
             return NULL;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klass = ResolveQueryClass(klass, "Class::GetMethods");
+#endif
 
         if (!*iter)
         {
@@ -439,6 +473,10 @@ namespace vm
 
     const MethodInfo* Class::GetMethodFromNameFlagsAndSig(Il2CppClass *klass, const char* name, int argsCount, int32_t flags, const Il2CppType** argTypes)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (!AssemblyShadow::IsResolvingTypeMetadata())
+            klass = AssemblyShadow::ResolveClass(klass);
+#endif
         Class::Init(klass);
 
         while (klass != NULL)
@@ -502,6 +540,13 @@ namespace vm
     {
         if (!iter)
             return NULL;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (!AssemblyShadow::IsResolvingTypeMetadata())
+        {
+            klass = AssemblyShadow::ResolveClass(klass);
+            AssemblyShadow::RecordTypeUse(&klass->byval_arg, BaselineUseKind::TypeReflection, "Class::GetNestedTypes");
+        }
+#endif
 
         if (klass->generic_class)
         {
@@ -547,6 +592,13 @@ namespace vm
 
     Il2CppClass* Class::GetParent(Il2CppClass *klass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (!AssemblyShadow::IsResolvingTypeMetadata())
+        {
+            klass = AssemblyShadow::ResolveClass(klass);
+            return AssemblyShadow::ResolveClass(klass->parent);
+        }
+#endif
         return klass->parent;
     }
 
@@ -554,6 +606,9 @@ namespace vm
     {
         if (!iter)
             return NULL;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klass = ResolveQueryClass(klass, "Class::GetProperties");
+#endif
 
         if (!*iter)
         {
@@ -578,6 +633,10 @@ namespace vm
 
     const PropertyInfo* Class::GetPropertyFromName(Il2CppClass *klass, const char* name)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (!AssemblyShadow::IsResolvingTypeMetadata())
+            klass = AssemblyShadow::ResolveClass(klass);
+#endif
         while (klass)
         {
             void* iter = NULL;
@@ -636,6 +695,10 @@ namespace vm
 
     bool Class::HasParent(Il2CppClass *klass, Il2CppClass *parent)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        parent = AssemblyShadow::ResolveClass(parent);
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::TypeReflection, "Class::HasParent.actual");
+#endif
         Class::SetupTypeHierarchy(klass);
         Class::SetupTypeHierarchy(parent);
 
@@ -644,6 +707,11 @@ namespace vm
 
     bool Class::IsAssignableFrom(Il2CppClass *klass, Il2CppClass *oklass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klass = AssemblyShadow::ResolveClass(klass);
+        // oklass may be an existing object's actual class, not a type handle.
+        AssemblyShadow::RequireActiveClass(oklass, BaselineUseKind::TypeReflection, "Class::IsAssignableFrom.actual");
+#endif
         // Cast to original class - fast path
         if (klass == oklass)
             return true;
@@ -767,6 +835,10 @@ namespace vm
 
     bool Class::IsSubclassOf(Il2CppClass *klass, Il2CppClass *klassc, bool check_interfaces)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klassc = AssemblyShadow::ResolveClass(klassc);
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::TypeReflection, "Class::IsSubclassOf.actual");
+#endif
         Class::SetupTypeHierarchy(klass);
         Class::SetupTypeHierarchy(klassc);
         Class::SetupInterfaces(klass);
@@ -1015,6 +1087,10 @@ namespace vm
             klass->actualSize = static_cast<uint32_t>(actualSize);
         }
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (klass->static_fields_size || klass->thread_static_fields_size)
+            AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::StaticField, "Class::LayoutFieldsLocked.static-storage");
+#endif
         if (klass->static_fields_size)
         {
             klass->static_fields = il2cpp::gc::GarbageCollector::AllocateFixed(klass->static_fields_size, NULL);
@@ -1230,6 +1306,9 @@ namespace vm
 
     static void SetupVTable(Il2CppClass *klass, const il2cpp::os::FastAutoLock& lock)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::VTable, "Class::SetupVTable");
+#endif
         if (klass->is_vtable_initialized)
             return;
 
@@ -1483,6 +1562,9 @@ namespace vm
 
     bool Class::InitLocked(Il2CppClass *klass, const il2cpp::os::FastAutoLock& lock)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::ClassInit, "Class::InitLocked");
+#endif
         if (klass->initialized)
             return true;
         if (klass->init_pending)
@@ -1603,7 +1685,8 @@ namespace vm
     void Class::Init(Il2CppClass *klass)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        AssemblyShadow::TraceClass("Class::Init", klass);
+        // This API initializes the supplied pointer in place: never redirect it.
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::ClassInit, "Class::Init");
 #endif
         IL2CPP_ASSERT(klass);
 
@@ -2253,11 +2336,18 @@ namespace vm
 
     Il2CppClass* Class::GetDeclaringType(Il2CppClass* klass)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        klass = ResolveQueryClass(klass, "Class::GetDeclaringType");
+#endif
         return klass->declaringType;
     }
 
     const MethodInfo* Class::GetVirtualMethod(Il2CppClass *klass, const MethodInfo *virtualMethod)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveClass(klass, BaselineUseKind::VTable, "Class::GetVirtualMethod.actual");
+        AssemblyShadow::RequireActiveClass(virtualMethod->klass, BaselineUseKind::VTable, "Class::GetVirtualMethod.owner");
+#endif
         IL2CPP_ASSERT(klass->is_vtable_initialized);
 
         if ((virtualMethod->flags & METHOD_ATTRIBUTE_FINAL) || !(virtualMethod->flags & METHOD_ATTRIBUTE_VIRTUAL))

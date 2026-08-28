@@ -5,6 +5,7 @@
 #include "os/Path.h"
 #include "vm/Array.h"
 #include "vm/Assembly.h"
+#include "vm/AssemblyShadow.h"
 #include "vm/AssemblyName.h"
 #include "vm/Exception.h"
 #include "vm/Image.h"
@@ -209,6 +210,15 @@ namespace Reflection
 
     Il2CppObject* RuntimeAssembly::GetManifestModuleInternal(Il2CppObject* thisPtr)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        Il2CppReflectionAssembly* assembly = reinterpret_cast<Il2CppReflectionAssembly*>(thisPtr);
+        if (assembly && assembly->assembly)
+        {
+            const Il2CppImage* image = vm::AssemblyShadow::ResolveImage(assembly->assembly->image);
+            if (image && vm::AssemblyShadow::IsActiveShadow(image->assembly))
+                return reinterpret_cast<Il2CppObject*>(vm::Reflection::GetModuleObject(image));
+        }
+#endif
         NOT_SUPPORTED_IL2CPP(Assembly::GetManifestModuleInternal, "This icall is not supported by il2cpp.");
 
         return 0;

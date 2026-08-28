@@ -14,6 +14,7 @@
 #include "utils/dynamic_array.h"
 #include "vm-utils/VmStringUtils.h"
 #include "vm/Array.h"
+#include "vm/AssemblyShadow.h"
 #include "vm/Class.h"
 #include "vm/ClassInlines.h"
 #include "vm/Field.h"
@@ -900,6 +901,9 @@ namespace System
     Il2CppReflectionType * RuntimeType::MakeGenericType(Il2CppReflectionType* type, Il2CppArray* genericArgumentTypes)
     {
         const Il2CppType* genericTypeDefinitionType = type->type;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        genericTypeDefinitionType = vm::AssemblyShadow::ResolveType(genericTypeDefinitionType);
+#endif
         Il2CppClass* genericTypeDefinitionClass = vm::Class::FromIl2CppType(genericTypeDefinitionType);
         IL2CPP_ASSERT(vm::Class::IsGeneric(genericTypeDefinitionClass));
 
@@ -910,6 +914,9 @@ namespace System
         {
             Il2CppReflectionType* genericArgumentType = il2cpp_array_get(genericArgumentTypes, Il2CppReflectionType*, i);
             genericArguments[i] = genericArgumentType->type;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+            genericArguments[i] = vm::AssemblyShadow::ResolveType(genericArguments[i]);
+#endif
         }
 
         const Il2CppGenericInst* inst = vm::MetadataCache::GetGenericInst(genericArguments, arrayLength);
@@ -927,7 +934,11 @@ namespace System
 
     Il2CppReflectionType* RuntimeType::MakePointerType(Il2CppReflectionType* type)
     {
-        Il2CppClass* pointerType = vm::Class::GetPtrClass(type->type);
+        const Il2CppType* elementType = type->type;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        elementType = vm::AssemblyShadow::ResolveType(elementType);
+#endif
+        Il2CppClass* pointerType = vm::Class::GetPtrClass(elementType);
 
         return vm::Reflection::GetTypeObject(&pointerType->byval_arg);
     }
