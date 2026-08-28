@@ -54,6 +54,11 @@ namespace vm
         static const Il2CppClass* GetType(const Il2CppImage* image, AssemblyTypeIndex index);
         static Il2CppClass* FromTypeNameParseInfo(const Il2CppImage* image, const TypeNameParseInfo &info, bool ignoreCase);
         static Il2CppClass* ClassFromName(const Il2CppImage* image, const char* namespaze, const char *name);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        // Physical defining-image lookup: exported handles are rejected before
+        // class materialization/usage hooks. Does not redirect the input image.
+        static Il2CppClass* ClassFromNameDefinedInImage(const Il2CppImage* image, const char* namespaze, const char* name);
+#endif
         static Il2CppMetadataTypeHandle TypeHandleFromName(const Il2CppImage* image, const char* namespaze, const char* name);
         static void GetTypes(const Il2CppImage* image, bool exportedOnly, TypeVector* target);
         static Il2CppArray* GetTypes(const Il2CppImage* image, bool exportedOnly);

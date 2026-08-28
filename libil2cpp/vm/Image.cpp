@@ -266,6 +266,27 @@ namespace vm
     }
 
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    Il2CppClass* Image::ClassFromNameDefinedInImage(const Il2CppImage* image, const char* namespaze, const char* name)
+    {
+        // TypeHandleFromName and its namespace/nested-type cache construction
+        // inspect raw metadata only; neither materializes nor traces classes.
+        Il2CppMetadataTypeHandle handle = TypeHandleFromName(image, namespaze, name);
+        if (!handle) return nullptr;
+        // The metadata API has no nonmaterializing declaring-image query.
+        // A bounded scan of this image's raw definitions avoids pointer-layout
+        // assumptions and never materializes any unrelated definition.
+        for (uint32_t index = 0; index < image->typeCount; ++index)
+        {
+            if (MetadataCache::GetAssemblyTypeHandle(image, index) != handle) continue;
+            Il2CppClass* klass = MetadataCache::GetTypeInfoFromHandle(handle);
+            AssemblyShadow::TraceClass("Image::ClassFromNameDefinedInImage.output", klass);
+            return klass;
+        }
+        return nullptr;
+    }
+#endif
+
     Il2CppMetadataTypeHandle Image::TypeHandleFromName(const Il2CppImage* image, const char* namespaze, const char* name)
     {
         if (!image->nameToClassHashTable)

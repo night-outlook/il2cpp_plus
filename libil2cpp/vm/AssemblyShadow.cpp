@@ -54,6 +54,7 @@ namespace {
         std::unordered_map<const Il2CppAssembly*, Candidate*> byAssembly;
         NameIndex<const Il2CppAssembly*> stableByName;
         std::vector<std::string> stableNames;
+        std::vector<const Il2CppAssembly*> netstandardProviders;
     };
 
     struct ActiveSnapshot
@@ -187,6 +188,22 @@ namespace {
         return registry->stableByName.Find(name);
     }
 
+    bool CanResolvePrivateFacade(const char* name, const CandidateRegistry* registry)
+    {
+        return hybridclr::metadata::Image::CanUseLogicalNetStandardFacade(name,
+            registry->byName.Find(name) != nullptr,
+            MetadataCache::GetAotAssemblyByNamePhysical(name) != nullptr,
+            registry->netstandardProviders.size());
+    }
+
+    bool ResolvePrivateFacade(const char* name, std::vector<const Il2CppAssembly*>& providers, void*)
+    {
+        const CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
+        if (!registry || !CanResolvePrivateFacade(name, registry)) return false;
+        providers = registry->netstandardProviders;
+        return true;
+    }
+
     AssemblyShadowError CheckClosure(Transaction& transaction)
     {
         const CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
@@ -216,7 +233,7 @@ namespace {
                                 "Manifest load order is not provider-before-consumer: " + reference + " -> " + member.candidate->name);
                     }
                 }
-                else if (!registry->stableByName.Find(reference.c_str()))
+                else if (!registry->stableByName.Find(reference.c_str()) && !CanResolvePrivateFacade(reference.c_str(), registry))
                 {
                     return Result(transaction,
                         MetadataCache::GetAotAssemblyByNamePhysical(reference.c_str()) ?
@@ -309,6 +326,12 @@ AssemblyShadowError AssemblyShadow::ConfigureCandidates(const char* baselineBuil
         registry->stableByName.Add(assembly->aname.name, assembly);
         registry->stableNames.push_back(assembly->aname.name);
     }
+    // Facade providers are the intersection of upstream's finite framework
+    // provider list and explicitly approved physical stable AOT assemblies.
+    // Candidates cannot enter stableByName, even when named after a provider.
+    for (const char* const* name = hybridclr::metadata::Image::GetNetStandardProviderNames(); *name; ++name)
+        if (const Il2CppAssembly* provider = registry->stableByName.Find(*name))
+            registry->netstandardProviders.push_back(provider);
     transaction.owner = std::this_thread::get_id();
     transaction.baselineBuildId = baselineBuildId;
     s_candidates.store(registry.release(), std::memory_order_release);
@@ -416,7 +439,7 @@ AssemblyShadowError AssemblyShadow::ValidateTransaction()
     std::vector<StagedAssembly*> images;
     for (const auto& member : transaction.closure) images.push_back(member.staged);
     {
-        hybridclr::metadata::ScopedStagingResolver scope(images, ResolvePrivate, &transaction);
+        hybridclr::metadata::ScopedStagingResolver scope(images, ResolvePrivate, &transaction, ResolvePrivateFacade);
         for (const auto& member : transaction.closure)
         {
             Event(transaction, "metadata-begin", member.candidate->name);
