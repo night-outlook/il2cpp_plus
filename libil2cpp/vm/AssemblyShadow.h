@@ -56,6 +56,9 @@ public:
         const Il2CppAssembly* physicalProvider, const char* referencedName,
         int32_t referenceIndex = -1, const char* site = "AssemblyRef");
     static const Il2CppImage* ResolveImage(const Il2CppImage* image);
+    // Exported image identity stays at the startup-registered baseline image.
+    // Metadata queries still use ResolveImage; physical VM getters stay physical.
+    static const Il2CppImage* ResolvePublicImageIdentity(const Il2CppImage* image);
     static Il2CppClass* ResolveClassDefinition(Il2CppClass* klass);
     static Il2CppClass* ResolveClass(Il2CppClass* klass);
     static const Il2CppType* ResolveType(const Il2CppType* type);

@@ -230,7 +230,13 @@ int il2cpp_array_element_size(const Il2CppClass* klass)
 // assembly
 const Il2CppImage* il2cpp_assembly_get_image(const Il2CppAssembly *assembly)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    // Unity registers image identities before publication. Keep that identity
+    // stable at the public boundary without changing physical VM ownership.
+    return AssemblyShadow::ResolvePublicImageIdentity(Assembly::GetImage(assembly));
+#else
     return Assembly::GetImage(assembly);
+#endif
 }
 
 // class
@@ -444,7 +450,11 @@ bool il2cpp_class_is_enum(const Il2CppClass *klass)
 
 const Il2CppImage* il2cpp_class_get_image(Il2CppClass* klass)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    return AssemblyShadow::ResolvePublicImageIdentity(Class::GetImage(klass));
+#else
     return Class::GetImage(klass);
+#endif
 }
 
 const char *il2cpp_class_get_assemblyname(const Il2CppClass *klass)
@@ -1370,7 +1380,13 @@ bool il2cpp_type_is_pointer_type(const Il2CppType *type)
 
 const Il2CppAssembly* il2cpp_image_get_assembly(const Il2CppImage *image)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    // A stable public image identifies the logical assembly, whose metadata
+    // and reflection identity are active after publication.
+    return AssemblyShadow::ResolveAssembly(Image::GetAssembly(image));
+#else
     return Image::GetAssembly(image);
+#endif
 }
 
 const char* il2cpp_image_get_name(const Il2CppImage *image)
@@ -1390,11 +1406,19 @@ const MethodInfo* il2cpp_image_get_entry_point(const Il2CppImage *image)
 
 size_t il2cpp_image_get_class_count(const Il2CppImage * image)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    // Count and indexed lookup use the same active metadata, not the stable
+    // public identity's physical baseline type table.
+    image = AssemblyShadow::ResolveImage(image);
+#endif
     return Image::GetNumTypes(image);
 }
 
 const Il2CppClass* il2cpp_image_get_class(const Il2CppImage * image, size_t index)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    image = AssemblyShadow::ResolveImage(image);
+#endif
     return Image::GetType(image, static_cast<AssemblyTypeIndex>(index));
 }
 

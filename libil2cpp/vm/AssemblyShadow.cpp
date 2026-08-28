@@ -824,6 +824,21 @@ const Il2CppImage* AssemblyShadow::ResolveImage(const Il2CppImage* image)
     return image;
 }
 
+const Il2CppImage* AssemblyShadow::ResolvePublicImageIdentity(const Il2CppImage* image)
+{
+    if (!image) return image;
+    const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
+    if (active)
+    {
+        auto found = active->shadowToBaseline.find(image->assembly);
+        // Only the exact published physical image receives the stable identity.
+        // Private images and physical metadata ownership are never rewritten.
+        if (found != active->shadowToBaseline.end() && found->first->image == image)
+            return found->second->image;
+    }
+    return image;
+}
+
 bool AssemblyShadow::IsShadowedBaseline(const Il2CppAssembly* assembly)
 {
     const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
