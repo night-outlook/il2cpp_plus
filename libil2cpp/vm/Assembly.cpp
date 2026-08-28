@@ -11,6 +11,10 @@
 #include "Baselib.h"
 #include "Cpp/ReentrantLock.h"
 #include "os/Atomic.h"
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+#include "vm/AssemblyShadowName.h"
+#include "hybridclr/metadata/MetadataModule.h"
+#endif
 
 #include <vector>
 #include <string>
@@ -39,13 +43,31 @@ namespace vm
         }
     }
 
+    static void CopyLogicalAssemblies(AssemblyVector& dst, const AssemblyVector& src)
+    {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        assembly_shadow_detail::NameIndex<const Il2CppAssembly*> seen;
+        seen.Reserve(src.size());
+        for (const Il2CppAssembly* physical : src)
+        {
+            if (!physical->token) continue;
+            const Il2CppAssembly* logical = AssemblyShadow::ResolveAssembly(physical);
+            if (seen.Find(logical->aname.name)) continue;
+            seen.Add(logical->aname.name, logical);
+            dst.push_back(logical);
+        }
+#else
+        CopyValidAssemblies(dst, src);
+#endif
+    }
+
     AssemblyVector* Assembly::GetAllAssemblies()
     {
         os::FastAutoLock lock(&s_assemblyLock);
         if (s_assemblyVersion != s_snapshotAssemblyVersion)
         {
             s_snapshotAssemblies = new AssemblyVector();
-            CopyValidAssemblies(*s_snapshotAssemblies, s_Assemblies);
+            CopyLogicalAssemblies(*s_snapshotAssemblies, s_Assemblies);
             s_snapshotAssemblyVersion = s_assemblyVersion;
         }
 
@@ -58,7 +80,7 @@ namespace vm
         os::FastAutoLock lock(&s_assemblyLock);
         if (s_assemblyVersion != s_snapshotAssemblyVersion)
         {
-            CopyValidAssemblies(assemblies, s_Assemblies);
+            CopyLogicalAssemblies(assemblies, s_Assemblies);
         }
         else
         {
@@ -69,9 +91,11 @@ namespace vm
     const Il2CppAssembly* Assembly::GetLoadedAssembly(const char* name)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        if (const Il2CppAssembly* shadow = AssemblyShadow::ResolveName(name, "Assembly::GetLoadedAssembly"))
+        if (const Il2CppAssembly* shadow = AssemblyShadow::ResolveByName(name, AssemblyResolveContext::Normal))
             return shadow;
-#endif
+        const Il2CppAssembly* physical = GetLoadedAssemblyPhysical(name);
+        return AssemblyShadow::ResolveAssembly(physical);
+#else
         os::FastAutoLock lock(&s_assemblyLock);
         AssemblyVector& assemblies = s_Assemblies;
         for (AssemblyVector::const_reverse_iterator assembly = assemblies.rbegin(); assembly != assemblies.rend(); ++assembly)
@@ -81,7 +105,33 @@ namespace vm
         }
 
         return NULL;
+#endif
     }
+
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    const Il2CppAssembly* Assembly::GetLoadedAssemblyPhysical(const char* name, PhysicalAssemblyPreference preference)
+    {
+        os::FastAutoLock lock(&s_assemblyLock);
+        const Il2CppAssembly* result = nullptr;
+        for (const Il2CppAssembly* assembly : s_Assemblies)
+        {
+            bool interpreter = hybridclr::metadata::IsInterpreterImage(assembly->image);
+            if ((preference == PhysicalAssemblyPreference::AotOnly && interpreter) ||
+                (preference == PhysicalAssemblyPreference::InterpreterOnly && !interpreter)) continue;
+            if (!assembly_shadow_detail::NameEquals(assembly_shadow_detail::ViewName(name),
+                assembly_shadow_detail::ViewName(assembly->aname.name))) continue;
+            result = assembly;
+            if (preference != PhysicalAssemblyPreference::AnyNewest) break;
+        }
+        return result;
+    }
+
+    void Assembly::GetAllPhysicalAssemblies(AssemblyVector& assemblies)
+    {
+        os::FastAutoLock lock(&s_assemblyLock);
+        CopyValidAssemblies(assemblies, s_Assemblies);
+    }
+#endif
 
     Il2CppImage* Assembly::GetImage(const Il2CppAssembly* assembly)
     {
@@ -90,6 +140,14 @@ namespace vm
 
     void Assembly::GetReferencedAssemblies(const Il2CppAssembly* assembly, AssemblyNameVector* target)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        assembly = AssemblyShadow::ResolveAssembly(assembly);
+        if (AssemblyShadow::IsActiveShadow(assembly))
+        {
+            hybridclr::metadata::MetadataModule::GetImage(assembly->image)->GetDeclaredReferencedAssemblyNames(*target);
+            return;
+        }
+#endif
         for (int32_t sourceIndex = 0; sourceIndex < assembly->referencedAssemblyCount; sourceIndex++)
         {
             const Il2CppAssembly* refAssembly = MetadataCache::GetReferencedAssembly(assembly, sourceIndex);
@@ -114,10 +172,25 @@ namespace vm
     const Il2CppAssembly* Assembly::Load(const char* name)
     {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        if (const Il2CppAssembly* shadow = AssemblyShadow::ResolveName(name, "Assembly::Load"))
+        // Native type-name resolution also calls Load while initializing
+        // private metadata. Preserve its strict TLS context; ordinary callers
+        // have Normal context and never observe the private closure.
+        AssemblyResolveContext context = AssemblyShadow::CurrentResolveContext();
+        if (const Il2CppAssembly* shadow = AssemblyShadow::ResolveByName(name, context))
             return shadow;
+        const Il2CppAssembly* loaded = LoadOriginal(name);
+        if (const Il2CppAssembly* shadow = AssemblyShadow::ResolveByName(name, context))
+            return shadow;
+        return AssemblyShadow::ResolveAssembly(loaded);
+    }
+
+    const Il2CppAssembly* Assembly::LoadOriginal(const char* name)
+    {
+        const Il2CppAssembly* (*lookup)(const char*) = MetadataCache::GetAssemblyByNameOriginal;
+#else
+        const Il2CppAssembly* (*lookup)(const char*) = MetadataCache::GetAssemblyByName;
 #endif
-        const Il2CppAssembly* loadedAssembly = MetadataCache::GetAssemblyByName(name);
+        const Il2CppAssembly* loadedAssembly = lookup(name);
         if (loadedAssembly)
         {
             return loadedAssembly;
@@ -133,12 +206,12 @@ namespace vm
             memcpy(tmp, name, len);
             memcpy(tmp + len, ".dll", 4);
 
-            loadedAssembly = MetadataCache::GetAssemblyByName(tmp);
+            loadedAssembly = lookup(tmp);
 
             if (!loadedAssembly)
             {
                 memcpy(tmp + len, ".exe", 4);
-                loadedAssembly = MetadataCache::GetAssemblyByName(tmp);
+                loadedAssembly = lookup(tmp);
             }
 
             delete[] tmp;

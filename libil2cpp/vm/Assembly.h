@@ -14,6 +14,9 @@ namespace vm
 {
     typedef std::vector<const Il2CppAssembly*> AssemblyVector;
     typedef std::vector<const Il2CppAssemblyName*> AssemblyNameVector;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    enum class PhysicalAssemblyPreference { AotOnly, InterpreterOnly, AnyNewest, AnyOldest };
+#endif
 
     class LIBIL2CPP_CODEGEN_API Assembly
     {
@@ -28,6 +31,10 @@ namespace vm
         static const Il2CppAssembly* Load(const char* name);
         static void Register(const Il2CppAssembly* assembly);
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        static void GetAllPhysicalAssemblies(AssemblyVector& assemblies);
+        static const Il2CppAssembly* GetLoadedAssemblyPhysical(const char* name,
+            PhysicalAssemblyPreference preference = PhysicalAssemblyPreference::AnyNewest);
+        static const Il2CppAssembly* LoadOriginal(const char* name);
         // Caller owns transaction -> metadata locks. Both callbacks are native,
         // nonthrowing and must not allocate or enter managed code. Storage is
         // reserved before tryBegin; publication and version bump share one lock.

@@ -14,6 +14,10 @@
 #include "utils/Runtime.h"
 #include "vm/Array.h"
 #include "vm/Assembly.h"
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+#include "vm/AssemblyShadow.h"
+#include "hybridclr/metadata/MetadataModule.h"
+#endif
 #include "vm/AssemblyName.h"
 #include "vm/Class.h"
 #include "vm/Exception.h"
@@ -50,10 +54,30 @@ namespace Reflection
         VoidPtrArray assemblyPointers;
         vm::AssemblyNameVector referencedAssemblies;
         vm::Assembly::GetReferencedAssemblies(module->assembly, &referencedAssemblies);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        const Il2CppAssembly* resolved = vm::AssemblyShadow::ResolveAssembly(module->assembly);
+        hybridclr::metadata::InterpreterImage* declaringImage = vm::AssemblyShadow::IsActiveShadow(resolved) ?
+            hybridclr::metadata::MetadataModule::GetImage(resolved->image) : nullptr;
+#endif
         for (vm::AssemblyNameVector::const_iterator aname = referencedAssemblies.begin(); aname != referencedAssemblies.end(); ++aname)
         {
             Il2CppMonoAssemblyName* monoAssemblyName = (Il2CppMonoAssemblyName*)IL2CPP_MALLOC_ZERO(sizeof(Il2CppMonoAssemblyName));
             il2cpp::vm::AssemblyName::FillNativeAssemblyName(*(*aname), monoAssemblyName);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+            // Upstream tests token[0] for presence, which loses a valid token
+            // beginning with 00. The retained AssemblyRef blob knows presence.
+            if (declaringImage && declaringImage->DeclaredReferenceHasPublicKeyToken(
+                static_cast<int32_t>(aname - referencedAssemblies.begin())))
+            {
+                static const char hex[] = "0123456789abcdef";
+                for (size_t index = 0; index < sizeof((*aname)->public_key_token); ++index)
+                {
+                    uint8_t value = (*aname)->public_key_token[index];
+                    monoAssemblyName->public_key_token.padding[index * 2] = hex[value >> 4];
+                    monoAssemblyName->public_key_token.padding[index * 2 + 1] = hex[value & 15];
+                }
+            }
+#endif
             assemblyPointers.push_back(monoAssemblyName);
         }
 

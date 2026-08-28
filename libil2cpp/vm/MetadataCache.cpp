@@ -979,7 +979,8 @@ const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByName(const char* n
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
     if (const Il2CppAssembly* shadow = AssemblyShadow::ResolveName(nameToFind, "MetadataCache::GetAssemblyByName"))
         return shadow;
-#endif
+    return AssemblyShadow::ResolveAssembly(GetAssemblyByNameOriginal(nameToFind));
+#else
     const char* assemblyName = hybridclr::GetAssemblyNameFromPath(nameToFind);
 
     il2cpp::utils::VmStringUtils::CaseInsensitiveComparer comparer;
@@ -1001,6 +1002,7 @@ const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByName(const char* n
     }
 
     return nullptr;
+#endif
 }
 
 void il2cpp::vm::MetadataCache::RegisterInterpreterAssembly(Il2CppAssembly* assembly)
@@ -1019,6 +1021,29 @@ void il2cpp::vm::MetadataCache::RegisterInterpreterAssembly(Il2CppAssembly* asse
 }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByNameOriginal(const char* name)
+{
+    if (const Il2CppAssembly* assembly = GetAssemblyByNamePhysicalAot(name)) return assembly;
+    return GetAssemblyByNamePhysicalInterpreter(name);
+}
+
+const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByNamePhysicalAot(const char* name)
+{
+    return GetAotAssemblyByNamePhysical(name);
+}
+
+const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByNamePhysicalInterpreter(const char* name)
+{
+    using namespace il2cpp::vm::assembly_shadow_detail;
+    NameView requested = ViewName(name);
+    size_t ignored;
+    if (!NameHash(requested, ignored)) return nullptr;
+    il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
+    for (const Il2CppAssembly* assembly : s_cliAssemblies)
+        if (NameEquals(requested, ViewName(assembly->aname.name))) return assembly;
+    return nullptr;
+}
+
 const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAotAssemblyByNamePhysical(const char* name)
 {
     // Physical immutable metadata only: no active resolver, CLI side vector,
@@ -1256,8 +1281,28 @@ il2cpp::metadata::CustomAttributeDataReader  il2cpp::vm::MetadataCache::GetCusto
 
 const Il2CppAssembly* il2cpp::vm::MetadataCache::GetReferencedAssembly(const Il2CppAssembly* assembly, int32_t referencedAssemblyTableIndex)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    // InterpreterImage supplies its declared reference name and exact row.
+    // AOT table indexes stay physical; only this semantic boundary redirects.
+    if (hybridclr::metadata::IsInterpreterImage(assembly->image))
+        return il2cpp::vm::GlobalMetadata::GetReferencedAssembly(assembly, referencedAssemblyTableIndex, s_AssembliesTable, s_AssembliesCount);
+    const Il2CppAssembly* provider = GetReferencedAssemblyPhysical(assembly, referencedAssemblyTableIndex);
+    return AssemblyShadow::ResolveReferencedAssembly(assembly, provider,
+        provider ? provider->aname.name : nullptr, referencedAssemblyTableIndex, "MetadataCache::GetReferencedAssembly");
+#else
     return il2cpp::vm::GlobalMetadata::GetReferencedAssembly(assembly, referencedAssemblyTableIndex, s_AssembliesTable, s_AssembliesCount);
+#endif
 }
+
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+const Il2CppAssembly* il2cpp::vm::MetadataCache::GetReferencedAssemblyPhysical(const Il2CppAssembly* assembly, int32_t index)
+{
+    // A physical metadata-table API, restricted to AOT requesters. Interpreter
+    // refs are semantic names and are not entries in this fixed table.
+    IL2CPP_ASSERT(!hybridclr::metadata::IsInterpreterImage(assembly->image));
+    return il2cpp::vm::GlobalMetadata::GetReferencedAssembly(assembly, index, s_AssembliesTable, s_AssembliesCount);
+}
+#endif
 
 void il2cpp::vm::MetadataCache::InitializeAllMethodMetadata()
 {

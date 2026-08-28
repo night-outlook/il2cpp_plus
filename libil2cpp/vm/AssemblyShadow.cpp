@@ -95,6 +95,8 @@ namespace {
     std::atomic<AssemblyShadowState> s_state{AssemblyShadowState::Disabled};
     std::atomic<bool> s_lateBaselineUse{false};
     std::atomic<bool> s_unexpectedFailure{false};
+    std::atomic<bool> s_referenceViolation{false};
+    std::atomic<const std::string*> s_referenceViolationDetail{nullptr}; // One immutable process-lifetime failure.
     std::atomic_flag s_usageLock = ATOMIC_FLAG_INIT;
     uint64_t s_usageGeneration = 0;
 
@@ -204,6 +206,35 @@ namespace {
         return true;
     }
 
+    std::string ReferenceDetail(const Il2CppAssembly* requester, const char* provider, int32_t index, const char* site)
+    {
+        const char* name = requester ? requester->aname.name : "<unknown>";
+        return std::string("ShadowClosureViolation Requester=") + name + " Provider=" +
+            (provider ? provider : "<unknown>") + " ReferenceIndex=" + std::to_string(index) +
+            " Path=" + name + " -> " + (provider ? provider : "<unknown>") + " Site=" + site;
+    }
+
+    AssemblyShadowError CheckExternalReferences(Transaction& transaction, const CandidateRegistry* registry)
+    {
+        AssemblyVector physical;
+        Assembly::GetAllPhysicalAssemblies(physical);
+        for (const Il2CppAssembly* requester : physical)
+        {
+            if (Interpreter(requester)) continue;
+            auto candidate = registry->byAssembly.find(requester);
+            if (candidate != registry->byAssembly.end() && transaction.positions.count(candidate->second)) continue;
+            for (int32_t index = 0; index < requester->referencedAssemblyCount; ++index)
+            {
+                const Il2CppAssembly* provider = MetadataCache::GetReferencedAssemblyPhysical(requester, index);
+                Candidate* changed = provider ? registry->byName.Find(provider->aname.name) : nullptr;
+                if (changed && transaction.positions.count(changed))
+                    return Result(transaction, AssemblyShadowError::ReferenceEscapesClosure,
+                        ReferenceDetail(requester, provider->aname.name, index, "Validate.PhysicalAotAssemblyRef"));
+            }
+        }
+        return AssemblyShadowError::Success;
+    }
+
     AssemblyShadowError CheckClosure(Transaction& transaction)
     {
         const CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
@@ -242,7 +273,7 @@ namespace {
                 }
             }
         }
-        return AssemblyShadowError::Success;
+        return CheckExternalReferences(transaction, registry);
     }
 
     struct Publication
@@ -283,6 +314,21 @@ namespace {
         }
         memcpy(destination, source, length);
         destination[length] = '\0';
+    }
+
+    void FailReference(const Il2CppAssembly* requester, const char* provider, int32_t index, const char* site)
+    {
+        std::string detail = ReferenceDetail(requester, provider, index, site);
+        // Allocate only on failure, outside VM/usage locks. Retain one complete
+        // record, not a per-lookup event stream or a truncated dependency path.
+        std::unique_ptr<std::string> retained(new std::string(detail));
+        const std::string* expected = nullptr;
+        if (s_referenceViolationDetail.compare_exchange_strong(expected, retained.get(), std::memory_order_acq_rel))
+            retained.release();
+        s_referenceViolation.store(true, std::memory_order_release);
+        s_state.store(AssemblyShadowState::FailedAfterCommit, std::memory_order_release);
+        // The sealed state and first-failure detail survive a managed catch.
+        Exception::Raise(Exception::GetInvalidOperationException(detail.c_str()));
     }
 }
 
@@ -506,11 +552,12 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
     lock.unlock();
     for (const auto& member : transaction.closure)
     {
-        if (s_lateBaselineUse.load(std::memory_order_acquire))
+        if (s_lateBaselineUse.load(std::memory_order_acquire) || s_referenceViolation.load(std::memory_order_acquire))
         {
             lock.lock();
             s_state.store(AssemblyShadowState::FailedAfterCommit, std::memory_order_release);
-            return Result(transaction, AssemblyShadowError::BaselineAlreadyUsed, "Baseline use raced activation; restart is required.");
+            return Result(transaction, s_referenceViolation.load() ? AssemblyShadowError::ReferenceEscapesClosure :
+                AssemblyShadowError::BaselineAlreadyUsed, "A guarded failure raced activation; restart is required.");
         }
         {
             std::lock_guard<std::mutex> record(transaction.mutex);
@@ -524,7 +571,8 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
             {
                 s_state.store(AssemblyShadowState::FailedAfterCommit, std::memory_order_release);
                 Event(transaction, "initializer-failed", member.candidate->name);
-                return Result(transaction, AssemblyShadowError::ModuleInitializerFailed, detail);
+                return Result(transaction, s_referenceViolation.load(std::memory_order_acquire) ?
+                    AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::ModuleInitializerFailed, detail);
             }
             transaction.commitOrder.push_back(member.candidate->name);
             Event(transaction, "initializer-complete", member.candidate->name);
@@ -533,7 +581,9 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
     lock.lock();
     AssemblyShadowState expected = AssemblyShadowState::Committing;
     if (!s_state.compare_exchange_strong(expected, AssemblyShadowState::Committed, std::memory_order_acq_rel))
-        return Result(transaction, AssemblyShadowError::BaselineAlreadyUsed, "Baseline use raced initializers; restart is required.");
+        return Result(transaction, s_referenceViolation.load(std::memory_order_acquire) ?
+            AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::BaselineAlreadyUsed,
+            "A guarded failure raced initializers; restart is required.");
     Event(transaction, "transaction-committed");
     return Result(transaction, AssemblyShadowError::Success);
 }
@@ -610,6 +660,12 @@ AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
     if (registry)
     {
         snapshot.stableAotNames = registry->stableNames;
+        if (s_referenceViolation.load(std::memory_order_acquire))
+        {
+            snapshot.lastError = AssemblyShadowError::ReferenceEscapesClosure;
+            snapshot.detail = *s_referenceViolationDetail.load(std::memory_order_acquire);
+            snapshot.state = AssemblyShadowState::FailedAfterCommit;
+        }
         std::vector<UseRecord> uses(registry->entries.size());
         {
             UsageLock usage;
@@ -660,16 +716,67 @@ AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
     return AssemblyShadowError::Success;
 }
 
-const Il2CppAssembly* AssemblyShadow::ResolveName(const char* name, const char*)
+AssemblyResolveContext AssemblyShadow::CurrentResolveContext()
 {
-    const Il2CppAssembly* staged = nullptr;
-    if (StagingBridge::TryResolveForCurrentThread(name, staged))
+    return StagingBridge::IsStaging() ? AssemblyResolveContext::Staging : AssemblyResolveContext::Normal;
+}
+
+const Il2CppAssembly* AssemblyShadow::ResolveByName(const char* name, AssemblyResolveContext context)
+{
+    if (context == AssemblyResolveContext::DiagnosticsPhysical)
+        return MetadataCache::GetAssemblyByNameOriginal(name);
+    if (context == AssemblyResolveContext::Staging)
     {
-        if (!staged) throw std::runtime_error("Unresolved or unapproved assembly in private staging resolver.");
+        const Il2CppAssembly* staged = nullptr;
+        if (!StagingBridge::TryResolveForCurrentThread(name, staged) || !staged)
+            throw std::runtime_error(std::string("Unresolved or unapproved assembly in private staging resolver: ") + (name ? name : "<null>"));
         return staged;
     }
     const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
     return active ? active->byName.Find(name) : nullptr;
+}
+
+const Il2CppAssembly* AssemblyShadow::ResolveName(const char* name, const char*)
+{
+    return ResolveByName(name, CurrentResolveContext());
+}
+
+const Il2CppAssembly* AssemblyShadow::ResolveReferencedAssembly(const Il2CppAssembly* requester,
+    const Il2CppAssembly* physicalProvider, const char* referencedName, int32_t referenceIndex, const char* site)
+{
+    if (StagingBridge::IsStaging())
+    {
+        const Il2CppAssembly* staged = nullptr;
+        if (!StagingBridge::TryResolveForCurrentThread(referencedName, staged) || !staged)
+            throw std::runtime_error(ReferenceDetail(requester, referencedName, referenceIndex, site));
+        return staged;
+    }
+    const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
+    if (!active) return physicalProvider;
+    bool closureRequester = active->byAssembly.count(requester) || active->shadowToBaseline.count(requester);
+    const Il2CppAssembly* provider = active->byName.Find(referencedName);
+    if (provider)
+    {
+        if (!requester || (!Interpreter(requester) && !closureRequester))
+        {
+            FailReference(requester, referencedName, referenceIndex, site);
+            return nullptr;
+        }
+        return provider;
+    }
+    if (closureRequester)
+    {
+        const CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
+        Candidate* unchanged = registry->byName.Find(referencedName);
+        const Il2CppAssembly* approved = unchanged ? unchanged->baseline : registry->stableByName.Find(referencedName);
+        if (!approved || (physicalProvider && physicalProvider != approved))
+        {
+            FailReference(requester, referencedName, referenceIndex, site);
+            return nullptr;
+        }
+        return approved;
+    }
+    return physicalProvider;
 }
 
 const Il2CppAssembly* AssemblyShadow::ResolveAssembly(const Il2CppAssembly* assembly)

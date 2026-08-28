@@ -108,6 +108,12 @@ namespace vm
         static Il2CppUnresolvedCallStubs GetUnresovledCallStubs(const MethodInfo* method);
 
         static const Il2CppAssembly* GetAssemblyByName(const char* nameToFind);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        static const Il2CppAssembly* GetAssemblyByNameOriginal(const char* name);
+        static const Il2CppAssembly* GetAssemblyByNamePhysicalAot(const char* name);
+        static const Il2CppAssembly* GetAssemblyByNamePhysicalInterpreter(const char* name);
+        static const Il2CppAssembly* GetReferencedAssemblyPhysical(const Il2CppAssembly* assembly, int32_t index);
+#endif
 
         static Il2CppClass* GetTypeInfoFromType(const Il2CppType* type);
 

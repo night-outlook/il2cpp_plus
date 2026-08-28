@@ -14,6 +14,10 @@ struct Il2CppObject;
 
 namespace il2cpp { namespace vm {
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
+#endif
+
 class AssemblyShadow
 {
 public:
@@ -42,8 +46,13 @@ public:
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
+    static AssemblyResolveContext CurrentResolveContext();
+    static const Il2CppAssembly* ResolveByName(const char* name, AssemblyResolveContext context);
     static const Il2CppAssembly* ResolveName(const char* name, const char* site);
     static const Il2CppAssembly* ResolveAssembly(const Il2CppAssembly* assembly);
+    static const Il2CppAssembly* ResolveReferencedAssembly(const Il2CppAssembly* requester,
+        const Il2CppAssembly* physicalProvider, const char* referencedName,
+        int32_t referenceIndex = -1, const char* site = "AssemblyRef");
     static const Il2CppImage* ResolveImage(const Il2CppImage* image);
     static bool IsShadowedBaseline(const Il2CppAssembly* assembly);
     static bool IsActiveShadow(const Il2CppAssembly* assembly);
