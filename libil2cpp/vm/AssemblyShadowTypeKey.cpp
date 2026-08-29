@@ -4,6 +4,8 @@
 #include "AssemblyShadowName.h"
 #include "vm/Class.h"
 #include "vm/MetadataCache.h"
+#include "vm/GlobalMetadata.h"
+#include "vm/GlobalMetadataFileInternals.h"
 #include "vm/Method.h"
 #include "utils/StringUtils.h"
 #include <algorithm>
@@ -34,7 +36,39 @@ std::string CanonicalAssembly(const char* input)
     return utils::StringUtils::Utf16ToUtf8(folded);
 }
 
-std::string FormatType(const Il2CppType* type, uint32_t depth, const MethodInfo* localMethod = nullptr)
+ShadowTypeKey MetadataDefinitionKey(Il2CppMetadataTypeHandle handle, const AssemblyShadowTypeKey::MetadataTypeImages& images)
+{
+    auto owner = images.find(handle);
+    if (owner == images.end() || !owner->second || !owner->second->assembly)
+        throw ShadowTypeResolutionFailure(AssemblyShadowError::ReferenceResolutionFailed, "ShadowUnobservedMetadataTypeOwner");
+    ShadowTypeKey key;
+    key.assemblyName = CanonicalAssembly(owner->second->assembly->aname.name);
+    // These are physical metadata indices, read with their original meaning.
+    // No class conversion, semantic resolution, or cache population occurs.
+    for (uint32_t depth = 0; handle; ++depth)
+    {
+        if (depth == kMaximumTypeDepth)
+            throw ShadowTypeResolutionFailure(AssemblyShadowError::ReferenceResolutionFailed, "ShadowInvalidMetadataDeclarationChain");
+        auto declarationOwner = images.find(handle);
+        if (declarationOwner == images.end() || declarationOwner->second != owner->second)
+            throw ShadowTypeResolutionFailure(AssemblyShadowError::ReferenceResolutionFailed, "ShadowInvalidMetadataDeclarationOwner");
+        const Il2CppTypeDefinition* definition = reinterpret_cast<const Il2CppTypeDefinition*>(handle);
+        auto name = GlobalMetadata::GetTypeNamespaceAndName(handle);
+        auto container = GlobalMetadata::GetGenericContainerFromIndex(definition->genericContainerIndex);
+        key.declarations.push_back({name.first ? name.first : "", name.second ? name.second : "",
+            GlobalMetadata::GetGenericContainerCount(container)});
+        if (definition->declaringTypeIndex == kTypeIndexInvalid) break;
+        const Il2CppType* declaring = GlobalMetadata::GetIl2CppTypeFromIndex(definition->declaringTypeIndex);
+        if (!declaring || (declaring->type != IL2CPP_TYPE_CLASS && declaring->type != IL2CPP_TYPE_VALUETYPE))
+            throw ShadowTypeResolutionFailure(AssemblyShadowError::ReferenceResolutionFailed, "ShadowUnsupportedMetadataDeclaringType");
+        handle = declaring->data.typeHandle;
+    }
+    std::reverse(key.declarations.begin(), key.declarations.end());
+    return key;
+}
+
+std::string FormatType(const Il2CppType* type, uint32_t depth, const MethodInfo* localMethod = nullptr,
+    const AssemblyShadowTypeKey::MetadataTypeImages* images = nullptr)
 {
     if (!type || depth > kMaximumTypeDepth)
         throw ShadowTypeResolutionFailure(AssemblyShadowError::ReferenceResolutionFailed, "ShadowUnsupportedTypeShape NullOrRecursiveType");
@@ -43,29 +77,30 @@ std::string FormatType(const Il2CppType* type, uint32_t depth, const MethodInfo*
     {
         case IL2CPP_TYPE_CLASS:
         case IL2CPP_TYPE_VALUETYPE:
-            value = AssemblyShadowTypeKey::Make(AssemblyShadowTypeKey::RawDefinition(type)).ToString();
+            value = images ? MetadataDefinitionKey(type->data.typeHandle, *images).ToString() :
+                AssemblyShadowTypeKey::Make(AssemblyShadowTypeKey::RawDefinition(type)).ToString();
             break;
         case IL2CPP_TYPE_GENERICINST:
         {
             const Il2CppGenericClass* generic = type->data.generic_class;
             if (!generic || !generic->context.class_inst || generic->context.method_inst)
                 throw ShadowTypeResolutionFailure(AssemblyShadowError::ReferenceResolutionFailed, "ShadowUnsupportedTypeShape GenericContext");
-            value = "generic(" + FormatType(generic->type, depth + 1, localMethod);
+            value = "generic(" + FormatType(generic->type, depth + 1, localMethod, images);
             for (uint32_t index = 0; index < generic->context.class_inst->type_argc; ++index)
-                value += "," + Part(FormatType(generic->context.class_inst->type_argv[index], depth + 1, localMethod));
+                value += "," + Part(FormatType(generic->context.class_inst->type_argv[index], depth + 1, localMethod, images));
             value += ")";
             break;
         }
         case IL2CPP_TYPE_SZARRAY:
         case IL2CPP_TYPE_PTR:
-            value = std::string(type->type == IL2CPP_TYPE_PTR ? "ptr(" : "szarray(") + FormatType(type->data.type, depth + 1, localMethod) + ")";
+            value = std::string(type->type == IL2CPP_TYPE_PTR ? "ptr(" : "szarray(") + FormatType(type->data.type, depth + 1, localMethod, images) + ")";
             break;
         case IL2CPP_TYPE_ARRAY:
         {
             const Il2CppArrayType* array = type->data.array;
             if (!array || !array->rank || (array->numsizes && !array->sizes) || (array->numlobounds && !array->lobounds))
                 throw ShadowTypeResolutionFailure(AssemblyShadowError::ReferenceResolutionFailed, "ShadowUnsupportedTypeShape Array");
-            value = "array(" + std::to_string(array->rank) + "," + Part(FormatType(array->etype, depth + 1, localMethod)) + ",sizes=";
+            value = "array(" + std::to_string(array->rank) + "," + Part(FormatType(array->etype, depth + 1, localMethod, images)) + ",sizes=";
             for (uint32_t index = 0; index < array->numsizes; ++index) value += std::to_string(array->sizes[index]) + ",";
             value += "bounds=";
             for (uint32_t index = 0; index < array->numlobounds; ++index) value += std::to_string(array->lobounds[index]) + ",";
@@ -75,6 +110,8 @@ std::string FormatType(const Il2CppType* type, uint32_t depth, const MethodInfo*
         case IL2CPP_TYPE_VAR:
         case IL2CPP_TYPE_MVAR:
         {
+            if (images)
+                throw ShadowTypeResolutionFailure(AssemblyShadowError::ReferenceResolutionFailed, "ShadowOpenExecutionClassTypeKeyUnsupported");
             if (!type->data.genericParameterHandle)
                 throw ShadowTypeResolutionFailure(AssemblyShadowError::ReferenceResolutionFailed, "ShadowUnsupportedTypeShape GenericParameter");
             Il2CppGenericParameterInfo parameter = MetadataCache::GetGenericParameterInfo(type->data.genericParameterHandle);
@@ -182,6 +219,11 @@ std::string AssemblyShadowTypeKey::Format(const Il2CppType* type)
 {
     AssemblyShadowTypeMetadataScope scope;
     return FormatType(type, 0);
+}
+
+std::string AssemblyShadowTypeKey::FormatMetadataOnly(const Il2CppType* type, const MetadataTypeImages& images)
+{
+    return FormatType(type, 0, nullptr, &images);
 }
 }}
 #endif

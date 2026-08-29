@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace il2cpp { namespace vm {
 
@@ -45,10 +46,14 @@ public:
 class AssemblyShadowTypeKey
 {
 public:
+    typedef std::unordered_map<Il2CppMetadataTypeHandle, const Il2CppImage*> MetadataTypeImages;
     static ShadowTypeKey Make(const Il2CppClass* definition);
     static uint32_t GenericArity(const Il2CppClass* definition);
     static Il2CppClass* RawDefinition(const Il2CppType* type);
     static std::string Format(const Il2CppType* type);
+    // Diagnostic-only raw metadata path: never creates/initializes a class.
+    // The caller supplies a physical image inventory, not a logical name map.
+    static std::string FormatMetadataOnly(const Il2CppType* type, const MetadataTypeImages& images);
 };
 
 }}

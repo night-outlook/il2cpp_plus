@@ -11,6 +11,8 @@
 #include "vm/Exception.h"
 #include "vm/Image.h"
 #include "vm/MetadataCache.h"
+#include "vm/MetadataLock.h"
+#include "os/Atomic.h"
 #include "hybridclr/metadata/Assembly.h"
 #include "hybridclr/metadata/AssemblyShadowBridge.h"
 #include "hybridclr/metadata/MetadataUtil.h"
@@ -23,6 +25,10 @@
 #include <thread>
 #include <unordered_map>
 #include <stdexcept>
+#include <array>
+#include <sstream>
+#include <iomanip>
+#include <cstdio>
 
 namespace il2cpp { namespace vm {
 namespace {
@@ -54,6 +60,10 @@ namespace {
         std::vector<std::unique_ptr<Candidate>> entries;
         NameIndex<Candidate*> byName;
         std::unordered_map<const Il2CppAssembly*, Candidate*> byAssembly;
+        // Raw definition handles only; Configure never materializes classes.
+        // Captured generic arguments cannot be identified by an AOT method's
+        // declaring assembly, nor may their handles be logically remapped.
+        std::unordered_map<Il2CppMetadataTypeHandle, Candidate*> byTypeHandle;
         NameIndex<const Il2CppAssembly*> stableByName;
         std::vector<std::string> stableNames;
         std::vector<const Il2CppAssembly*> netstandardProviders;
@@ -103,6 +113,60 @@ namespace {
     std::atomic<const TypeFailure*> s_typeFailure{nullptr};
     std::atomic_flag s_usageLock = ATOMIC_FLAG_INIT;
     uint64_t s_usageGeneration = 0;
+    std::atomic<uint64_t> s_methodChecks{0};
+    std::atomic<uint64_t> s_shadowMethodChecks{0};
+    std::atomic<uint64_t> s_rejectedBaselineMethods{0};
+    std::atomic<uint64_t> s_baselineClassCctorStarted{0};
+    std::atomic<uint64_t> s_shadowClassCctorStarted{0};
+    std::atomic<uint64_t> s_interpreterTransformations{0};
+    std::atomic<uint64_t> s_shadowInterpreterTransformations{0};
+    std::atomic<uint64_t> s_droppedClassObservations{0};
+    // Process-lifetime physical identities only. Never allocate on an execution
+    // observation or acquire metadata/transaction locks from this short lock.
+    const size_t kMaximumExecutionClasses = 1024;
+    std::array<Il2CppClass*, kMaximumExecutionClasses * 2> s_executionClasses{};
+    size_t s_executionClassCount = 0;
+    std::atomic_flag s_executionObservationLock = ATOMIC_FLAG_INIT;
+
+    struct ExecutionObservationLock
+    {
+        ExecutionObservationLock()
+        {
+            while (s_executionObservationLock.test_and_set(std::memory_order_acquire)) std::this_thread::yield();
+        }
+        ~ExecutionObservationLock() { s_executionObservationLock.clear(std::memory_order_release); }
+    };
+
+    const Il2CppAssembly* PhysicalMethodAssembly(const MethodInfo* method)
+    {
+        return method && method->klass && method->klass->image ? method->klass->image->assembly : nullptr;
+    }
+
+    void ObserveExecutionClass(Il2CppClass* klass)
+    {
+        if (!klass || !klass->image || !klass->image->assembly) return;
+        const CandidateRegistry* candidates = s_candidates.load(std::memory_order_acquire);
+        if (!candidates) return; // Startup execution policy is a separate proof.
+        const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
+        if (!candidates->byAssembly.count(klass->image->assembly) &&
+            !(active && active->shadowToBaseline.count(klass->image->assembly))) return;
+        ExecutionObservationLock lock;
+        size_t slot = (reinterpret_cast<uintptr_t>(klass) >> 3) % s_executionClasses.size();
+        for (size_t probe = 0; probe < s_executionClasses.size(); ++probe)
+        {
+            Il2CppClass*& entry = s_executionClasses[slot];
+            if (entry == klass) return;
+            if (!entry)
+            {
+                if (s_executionClassCount == kMaximumExecutionClasses) break;
+                entry = klass;
+                ++s_executionClassCount;
+                return;
+            }
+            slot = (slot + 1) % s_executionClasses.size();
+        }
+        s_droppedClassObservations.fetch_add(1, std::memory_order_relaxed);
+    }
 
     void RecordFirstGuardFailure(AssemblyShadowError error, const std::string& detail)
     {
@@ -129,6 +193,132 @@ namespace {
     {
         UsageLock() { LockUsage(); }
         ~UsageLock() { UnlockUsage(); }
+    };
+
+    void CopyDetail(char* destination, size_t capacity, const char* source);
+
+    struct CapturedArgumentFailure
+    {
+        AssemblyShadowError error = AssemblyShadowError::Success;
+        Candidate* candidate = nullptr;
+        const char* context = "";
+        const char* reason = "";
+        char path[512] = {};
+    };
+
+    // Runs only over already-existing, runtime-owned metadata, under UsageLock.
+    // No Class::FromIl2CppType, inflation, managed exception, or cache lock is
+    // permitted here: the boolean guard is also used at reverse callbacks.
+    struct CapturedArgumentVisitor
+    {
+        const CandidateRegistry* candidates;
+        const ActiveSnapshot* active;
+        const char* site;
+        CapturedArgumentFailure& failure;
+        size_t remaining = 1024;
+        char path[512] = {};
+
+        CapturedArgumentVisitor(const CandidateRegistry* registry, const ActiveSnapshot* snapshot,
+            const char* useSite, CapturedArgumentFailure& result)
+            : candidates(registry), active(snapshot), site(useSite), failure(result) {}
+
+        bool Fail(const char* reason, Candidate* candidate = nullptr)
+        {
+            failure.error = candidate ? AssemblyShadowError::BaselineAlreadyUsed : AssemblyShadowError::InvalidArgument;
+            failure.candidate = candidate;
+            failure.reason = reason;
+            CopyDetail(failure.path, sizeof(failure.path), path);
+            return false;
+        }
+
+        bool Child(const Il2CppType* type, const char* edge, uint32_t index, size_t depth)
+        {
+            size_t length = std::strlen(path);
+            int added = std::snprintf(path + length, sizeof(path) - length, "/%s[%u]", edge, index);
+            if (added < 0 || static_cast<size_t>(added) >= sizeof(path) - length) return Fail("PathLimit");
+            bool valid = Type(type, depth);
+            path[length] = 0;
+            return valid;
+        }
+
+        bool Instance(const Il2CppGenericInst* instance, size_t depth)
+        {
+            if (!instance || !instance->type_argc || !instance->type_argv) return Fail("EmptyGenericInstance");
+            if (instance->type_argc > remaining) return Fail("ArgumentLimit");
+            for (uint32_t index = 0; index < instance->type_argc; ++index)
+                if (!Child(instance->type_argv[index], "arg", index, depth)) return false;
+            return true;
+        }
+
+        bool Type(const Il2CppType* type, size_t depth)
+        {
+            if (!type) return Fail("NullType");
+            if (depth > 64 || !remaining) return Fail("TraversalLimit");
+            --remaining;
+            switch (type->type)
+            {
+                case IL2CPP_TYPE_CLASS:
+                case IL2CPP_TYPE_VALUETYPE:
+                {
+                    if (!type->data.typeHandle) return Fail("NullDefinition");
+                    if (!candidates) return true;
+                    auto found = candidates->byTypeHandle.find(type->data.typeHandle);
+                    if (found == candidates->byTypeHandle.end()) return true;
+                    Candidate* candidate = found->second;
+                    UseRecord& use = candidate->firstUse;
+                    if (!use.present)
+                    {
+                        use.present = true;
+                        use.kind = BaselineUseKind::MethodExecution;
+                        std::snprintf(use.detail, sizeof(use.detail), "%s Context=%s Path=%s",
+                            site ? site : "", failure.context, path);
+                        // No class exists necessarily for a captured argument.
+                        use.thread = static_cast<uint64_t>(std::hash<std::thread::id>()(std::this_thread::get_id()));
+                        use.timestamp = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+                        use.sequence = ++s_usageGeneration;
+                    }
+                    return active && active->byAssembly.count(candidate->baseline) ? Fail("CapturedBaselineType", candidate) : true;
+                }
+                case IL2CPP_TYPE_GENERICINST:
+                {
+                    const Il2CppGenericClass* generic = type->data.generic_class;
+                    if (!generic || !generic->type || generic->context.method_inst) return Fail("MalformedGenericClass");
+                    if (generic->type->type != IL2CPP_TYPE_CLASS && generic->type->type != IL2CPP_TYPE_VALUETYPE)
+                        return Fail("MalformedGenericDefinition");
+                    return Child(generic->type, "definition", 0, depth + 1) && Instance(generic->context.class_inst, depth + 1);
+                }
+                case IL2CPP_TYPE_SZARRAY:
+                case IL2CPP_TYPE_PTR:
+                    return Child(type->data.type, "element", 0, depth + 1);
+                case IL2CPP_TYPE_ARRAY:
+                    if (!type->data.array || !type->data.array->rank ||
+                        type->data.array->numsizes > type->data.array->rank ||
+                        type->data.array->numlobounds > type->data.array->rank ||
+                        (type->data.array->numsizes && !type->data.array->sizes) ||
+                        (type->data.array->numlobounds && !type->data.array->lobounds)) return Fail("MalformedArray");
+                    return Child(type->data.array->etype, "element", 0, depth + 1);
+                case IL2CPP_TYPE_VAR:
+                case IL2CPP_TYPE_MVAR:
+                    return Fail("OpenGenericArgument");
+                case IL2CPP_TYPE_BOOLEAN: case IL2CPP_TYPE_CHAR:
+                case IL2CPP_TYPE_I1: case IL2CPP_TYPE_U1: case IL2CPP_TYPE_I2: case IL2CPP_TYPE_U2:
+                case IL2CPP_TYPE_I4: case IL2CPP_TYPE_U4: case IL2CPP_TYPE_I8: case IL2CPP_TYPE_U8:
+                case IL2CPP_TYPE_R4: case IL2CPP_TYPE_R8: case IL2CPP_TYPE_I: case IL2CPP_TYPE_U:
+                case IL2CPP_TYPE_OBJECT: case IL2CPP_TYPE_STRING:
+                    return true;
+                default:
+                    return Fail("UnsupportedCapturedType");
+            }
+        }
+
+        bool Context(const Il2CppGenericContext& context, const char* classLabel, const char* methodLabel)
+        {
+            failure.context = classLabel;
+            if (context.class_inst && !Instance(context.class_inst, 0)) return false;
+            failure.context = methodLabel;
+            return !context.method_inst || Instance(context.method_inst, 0);
+        }
     };
 
     bool Interpreter(const Il2CppAssembly* assembly)
@@ -372,6 +562,12 @@ AssemblyShadowError AssemblyShadow::ConfigureCandidates(const char* baselineBuil
         candidate->baseline = baseline;
         registry->byName.Add(candidate->name, candidate.get());
         registry->byAssembly.emplace(baseline, candidate.get());
+        for (uint32_t index = 0; index < baseline->image->typeCount; ++index)
+        {
+            Il2CppMetadataTypeHandle handle = MetadataCache::GetAssemblyTypeHandle(baseline->image, index);
+            if (!handle || !registry->byTypeHandle.emplace(handle, candidate.get()).second)
+                return Result(transaction, AssemblyShadowError::InternalError, "Candidate physical type identity is missing or duplicated.");
+        }
         registry->entries.push_back(std::move(candidate));
     }
     registry->stableByName.Reserve(stableAotNames.size());
@@ -802,6 +998,92 @@ const Il2CppAssembly* AssemblyShadow::ResolveReferencedAssembly(const Il2CppAsse
     return physicalProvider;
 }
 
+AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& json)
+{
+    json.clear();
+    std::array<Il2CppClass*, kMaximumExecutionClasses> classes{};
+    size_t count = 0;
+    {
+        ExecutionObservationLock lock;
+        for (Il2CppClass* klass : s_executionClasses)
+            if (klass) classes[count++] = klass;
+    }
+    // No observation lock remains held while reading physical metadata. The
+    // inventory creates neither classes nor generic instances, including AOT.
+    AssemblyVector assemblies;
+    Assembly::CaptureShadowEnumeration(assemblies);
+    AssemblyShadowTypeKey::MetadataTypeImages images;
+    for (const Il2CppAssembly* assembly : assemblies)
+        for (uint32_t index = 0; index < assembly->image->typeCount; ++index)
+            images.emplace(MetadataCache::GetAssemblyTypeHandle(assembly->image, index), assembly->image);
+
+    const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
+    const AssemblyShadowState state = s_state.load(std::memory_order_acquire);
+    // Subset increments release-publish their preceding total increments. Read
+    // them with acquire before totals: no impossible subset > total snapshot.
+    const uint64_t shadowChecks = s_shadowMethodChecks.load(std::memory_order_acquire);
+    const uint64_t rejectedChecks = s_rejectedBaselineMethods.load(std::memory_order_acquire);
+    const uint64_t methodChecks = s_methodChecks.load(std::memory_order_relaxed);
+    const uint64_t shadowTransforms = s_shadowInterpreterTransformations.load(std::memory_order_acquire);
+    const uint64_t transforms = s_interpreterTransformations.load(std::memory_order_relaxed);
+    std::ostringstream output;
+    output << std::boolalpha << "{\"schemaVersion\":1,\"enabled\":true,\"stateCode\":" << static_cast<int>(state)
+        << ",\"state\":" << AssemblyShadowDiagnostics::Quote(AssemblyShadowDiagnostics::StateName(state))
+        << ",\"generation\":" << (active ? active->generation : 0)
+        << ",\"methodChecks\":" << methodChecks << ",\"shadowMethodChecks\":" << shadowChecks
+        << ",\"rejectedBaselineMethods\":" << rejectedChecks
+        << ",\"baselineClassCctorStarted\":" << s_baselineClassCctorStarted.load(std::memory_order_relaxed)
+        << ",\"shadowClassCctorStarted\":" << s_shadowClassCctorStarted.load(std::memory_order_relaxed)
+        << ",\"interpreterTransformations\":" << transforms
+        << ",\"shadowInterpreterTransformations\":" << shadowTransforms
+        << ",\"droppedClassObservations\":" << s_droppedClassObservations.load(std::memory_order_relaxed)
+        << ",\"classes\":[";
+    for (size_t index = 0; index < count; ++index)
+    {
+        Il2CppClass* klass = classes[index];
+        const Il2CppAssembly* owner = klass->image->assembly;
+        const bool baseline = active && active->byAssembly.count(owner);
+        const bool shadow = active && active->shadowToBaseline.count(owner);
+        std::string typeKey;
+        try { typeKey = AssemblyShadowTypeKey::FormatMetadataOnly(&klass->byval_arg, images); }
+        catch (const ShadowTypeResolutionFailure& failure) { return failure.error; }
+        void* storage;
+        {
+            il2cpp::os::FastAutoLock metadataLock(&g_MetadataLock);
+            storage = klass->static_fields; // Only already-existing storage.
+        }
+        const bool started = os::Atomic::LoadRelaxed(reinterpret_cast<const int32_t*>(&klass->cctor_started)) != 0;
+        const bool finished = os::Atomic::LoadRelaxed(reinterpret_cast<const int32_t*>(&klass->cctor_finished_or_no_cctor)) != 0;
+        const bool exception = os::Atomic::LoadRelaxed(reinterpret_cast<const int32_t*>(&klass->initializationExceptionGCHandle)) != 0;
+        std::string pointer;
+#if IL2CPP_DEBUG
+        const bool details = true;
+        if (storage)
+        {
+            std::ostringstream address;
+            address << "0x" << std::hex << reinterpret_cast<uintptr_t>(storage);
+            pointer = address.str();
+        }
+#else
+        const bool details = false;
+#endif
+        if (index) output << ',';
+        output << "{\"logicalAssembly\":" << AssemblyShadowDiagnostics::Quote(owner->aname.name)
+            << ",\"typeKey\":" << AssemblyShadowDiagnostics::Quote(typeKey)
+            << ",\"executionModeCode\":" << (baseline || shadow ? 1 : 0)
+            << ",\"executionMode\":" << AssemblyShadowDiagnostics::Quote(baseline || shadow ? "InterpreterShadow" : "AotBaseline")
+            << ",\"physicalImageKind\":" << AssemblyShadowDiagnostics::Quote(Interpreter(owner) ? "Interpreter" : "Aot")
+            << ",\"isActive\":" << !baseline
+            << ",\"cctorStarted\":" << started << ",\"cctorFinished\":" << finished
+            << ",\"hasInitializationException\":" << exception
+            << ",\"staticStoragePointer\":" << AssemblyShadowDiagnostics::Quote(pointer)
+            << ",\"pointerDetailsAvailable\":" << details << ",\"staticStorageAvailable\":" << (storage != nullptr) << '}';
+    }
+    output << "]}";
+    json = output.str();
+    return AssemblyShadowError::Success;
+}
+
 const Il2CppAssembly* AssemblyShadow::ResolveAssembly(const Il2CppAssembly* assembly)
 {
     const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
@@ -900,6 +1182,146 @@ void AssemblyShadow::RecordBaselineUse(const Il2CppAssembly* assembly, BaselineU
         FailTypeResolution(AssemblyShadowError::BaselineAlreadyUsed, std::string("ShadowBaselineUse Assembly=") + assembly->aname.name +
             " Type=" + (klass ? AssemblyShadowTypeKey::Format(&klass->byval_arg) : "<assembly>") +
             " Kind=" + AssemblyShadowDiagnostics::UseKindName(kind) + " Site=" + (detail ? detail : ""));
+}
+
+bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* site) noexcept
+{
+    s_methodChecks.fetch_add(1, std::memory_order_relaxed);
+    const MethodInfo* definition = method && method->is_inflated && method->genericMethod ?
+        method->genericMethod->methodDefinition : method;
+    const Il2CppAssembly* owners[2] = {PhysicalMethodAssembly(method), PhysicalMethodAssembly(definition)};
+    AssemblyShadowError error = AssemblyShadowError::Success;
+    const MethodInfo* rejected = nullptr;
+    CapturedArgumentFailure argumentFailure;
+    if (!owners[0] || !owners[1] || (method->is_inflated && (!method->genericMethod || definition == method || definition->is_inflated)))
+        error = AssemblyShadowError::InvalidArgument;
+    else
+    {
+        ObserveExecutionClass(method->klass);
+        const CandidateRegistry* candidates = s_candidates.load(std::memory_order_acquire);
+        Candidate* uses[2] = {};
+        if (candidates)
+        {
+            for (size_t index = 0; index < 2; ++index)
+            {
+                auto found = candidates->byAssembly.find(owners[index]);
+                if (found != candidates->byAssembly.end()) uses[index] = found->second;
+            }
+        }
+        // Publication uses this same short lock. Either the use prevents the
+        // publish, or the published exact baseline identity is rejected here.
+        if (uses[0] || uses[1])
+        {
+            UsageLock lock;
+            const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
+            for (size_t index = 0; index < 2; ++index)
+            {
+                if (active && active->byAssembly.count(owners[index]))
+                    rejected = index == 0 ? method : definition;
+                if (!uses[index] || uses[index]->firstUse.present) continue;
+                UseRecord& use = uses[index]->firstUse;
+                use.present = true;
+                use.kind = BaselineUseKind::MethodExecution;
+                CopyDetail(use.detail, sizeof(use.detail), site);
+                use.klass = index == 0 ? method->klass : definition->klass;
+                use.thread = static_cast<uint64_t>(std::hash<std::thread::id>()(std::this_thread::get_id()));
+                use.timestamp = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+                use.sequence = ++s_usageGeneration;
+            }
+        }
+        const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
+        if (active && active->byAssembly.count(owners[0])) rejected = method;
+        else if (active && active->byAssembly.count(owners[1])) rejected = definition;
+        if (active && (active->shadowToBaseline.count(owners[0]) || active->shadowToBaseline.count(owners[1])))
+            s_shadowMethodChecks.fetch_add(1, std::memory_order_release);
+        if (rejected)
+        {
+            error = AssemblyShadowError::BaselineMethodExecution;
+            s_rejectedBaselineMethods.fetch_add(1, std::memory_order_release);
+        }
+        else if (method->is_inflated || method->klass->generic_class)
+        {
+            UsageLock lock;
+            CapturedArgumentVisitor visitor(candidates, s_active.load(std::memory_order_acquire), site, argumentFailure);
+            bool valid = !method->is_inflated || visitor.Context(method->genericMethod->context, "class_inst", "method_inst");
+            if (valid && method->klass->generic_class)
+            {
+                if (!method->klass->generic_class->context.class_inst)
+                    valid = visitor.Fail("EmptyDeclaringClassInstance");
+                else if (method->klass->generic_class->context.method_inst)
+                    valid = visitor.Fail("MalformedDeclaringClassContext");
+                else valid = visitor.Context(method->klass->generic_class->context, "declaring_class_inst", "declaring_method_inst");
+            }
+            if (!valid)
+            {
+                error = argumentFailure.error;
+                if (error == AssemblyShadowError::BaselineAlreadyUsed)
+                    s_lateBaselineUse.store(true, std::memory_order_release);
+            }
+        }
+    }
+    if (error == AssemblyShadowError::Success) return true;
+
+    // No managed exception or metadata query is allowed in this boolean hook.
+    // Failure strings allocate only on rejection, outside usage/observation locks.
+    try
+    {
+        const MethodInfo* detailMethod = rejected ? rejected : method;
+        const Il2CppAssembly* owner = PhysicalMethodAssembly(detailMethod);
+        std::string detail = std::string(error == AssemblyShadowError::BaselineMethodExecution ?
+            "ShadowBaselineMethodExecution" : error == AssemblyShadowError::BaselineAlreadyUsed ?
+            "ShadowCapturedBaselineType" : "ShadowInvalidMethod") + " Assembly=" +
+            (owner && owner->aname.name ? owner->aname.name : "<null>") + " Type=" +
+            (detailMethod && detailMethod->klass && detailMethod->klass->namespaze ? detailMethod->klass->namespaze : "") + "." +
+            (detailMethod && detailMethod->klass && detailMethod->klass->name ? detailMethod->klass->name : "<null>") +
+            " Method=" + (detailMethod && detailMethod->name ? detailMethod->name : "<null>") +
+            " Site=" + (site ? site : "");
+        if (argumentFailure.error != AssemblyShadowError::Success)
+            detail += std::string(" CapturedArgumentAssembly=") +
+                (argumentFailure.candidate ? argumentFailure.candidate->name : "<none>") +
+                " Context=" + argumentFailure.context + " TypePath=" + argumentFailure.path + " Reason=" + argumentFailure.reason;
+        RecordFirstGuardFailure(error, detail);
+    }
+    catch (...)
+    {
+        // Even allocation failure cannot permit the caller to execute.
+        s_unexpectedFailure.store(true, std::memory_order_release);
+    }
+    s_state.store(s_active.load(std::memory_order_acquire) ? AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
+        std::memory_order_release);
+    return false;
+}
+
+void AssemblyShadow::RequireActiveMethod(const MethodInfo* method, const char* site)
+{
+    if (!AssertMethodIsActive(method, site))
+    {
+        const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
+        FailTypeResolution(failure ? failure->error : AssemblyShadowError::InternalError,
+            failure ? failure->detail : "Assembly Shadow method execution rejected; diagnostic allocation failed.");
+        throw std::runtime_error("Assembly Shadow method execution rejected.");
+    }
+    RequireUserCodeAllowed();
+}
+
+void AssemblyShadow::ObserveClassCctorStarted(Il2CppClass* klass)
+{
+    ObserveExecutionClass(klass);
+    const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
+    if (!active || !klass || !klass->image) return;
+    const Il2CppAssembly* owner = klass->image->assembly;
+    if (active->byAssembly.count(owner)) s_baselineClassCctorStarted.fetch_add(1, std::memory_order_relaxed);
+    else if (active->shadowToBaseline.count(owner)) s_shadowClassCctorStarted.fetch_add(1, std::memory_order_relaxed);
+}
+
+void AssemblyShadow::ObserveInterpreterTransformation(const MethodInfo* method)
+{
+    s_interpreterTransformations.fetch_add(1, std::memory_order_relaxed);
+    const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
+    if (active && active->shadowToBaseline.count(PhysicalMethodAssembly(method)))
+        s_shadowInterpreterTransformations.fetch_add(1, std::memory_order_release);
+    if (method) ObserveExecutionClass(method->klass);
 }
 
 void AssemblyShadow::RequireUserCodeAllowed()
@@ -1048,6 +1470,11 @@ AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
     return AssemblyShadowError::FeatureDisabled;
 }
 AssemblyShadowError AssemblyShadow::GetTypeResolutionInfo(const Il2CppType*, std::string& json)
+{
+    json.clear();
+    return AssemblyShadowError::FeatureDisabled;
+}
+AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& json)
 {
     json.clear();
     return AssemblyShadowError::FeatureDisabled;

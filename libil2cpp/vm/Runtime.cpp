@@ -597,6 +597,7 @@ namespace vm
         try
         {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+            AssemblyShadow::RequireActiveMethod(method, "Runtime::Invoke");
             AssemblyShadow::RequireActiveClass(method->klass, BaselineUseKind::ClassInit, "Runtime::Invoke.owner");
             if (obj && !(method->flags & METHOD_ATTRIBUTE_STATIC) && !method->klass->byval_arg.valuetype)
                 AssemblyShadow::RequireActiveClass(static_cast<Il2CppObject*>(obj)->klass, BaselineUseKind::ClassInit, "Runtime::Invoke.actual");
@@ -616,6 +617,9 @@ namespace vm
 
     Il2CppObject* Runtime::InvokeWithThrow(const MethodInfo *method, void *obj, void **params)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadow::RequireActiveMethod(method, "Runtime::InvokeWithThrow");
+#endif
         hybridclr::InitAndGetInterpreterDirectlyCallMethodPointer(method);
         if (method->return_type->type == IL2CPP_TYPE_VOID)
         {
@@ -969,6 +973,9 @@ namespace vm
             const MethodInfo* cctor = Class::GetCCtor(klass);
             if (cctor != NULL)
             {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+                AssemblyShadow::ObserveClassCctorStarted(klass);
+#endif
                 vm::Runtime::Invoke(cctor, NULL, NULL, &exception);
             }
 

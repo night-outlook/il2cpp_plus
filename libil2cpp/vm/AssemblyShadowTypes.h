@@ -29,6 +29,7 @@ enum class AssemblyShadowError : int32_t
     AlreadyCommitted = 18,
     ModuleInitializerFailed = 19,
     InternalError = 20,
+    BaselineMethodExecution = 21,
 };
 
 enum class AssemblyShadowState : int32_t
@@ -61,6 +62,7 @@ enum class BaselineUseKind : int32_t
     VTable = 5,
     MonoScript = 6,
     ModuleReflection = 7,
+    MethodExecution = 8,
 };
 
 static const int32_t kAssemblyShadowRuntimeAbiVersion = 1;

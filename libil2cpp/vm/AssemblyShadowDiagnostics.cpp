@@ -34,6 +34,7 @@ const char* AssemblyShadowDiagnostics::UseKindName(BaselineUseKind kind)
         case BaselineUseKind::VTable: return "VTable";
         case BaselineUseKind::MonoScript: return "MonoScript";
         case BaselineUseKind::ModuleReflection: return "ModuleReflection";
+        case BaselineUseKind::MethodExecution: return "MethodExecution";
     }
     return "Unknown";
 }

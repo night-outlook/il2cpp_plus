@@ -12,6 +12,9 @@
 #include "vm-utils/Finally.h"
 
 #include "vm/ClassInlines.h"
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+#include "vm/AssemblyShadow.h"
+#endif
 #include "vm/ScopedThreadAttacher.h"
 #include "vm/Il2CppHStringReference.h"
 #include "vm/String.h"
@@ -389,13 +392,24 @@ inline uint16_t il2cpp_codegen_method_get_slot(const RuntimeMethod* method)
 IL2CPP_FORCE_INLINE const VirtualInvokeData& il2cpp_codegen_get_virtual_invoke_data(Il2CppMethodSlot slot, const RuntimeObject* obj)
 {
     Assert(slot != kInvalidIl2CppMethodSlot && "il2cpp_codegen_get_virtual_invoke_data got called on a non-virtual method");
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    il2cpp::vm::AssemblyShadow::RequireActiveMethod(obj->klass->vtable[slot].method, "codegen.virtual");
+    il2cpp::vm::AssemblyShadow::RequireActiveClass(obj->klass, il2cpp::vm::BaselineUseKind::VTable, "codegen.virtual.receiver");
+#endif
     return obj->klass->vtable[slot];
 }
 
 IL2CPP_FORCE_INLINE const VirtualInvokeData& il2cpp_codegen_get_interface_invoke_data(Il2CppMethodSlot slot, RuntimeObject* obj, const RuntimeClass* declaringInterface)
 {
     Assert(slot != kInvalidIl2CppMethodSlot && "il2cpp_codegen_get_interface_invoke_data got called on a non-virtual method");
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    const VirtualInvokeData& data = il2cpp::vm::ClassInlines::GetInterfaceInvokeDataFromVTable(obj, declaringInterface, slot);
+    il2cpp::vm::AssemblyShadow::RequireActiveMethod(data.method, "codegen.interface");
+    il2cpp::vm::AssemblyShadow::RequireActiveClass(obj->klass, il2cpp::vm::BaselineUseKind::VTable, "codegen.interface.receiver");
+    return data;
+#else
     return il2cpp::vm::ClassInlines::GetInterfaceInvokeDataFromVTable(obj, declaringInterface, slot);
+#endif
 }
 
 const RuntimeMethod* il2cpp_codegen_get_generic_virtual_method_internal(const RuntimeMethod* methodDefinition, const RuntimeMethod* inflatedMethod);
@@ -409,7 +423,14 @@ IL2CPP_FORCE_INLINE const RuntimeMethod* il2cpp_codegen_get_generic_virtual_meth
 
 IL2CPP_FORCE_INLINE void il2cpp_codegen_get_generic_virtual_invoke_data(const RuntimeMethod* method, const RuntimeObject* obj, VirtualInvokeData* invokeData)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    il2cpp::vm::AssemblyShadow::RequireActiveMethod(obj->klass->vtable[method->slot].method, "codegen.genericVirtual.definition");
+    il2cpp::vm::AssemblyShadow::RequireActiveClass(obj->klass, il2cpp::vm::BaselineUseKind::VTable, "codegen.genericVirtual.receiver");
+#endif
     invokeData->method = il2cpp_codegen_get_generic_virtual_method(method, obj);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    il2cpp::vm::AssemblyShadow::RequireActiveMethod(invokeData->method, "codegen.genericVirtual");
+#endif
     invokeData->methodPtr = invokeData->method->virtualMethodPointer;
     IL2CPP_ASSERT(invokeData->method);
 }
@@ -422,7 +443,16 @@ IL2CPP_FORCE_INLINE const RuntimeMethod* il2cpp_codegen_get_generic_interface_me
 
 IL2CPP_FORCE_INLINE void il2cpp_codegen_get_generic_interface_invoke_data(const RuntimeMethod* method, RuntimeObject* obj, VirtualInvokeData* invokeData)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    il2cpp::vm::AssemblyShadow::RequireActiveMethod(
+        il2cpp::vm::ClassInlines::GetInterfaceInvokeDataFromVTable(obj, method->klass, method->slot).method,
+        "codegen.genericInterface.definition");
+    il2cpp::vm::AssemblyShadow::RequireActiveClass(obj->klass, il2cpp::vm::BaselineUseKind::VTable, "codegen.genericInterface.receiver");
+#endif
     invokeData->method = il2cpp_codegen_get_generic_interface_method(method, obj);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    il2cpp::vm::AssemblyShadow::RequireActiveMethod(invokeData->method, "codegen.genericInterface");
+#endif
     invokeData->methodPtr = invokeData->method->virtualMethodPointer;
     IL2CPP_ASSERT(invokeData->method);
 }

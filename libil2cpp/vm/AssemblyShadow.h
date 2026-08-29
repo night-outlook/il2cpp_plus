@@ -12,6 +12,7 @@ struct Il2CppImage;
 struct Il2CppClass;
 struct Il2CppObject;
 struct Il2CppType;
+struct MethodInfo;
 
 namespace il2cpp { namespace vm {
 
@@ -41,6 +42,7 @@ public:
     static AssemblyShadowError GetAssemblyExecutionMode(const char* name, AssemblyExecutionMode& mode);
     static AssemblyShadowError GetDiagnosticsJson(std::string& json);
     static AssemblyShadowError GetTypeResolutionInfo(const Il2CppType* type, std::string& json);
+    static AssemblyShadowError GetExecutionDiagnosticsJson(std::string& json);
     // Icall exception boundary: seal a mutating operation that unwound through
     // an unexpected failure. This path does not allocate or acquire VM locks.
     static AssemblyShadowError ReportUnexpectedFailure();
@@ -76,6 +78,14 @@ public:
     static void RecordBaselineUse(const Il2CppAssembly* assembly, BaselineUseKind kind,
         const char* detail, const Il2CppClass* klass = nullptr);
     static void RequireUserCodeAllowed();
+    // Checks physical method/definition ownership, never remaps a MethodInfo.
+    // The boolean boundary records/seals failure without raising a managed exception.
+    static bool AssertMethodIsActive(const MethodInfo* method, const char* site) noexcept;
+    static void RequireActiveMethod(const MethodInfo* method, const char* site);
+    // Observation hooks never initialize classes or resolve metadata. Counters
+    // have process lifetime; class observations begin after ConfigureCandidates.
+    static void ObserveClassCctorStarted(Il2CppClass* klass);
+    static void ObserveInterpreterTransformation(const MethodInfo* method);
 
     // Temporary narrow Unity query-target mapping retained from the accepted
     // feasibility proof. General type/cast/cache resolution is M05-M07 work.
