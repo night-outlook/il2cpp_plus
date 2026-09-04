@@ -341,8 +341,15 @@ void CheckLayout(Il2CppClass* source, Il2CppClass* target, const char* site, uin
         if (!source->size_inited || !target->size_inited)
             Fail("ShadowLayoutUnavailable", key, AssemblyShadowError::ResourceAbiMismatch);
     }
+    // native_size describes marshaling layout, not managed heap allocation.
+    // IL2CPP gives delegate reference types a method-pointer native size while
+    // interpreter reference types deliberately use -1. Requiring those values
+    // to match rejects an otherwise identical delegate allocation. Preserve
+    // the native-size guard for value types, where it is part of the physical
+    // representation that can be copied or boxed.
+    const bool nativeSizeMismatch = source->byval_arg.valuetype && source->native_size != target->native_size;
     if ((!structural && (!source->instance_size || !target->instance_size || source->instance_size != target->instance_size ||
-        source->native_size != target->native_size)) || source->packingSize != target->packingSize ||
+        nativeSizeMismatch)) || source->packingSize != target->packingSize ||
         ((source->flags ^ target->flags) & TYPE_ATTRIBUTE_LAYOUT_MASK))
         Fail("ShadowLayoutMismatch", key + " BaselineSize=" + std::to_string(source->instance_size) +
             " ActiveSize=" + std::to_string(target->instance_size), AssemblyShadowError::ResourceAbiMismatch);

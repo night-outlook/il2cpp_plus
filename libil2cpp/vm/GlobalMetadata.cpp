@@ -36,6 +36,9 @@
 #include "utils/StringUtils.h"
 #include "utils/PathUtils.h"
 #include "vm/Assembly.h"
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+#include "vm/AssemblyShadowTypeKey.h"
+#endif
 #include "vm/Class.h"
 #include "vm/ClassInlines.h"
 #include "vm/GenericClass.h"
@@ -1640,6 +1643,15 @@ static const Il2CppImage* GetImageForTypeDefinitionIndex(TypeDefinitionIndex ind
 
 Il2CppClass* il2cpp::vm::GlobalMetadata::FromTypeDefinition(TypeDefinitionIndex index)
 {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    // Constructing an AOT class is a physical metadata operation. In
+    // particular, a cold nested class must retain its physical AOT declaring
+    // type after a logical shadow has been published. Allowing Class to apply
+    // normal logical redirection here creates a mixed-image declaration chain
+    // (AOT nested class -> interpreter declaring class), whose identity and
+    // layout can never be valid.
+    AssemblyShadowTypeMetadataScope physicalMetadataScope;
+#endif
     const Il2CppTypeDefinition* typeDefinition;
     const Il2CppTypeDefinitionSizes* typeDefinitionSizes;
     if (hybridclr::metadata::IsInterpreterIndex(index))
