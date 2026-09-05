@@ -354,9 +354,16 @@ Il2CppClass* Owner(const Il2CppType* type, uint32_t depth = 0)
     return AssemblyShadowTypeKey::RawDefinition(type);
 }
 
-std::vector<std::string> InstanceFields(const Il2CppClass* klass, bool structural)
+struct InstanceFieldLayout
 {
-    std::vector<std::string> fields;
+    std::string signature;
+    const Il2CppType* type;
+    uint32_t offset;
+};
+
+std::vector<InstanceFieldLayout> InstanceFieldLayouts(const Il2CppClass* klass)
+{
+    std::vector<InstanceFieldLayout> fields;
     for (uint32_t index = 0; index < klass->field_count; ++index)
     {
         Il2CppMetadataFieldInfo field = MetadataCache::GetFieldInfo(klass, index);
@@ -366,12 +373,73 @@ std::vector<std::string> InstanceFields(const Il2CppClass* klass, bool structura
         raw.name = field.name; raw.type = field.type; raw.parent = const_cast<Il2CppClass*>(klass);
         Il2CppType signature = *field.type;
         signature.attrs = 0; // Field visibility is not a storage/type qualifier.
-        std::string key = std::string(field.name) + ":" + AssemblyShadowTypeKey::Format(&signature);
-        if (!structural) key += "@" + std::to_string(GlobalMetadata::GetFieldOffset(klass, index, &raw));
-        fields.push_back(key);
+        fields.push_back({std::string(field.name) + ":" + AssemblyShadowTypeKey::Format(&signature), field.type,
+            GlobalMetadata::GetFieldOffset(klass, index, &raw)});
     }
+    return fields;
+}
+
+std::vector<std::string> StructuralInstanceFields(const Il2CppClass* klass)
+{
+    std::vector<std::string> fields;
+    for (const InstanceFieldLayout& field : InstanceFieldLayouts(klass)) fields.push_back(field.signature);
     std::sort(fields.begin(), fields.end());
     return fields;
+}
+
+std::vector<std::string> Interfaces(const Il2CppClass* klass)
+{
+    std::vector<std::string> interfaces;
+    for (uint16_t index = 0; index < klass->interfaces_count; ++index)
+    {
+        const Il2CppType* type = MetadataCache::GetInterfaceFromOffset(klass, index);
+        if (!type) Fail("ShadowInterfaceLayoutMismatch", AssemblyShadowTypeKey::Format(&klass->byval_arg));
+        interfaces.push_back(AssemblyShadowTypeKey::Format(type));
+    }
+    std::sort(interfaces.begin(), interfaces.end());
+    return interfaces;
+}
+
+uint32_t PrimitiveStorageSize(const Il2CppType* type)
+{
+    if (!type || type->byref || type->pinned) return 0;
+    switch (type->type)
+    {
+        case IL2CPP_TYPE_BOOLEAN: case IL2CPP_TYPE_I1: case IL2CPP_TYPE_U1: return 1;
+        case IL2CPP_TYPE_CHAR: case IL2CPP_TYPE_I2: case IL2CPP_TYPE_U2: return 2;
+        case IL2CPP_TYPE_I4: case IL2CPP_TYPE_U4: case IL2CPP_TYPE_R4: return 4;
+        case IL2CPP_TYPE_I8: case IL2CPP_TYPE_U8: case IL2CPP_TYPE_R8: return 8;
+        case IL2CPP_TYPE_I: case IL2CPP_TYPE_U: return static_cast<uint32_t>(sizeof(void*));
+        default: return 0;
+    }
+}
+
+bool CompatibleInstanceFields(const Il2CppClass* source, const Il2CppClass* target)
+{
+    const std::vector<InstanceFieldLayout> baseline = InstanceFieldLayouts(source);
+    const std::vector<InstanceFieldLayout> active = InstanceFieldLayouts(target);
+    if (active.size() < baseline.size()) return false;
+    for (size_t index = 0; index < baseline.size(); ++index)
+        if (baseline[index].signature != active[index].signature || baseline[index].offset != active[index].offset) return false;
+    if (active.size() == baseline.size()) return source->instance_size == target->instance_size;
+    // Existing objects are never admitted before Commit. A post-Commit Unity
+    // allocation may therefore use a larger active reference type, but only for
+    // strictly appended, private, explicitly nonserialized primitive storage.
+    // Value types can be embedded in already frozen owners and may never grow.
+    if (source->byval_arg.valuetype || !source->instance_size || target->instance_size < source->instance_size) return false;
+    uint32_t previousEnd = source->instance_size;
+    for (size_t index = baseline.size(); index < active.size(); ++index)
+    {
+        const InstanceFieldLayout& field = active[index];
+        const uint32_t size = PrimitiveStorageSize(field.type);
+        const uint16_t attributes = field.type ? field.type->attrs : 0;
+        if (!size || (attributes & FIELD_ATTRIBUTE_FIELD_ACCESS_MASK) != FIELD_ATTRIBUTE_PRIVATE ||
+            !(attributes & FIELD_ATTRIBUTE_NOT_SERIALIZED) || field.offset < previousEnd ||
+            field.offset > UINT32_MAX - size || field.offset + size > target->instance_size)
+            return false;
+        previousEnd = field.offset + size;
+    }
+    return true;
 }
 void CheckLayout(Il2CppClass* source, Il2CppClass* target, const char* site, uint32_t depth = 0, bool structural = false)
 {
@@ -395,13 +463,24 @@ void CheckLayout(Il2CppClass* source, Il2CppClass* target, const char* site, uin
     // the native-size guard for value types, where it is part of the physical
     // representation that can be copied or boxed.
     const bool nativeSizeMismatch = source->byval_arg.valuetype && source->native_size != target->native_size;
-    if ((!structural && (!source->instance_size || !target->instance_size || source->instance_size != target->instance_size ||
+    if ((!structural && (!source->instance_size || !target->instance_size || target->instance_size < source->instance_size ||
         nativeSizeMismatch)) || source->packingSize != target->packingSize ||
         ((source->flags ^ target->flags) & TYPE_ATTRIBUTE_LAYOUT_MASK))
         Fail("ShadowLayoutMismatch", key + " BaselineSize=" + std::to_string(source->instance_size) +
             " ActiveSize=" + std::to_string(target->instance_size), AssemblyShadowError::ResourceAbiMismatch);
-    if (source->typeMetadataHandle && target->typeMetadataHandle && InstanceFields(source, structural) != InstanceFields(target, structural))
-        Fail("ShadowFieldLayoutMismatch", key, AssemblyShadowError::ResourceAbiMismatch);
+    if (source->typeMetadataHandle && target->typeMetadataHandle)
+    {
+        if (!structural && source->instance_size != target->instance_size &&
+            InstanceFieldLayouts(source).size() == InstanceFieldLayouts(target).size())
+            Fail("ShadowLayoutMismatch", key + " SizeChangedWithoutAppendedStorage", AssemblyShadowError::ResourceAbiMismatch);
+        const bool fieldsMatch = structural ? StructuralInstanceFields(source) == StructuralInstanceFields(target) :
+            CompatibleInstanceFields(source, target);
+        if (!fieldsMatch) Fail("ShadowFieldLayoutMismatch", key, AssemblyShadowError::ResourceAbiMismatch);
+    }
+    else if (!structural && source->instance_size != target->instance_size)
+        Fail("ShadowLayoutMismatch", key + " MissingFieldMetadata", AssemblyShadowError::ResourceAbiMismatch);
+    if (Interfaces(source) != Interfaces(target))
+        Fail("ShadowInterfaceLayoutMismatch", key, AssemblyShadowError::ResourceAbiMismatch);
     if ((source->parent == nullptr) != (target->parent == nullptr) ||
         (source->parent && AssemblyShadowTypeKey::Format(&source->parent->byval_arg) != AssemblyShadowTypeKey::Format(&target->parent->byval_arg)))
         Fail("ShadowParentLayoutMismatch", key, AssemblyShadowError::ResourceAbiMismatch);
