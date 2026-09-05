@@ -424,7 +424,10 @@ bool CompatibleInstanceFields(const Il2CppClass* source, const Il2CppClass* targ
     if (active.size() == baseline.size()) return source->instance_size == target->instance_size;
     // Existing objects are never admitted before Commit. A post-Commit Unity
     // allocation may therefore use a larger active reference type, but only for
-    // strictly appended, private, explicitly nonserialized primitive storage.
+    // strictly appended, private primitive storage. Whether that storage is
+    // serialized is a deployment/resource-ABI decision: the Editor rejects a
+    // DLL-only serialized change and Bootstrap binds a rebuilt catalog before
+    // any Unity object is loaded. This layer proves only allocation safety.
     // Value types can be embedded in already frozen owners and may never grow.
     if (source->byval_arg.valuetype || !source->instance_size || target->instance_size < source->instance_size) return false;
     uint32_t previousEnd = source->instance_size;
@@ -433,8 +436,7 @@ bool CompatibleInstanceFields(const Il2CppClass* source, const Il2CppClass* targ
         const InstanceFieldLayout& field = active[index];
         const uint32_t size = PrimitiveStorageSize(field.type);
         const uint16_t attributes = field.type ? field.type->attrs : 0;
-        if (!size || (attributes & FIELD_ATTRIBUTE_FIELD_ACCESS_MASK) != FIELD_ATTRIBUTE_PRIVATE ||
-            !(attributes & FIELD_ATTRIBUTE_NOT_SERIALIZED) || field.offset < previousEnd ||
+        if (!size || (attributes & FIELD_ATTRIBUTE_FIELD_ACCESS_MASK) != FIELD_ATTRIBUTE_PRIVATE || field.offset < previousEnd ||
             field.offset > UINT32_MAX - size || field.offset + size > target->instance_size)
             return false;
         previousEnd = field.offset + size;
