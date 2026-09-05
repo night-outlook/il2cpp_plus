@@ -6,6 +6,7 @@
 #include "vm/GenericClass.h"
 #include "vm/GlobalMetadata.h"
 #include "vm/MetadataCache.h"
+#include "metadata/GenericMethod.h"
 #include "hybridclr/metadata/AssemblyShadowBridge.h"
 #include "hybridclr/metadata/MetadataUtil.h"
 #include "il2cpp-tabledefs.h"
@@ -30,6 +31,7 @@ struct ResolverState
 {
     std::mutex mutex;
     std::unordered_map<Il2CppClass*, Il2CppClass*> definitions;
+    std::unordered_map<const MethodInfo*, const MethodInfo*> reflectionMethods;
     std::unordered_map<const Il2CppType*, const Il2CppType*> knownBaselines;
     std::unordered_map<std::string, std::unique_ptr<OwnedType>> types;
     std::atomic<uint64_t> hits{0}, misses{0}, rebuilds{0}, allocations{0}, failures{0};
@@ -162,6 +164,51 @@ Il2CppClass* RawClass(const Il2CppType* type)
     AssemblyShadowTypeMetadataScope scope;
     if (type->type == IL2CPP_TYPE_CLASS || type->type == IL2CPP_TYPE_VALUETYPE) return AssemblyShadowTypeKey::RawDefinition(type);
     return Class::FromIl2CppType(type);
+}
+
+std::string MethodSignature(const MethodInfo* method)
+{
+    if (!method || !method->klass || !method->name || !method->return_type ||
+        (method->parameters_count && !method->parameters) || method->is_inflated)
+        Fail("ShadowInvalidMethodSignature", "MalformedDefinition");
+    std::string key = std::string(method->name) + " flags=" + std::to_string(method->flags) +
+        " iflags=" + std::to_string(method->iflags) + " slot=" + std::to_string(method->slot) +
+        " generic=" + std::to_string(method->is_generic != 0) + " arity=" +
+        std::to_string(method->is_generic ? MetadataCache::GetGenericContainerCount(method->genericContainerHandle) : 0) +
+        " parameters=" + std::to_string(method->parameters_count) +
+        " return=" + AssemblyShadowTypeKey::Format(method->return_type);
+    for (uint16_t index = 0; index < method->parameters_count; ++index)
+        key += " parameter=" + AssemblyShadowTypeKey::Format(method->parameters[index]);
+    return key;
+}
+
+const MethodInfo* FindMethodDefinition(const MethodInfo* baseline, Il2CppClass* activeClass)
+{
+    const std::string signature = MethodSignature(baseline);
+    const MethodInfo* result = nullptr;
+    for (uint16_t index = 0; index < activeClass->method_count; ++index)
+    {
+        Il2CppMetadataMethodInfo raw = MetadataCache::GetMethodInfo(activeClass, index);
+        const MethodInfo* candidate = MetadataCache::GetMethodInfoFromMethodHandle(raw.handle);
+        if (!candidate || candidate->klass != activeClass) Fail("ShadowInvalidMethodSignature", signature);
+        if (MethodSignature(candidate) != signature) continue;
+        if (result) Fail("ShadowAmbiguousMethodDefinition", signature);
+        result = candidate;
+    }
+    if (!result) Fail("ShadowMethodNotFound", signature);
+    return result;
+}
+
+const Il2CppGenericInst* ResolveMethodInstantiation(const Il2CppGenericInst* input)
+{
+    if (!input) return nullptr;
+    if (!input->type_argc || !input->type_argv) Fail("ShadowInvalidMethodInstantiation", "MissingArguments");
+    std::vector<const Il2CppType*> arguments;
+    arguments.reserve(input->type_argc);
+    for (uint32_t index = 0; index < input->type_argc; ++index)
+        arguments.push_back(AssemblyShadowTypeResolver::Resolve(input->type_argv[index]));
+    AssemblyShadowTypeMetadataScope scope;
+    return MetadataCache::GetGenericInst(arguments.data(), static_cast<uint32_t>(arguments.size()));
 }
 const Il2CppType* Resolve(const Il2CppType* input, uint32_t depth)
 {
@@ -442,6 +489,53 @@ Il2CppClass* AssemblyShadowTypeResolver::ResolveClass(Il2CppClass* klass)
     if (!klass || Private() || !AssemblyShadow::ActiveGeneration()) return klass;
     const Il2CppType* active = Resolve(&klass->byval_arg);
     return active == &klass->byval_arg ? klass : RawClass(active);
+}
+
+const MethodInfo* AssemblyShadowTypeResolver::ResolveReflectionMethod(const MethodInfo* method)
+{
+    if (!method || Private() || !AssemblyShadow::ActiveGeneration()) return method;
+
+    const MethodInfo* definition = method;
+    const Il2CppGenericContext* context = nullptr;
+    if (method->is_inflated)
+    {
+        if (!method->genericMethod || !method->genericMethod->methodDefinition ||
+            method->genericMethod->methodDefinition->is_inflated)
+            Fail("ShadowInvalidMethodInstantiation", "MissingDefinition");
+        definition = method->genericMethod->methodDefinition;
+        context = &method->genericMethod->context;
+    }
+    if (!definition->klass || !definition->klass->image || !definition->klass->image->assembly ||
+        !AssemblyShadow::IsShadowedBaseline(definition->klass->image->assembly))
+        return method;
+
+    auto& state = State();
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        auto found = state.reflectionMethods.find(method);
+        if (found != state.reflectionMethods.end()) return found->second;
+    }
+
+    const MethodInfo* activeDefinition;
+    {
+        AssemblyShadowTypeMetadataScope scope;
+        activeDefinition = FindMethodDefinition(definition, ResolveDefinition(definition->klass));
+    }
+    const MethodInfo* active = activeDefinition;
+    if (context)
+    {
+        const Il2CppGenericInst* classInst = ResolveMethodInstantiation(context->class_inst);
+        const Il2CppGenericInst* methodInst = ResolveMethodInstantiation(context->method_inst);
+        {
+            AssemblyShadowTypeMetadataScope scope;
+            active = il2cpp::metadata::GenericMethod::GetMethod(activeDefinition, classInst, methodInst);
+        }
+        if (!active || active->klass != ResolveClass(method->klass))
+            Fail("ShadowMethodInflationFailed", MethodSignature(definition));
+    }
+
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.reflectionMethods.emplace(method, active).first->second;
 }
 
 Il2CppClass* AssemblyShadowTypeResolver::ResolveAllocation(Il2CppClass* klass, const char* site)

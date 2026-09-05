@@ -64,6 +64,9 @@ public:
     static Il2CppClass* ResolveClassDefinition(Il2CppClass* klass);
     static Il2CppClass* ResolveClass(Il2CppClass* klass);
     static const Il2CppType* ResolveType(const Il2CppType* type);
+    // Reflection-only canonicalization. Managed execution continues to use
+    // AssertMethodIsActive/RequireActiveMethod and never remaps a MethodInfo.
+    static const MethodInfo* ResolveReflectionMethod(const MethodInfo* method);
     static Il2CppClass* ResolveAllocationClass(Il2CppClass* klass, const char* site);
     static void RequireActiveClass(Il2CppClass* klass, BaselineUseKind kind, const char* site);
     static void RecordTypeUse(const Il2CppType* type, BaselineUseKind kind, const char* site);

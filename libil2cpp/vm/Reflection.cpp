@@ -210,6 +210,12 @@ namespace vm
         if (!refclass)
             refclass = method->klass;
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        // Stack-trace construction can surface a physical AOT MethodInfo even
+        // when the frame executed in the active interpreter image. Reflection
+        // exposes only the structurally corresponding active member. The
+        // execution guard deliberately remains separate and never remaps.
+        method = AssemblyShadow::ResolveReflectionMethod(method);
+        refclass = AssemblyShadow::ResolveClass(refclass);
         RequireActiveMethod(method, "Reflection::GetMethodObject");
         AssemblyShadow::RequireActiveClass(refclass, BaselineUseKind::TypeReflection, "Reflection::GetMethodObject.reflected");
 #endif

@@ -1362,6 +1362,12 @@ const Il2CppType* AssemblyShadow::ResolveType(const Il2CppType* type)
     catch (const ShadowTypeResolutionFailure& error) { FailTypeResolution(error.error, error.what()); return nullptr; }
 }
 
+const MethodInfo* AssemblyShadow::ResolveReflectionMethod(const MethodInfo* method)
+{
+    try { return AssemblyShadowTypeResolver::ResolveReflectionMethod(method); }
+    catch (const ShadowTypeResolutionFailure& error) { FailTypeResolution(error.error, error.what()); return nullptr; }
+}
+
 Il2CppClass* AssemblyShadow::ResolveAllocationClass(Il2CppClass* klass, const char* site)
 {
     try
