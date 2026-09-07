@@ -7,6 +7,9 @@
 #include "vm/Field.h"
 #include "vm/Liveness.h"
 #include "vm/Type.h"
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+#include "vm/AssemblyShadowTypeKey.h"
+#endif
 #include "il2cpp-tabledefs.h"
 #include "il2cpp-class-internals.h"
 #include "il2cpp-object-internals.h"
@@ -380,8 +383,13 @@ namespace vm
                 }
                 else
                 {
-                    Il2CppObject* val = NULL;
-                    Field::GetValue(object, field, &val);
+                    // Liveness runs after allocation has been disabled and
+                    // temporarily tags object->klass while walking. It must
+                    // read the physical object layout directly: the public
+                    // Field API performs Assembly Shadow business-use guards
+                    // and logical class redirection, both of which are invalid
+                    // in this collector-only path.
+                    Il2CppObject* val = *(Il2CppObject**)((char*)object + field->offset);
                     added_objects |= AddProcessObject(val, state);
                 }
             }
@@ -513,6 +521,9 @@ namespace vm
 
     void Liveness::FromRoot(Il2CppObject* root, void* state)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadowTypeMetadataScope physicalMetadataScope;
+#endif
         LivenessState* liveness_state = (LivenessState*)state;
         liveness_state->Reset();
 
@@ -526,6 +537,9 @@ namespace vm
 
     void Liveness::FromStatics(void* state)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        AssemblyShadowTypeMetadataScope physicalMetadataScope;
+#endif
         LivenessState* liveness_state = (LivenessState*)state;
         const il2cpp::utils::dynamic_array<Il2CppClass*>& classesWithStatics = Class::GetStaticFieldData();
 
@@ -568,9 +582,9 @@ namespace vm
                 }
                 else
                 {
-                    Il2CppObject* val = NULL;
-
-                    Field::StaticGetValue(field, &val);
+                    // As above, collection reads already-initialized physical
+                    // static storage without entering the guarded public API.
+                    Il2CppObject* val = *(Il2CppObject**)((char*)klass->static_fields + field->offset);
 
                     if (val)
                     {

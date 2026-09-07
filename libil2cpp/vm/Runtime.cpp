@@ -597,6 +597,12 @@ namespace vm
         try
         {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+            // Unity caches callback MethodInfo pointers (for example
+            // ScriptableObject.OnEnable) before a shadow transaction commits.
+            // Resolve that physical baseline method at the last common invoke
+            // boundary. The active-object guard below still rejects attempts to
+            // run an active method against an already-created baseline object.
+            method = AssemblyShadow::ResolveReflectionMethod(method);
             AssemblyShadow::RequireActiveMethod(method, "Runtime::Invoke");
             AssemblyShadow::RequireActiveClass(method->klass, BaselineUseKind::ClassInit, "Runtime::Invoke.owner");
             if (obj && !(method->flags & METHOD_ATTRIBUTE_STATIC) && !method->klass->byval_arg.valuetype)
