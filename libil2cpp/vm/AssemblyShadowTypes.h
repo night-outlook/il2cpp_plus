@@ -30,6 +30,9 @@ enum class AssemblyShadowError : int32_t
     ModuleInitializerFailed = 19,
     InternalError = 20,
     BaselineMethodExecution = 21,
+    CapabilityUnavailable = 22,
+    MetadataCapacityExceeded = 23,
+    MetadataBudgetMismatch = 24,
 };
 
 enum class AssemblyShadowState : int32_t

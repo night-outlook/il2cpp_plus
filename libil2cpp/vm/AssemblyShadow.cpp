@@ -1,5 +1,6 @@
 #include "AssemblyShadow.h"
 #include "AssemblyShadowDiagnostics.h"
+#include "AssemblyShadowRecovery.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowName.h"
@@ -16,6 +17,7 @@
 #include "hybridclr/metadata/Assembly.h"
 #include "hybridclr/metadata/AssemblyShadowBridge.h"
 #include "hybridclr/metadata/MetadataUtil.h"
+#include "hybridclr/metadata/InterpreterImage.h"
 #include "hybridclr/metadata/StagedAssembly.h"
 #include <atomic>
 #include <chrono>
@@ -29,6 +31,11 @@
 #include <sstream>
 #include <iomanip>
 #include <cstdio>
+
+namespace hybridclr {
+    extern const uint32_t g_assemblyShadowStartupCandidateSchemaVersion;
+    extern const char* g_assemblyShadowStartupCandidates[];
+}
 
 namespace il2cpp { namespace vm {
 namespace {
@@ -94,9 +101,15 @@ namespace {
         std::vector<ClosureMember> closure;
         std::unordered_map<Candidate*, size_t> positions;
         std::vector<StagedAssembly*> retained;
+        std::vector<uint64_t> budgetSizes;
+        std::vector<uint32_t> reservedImageIndices;
+        bool budgetReserved = false;
         uint64_t retainedBytes = 0;
         uint64_t validatedUsageGeneration = 0;
         AssemblyShadowError lastError = AssemblyShadowError::Success;
+        AssemblyShadowError recoveryTerminalError = AssemblyShadowError::Success;
+        std::string recoveryTerminalDetail;
+        bool recoveryBaselineRejection = false;
         std::string detail;
         std::vector<ShadowEventDiagnostic> events;
         std::vector<std::string> commitOrder;
@@ -328,6 +341,17 @@ namespace {
 
     AssemblyShadowError Result(Transaction& transaction, AssemblyShadowError error, const std::string& detail = "")
     {
+        const auto state = s_state.load(std::memory_order_acquire);
+        const int32_t code = static_cast<int32_t>(error);
+        if (transaction.recoveryTerminalError == AssemblyShadowError::Success &&
+            (state == AssemblyShadowState::Failed || state == AssemblyShadowState::FailedAfterCommit ||
+             error == AssemblyShadowError::InternalError || code < 0 || code > 24))
+        {
+            transaction.recoveryTerminalError = error == AssemblyShadowError::Success ? AssemblyShadowError::InternalError : error;
+            transaction.recoveryTerminalDetail = detail;
+        }
+        if (error == AssemblyShadowError::BaselineAlreadyUsed && !s_active.load(std::memory_order_acquire))
+            transaction.recoveryBaselineRejection = true;
         transaction.lastError = error;
         transaction.detail = detail;
         return error;
@@ -655,7 +679,10 @@ AssemblyShadowError AssemblyShadow::StageAssembly(const uint8_t* dll, size_t dll
     auto& member = transaction.closure[position->second];
     if (member.staged) return Result(transaction, AssemblyShadowError::DuplicateAssemblyName, name);
     StagedAssembly* staged = nullptr;
-    error = InterpreterAssembly::CreateStagedSkeleton(dll, dllLength, pdb, pdbLength, staged, detail);
+    if (transaction.budgetReserved && transaction.budgetSizes[position->second] != dllLength)
+        return Result(transaction, AssemblyShadowError::MetadataBudgetMismatch, "DLL size differs from the reserved closure input.");
+    error = InterpreterAssembly::CreateStagedSkeleton(dll, dllLength, pdb, pdbLength, staged, detail,
+        transaction.budgetReserved ? transaction.reservedImageIndices[position->second] : 0);
     if (staged)
     {
         transaction.retained.push_back(staged);
@@ -676,6 +703,167 @@ AssemblyShadowError AssemblyShadow::StageAssembly(const uint8_t* dll, size_t dll
     Event(transaction, "skeleton-created", candidate->name);
     if (StagedCount(transaction) == transaction.closure.size()) s_state.store(AssemblyShadowState::Staged, std::memory_order_release);
     return Result(transaction, AssemblyShadowError::Success);
+}
+
+AssemblyShadowError AssemblyShadow::ReserveMetadataBudget(const std::vector<uint64_t>& sizes, int32_t profileVersion)
+{
+    using Budget = hybridclr::metadata::InterpreterImageBudget;
+    auto& transaction = Current();
+    std::lock_guard<std::mutex> lock(transaction.mutex);
+    if (s_state.load() != AssemblyShadowState::Staging || !Owner(transaction) ||
+        StagedCount(transaction) != 0 || transaction.budgetReserved)
+        return WrongState(transaction);
+    if (profileVersion != Budget::kProfileVersion)
+        return Result(transaction, AssemblyShadowError::CapabilityUnavailable, "Metadata encoding profile is unsupported.");
+    if (sizes.size() != transaction.closure.size() || sizes.empty())
+        return Result(transaction, AssemblyShadowError::MetadataBudgetMismatch, "One exact DLL size per ordered closure member is required.");
+    // Prepare all transaction storage before committing global monotonic cursors.
+    std::vector<uint64_t> capturedSizes(sizes);
+    std::vector<uint32_t> indices(sizes.size());
+    const auto report = hybridclr::metadata::InterpreterImage::ReserveImageBudget(sizes);
+    if (!report.IsSuccess())
+    {
+        const size_t index = report.firstFailureIndex;
+        return Result(transaction, AssemblyShadowError::MetadataCapacityExceeded,
+            "Metadata capacity rejected before Stage: " +
+            (index < transaction.closure.size() ? transaction.closure[index].candidate->name : std::string("invalid budget state")));
+    }
+    for (size_t i = 0; i < indices.size(); ++i) indices[i] = report.allocations[i].imageIndex;
+    transaction.budgetSizes.swap(capturedSizes);
+    transaction.reservedImageIndices.swap(indices);
+    transaction.budgetReserved = true;
+    Event(transaction, "metadata-budget-reserved");
+    return Result(transaction, AssemblyShadowError::Success);
+}
+
+AssemblyShadowError AssemblyShadow::GetMetadataCapacityJson(const std::vector<uint64_t>& sizes, std::string& json)
+{
+    using Budget = hybridclr::metadata::InterpreterImageBudget;
+    uint64_t ordinary, shadow, reserved;
+    const auto before = hybridclr::metadata::InterpreterImage::GetImageBudgetState(ordinary, shadow, reserved);
+    if (!Budget::IsValidState(before))
+    {
+        json.clear();
+        return AssemblyShadowError::InternalError;
+    }
+    const auto report = Budget::Evaluate(before, sizes);
+    std::ostringstream out;
+    auto cursors = [&](const Budget::State& state) {
+        out << '[';
+        for (int kind = 0; kind != 4; ++kind) { if (kind) out << ','; out << state.cursors[kind]; }
+        out << ']';
+    };
+    out << "{\"schemaVersion\":1,\"enabled\":true,\"profileVersion\":" << Budget::kProfileVersion
+        << ",\"indexBits\":" << Budget::kMetadataIndexBits << ",\"kindBits\":" << Budget::kMetadataKindBits << ",\"cursors\":";
+    cursors(before);
+    out << ",\"remainingSlots\":[";
+    for (int kind = 0; kind != 4; ++kind)
+    {
+        if (kind) out << ',';
+        const uint32_t terminal = kind == 3 ? Budget::kKind3ReservedImageIndex : Budget::kMaxMetadataImageIndexWithoutKind;
+        out << (terminal - before.cursors[kind]) / Budget::CursorStride(kind);
+    }
+    out << "],\"requiredImages\":" << sizes.size() << ",\"acceptedImages\":" << report.allocations.size()
+        << ",\"firstFailingIndex\":" << (report.IsSuccess() ? -1 : static_cast<int64_t>(report.firstFailureIndex))
+        << ",\"firstFailingSize\":" << report.firstFailureSize
+        << ",\"failureReason\":" << AssemblyShadowDiagnostics::Quote(report.IsSuccess() ? "None" :
+            (report.firstFailure == Budget::Error::Exhausted ? "Exhausted" : "InvalidSizeOrProfileState"))
+        << ",\"fits\":" << (report.IsSuccess() ? "true" : "false") << ",\"allocations\":[";
+    for (size_t i = 0; i < report.allocations.size(); ++i)
+    {
+        if (i) out << ',';
+        out << "{\"imageIndex\":" << report.allocations[i].imageIndex << ",\"kind\":" << report.allocations[i].kind
+            << ",\"dllSize\":" << sizes[i] << '}';
+    }
+    out << "],\"finalCursors\":";
+    cursors(report.finalState);
+    out << ",\"ordinaryAllocatedCount\":" << ordinary << ",\"shadowAllocatedCount\":" << shadow
+        << ",\"reservedImageCount\":" << reserved << '}';
+    json = out.str();
+    return AssemblyShadowError::Success;
+}
+
+AssemblyShadowError AssemblyShadow::GetRecoveryInfoJson(std::string& json)
+{
+    using namespace assembly_shadow_recovery;
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Disabled) == StateDisabled, "Recovery Disabled ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::CandidatesRegistered) == StateCandidatesRegistered, "Recovery CandidatesRegistered ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Staging) == StateStaging, "Recovery Staging ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Staged) == StateStaged, "Recovery Staged ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Validated) == StateValidated, "Recovery Validated ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Committing) == StateCommitting, "Recovery Committing ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Committed) == StateCommitted, "Recovery Committed ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Aborted) == StateAborted, "Recovery Aborted ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Failed) == StateFailed, "Recovery Failed ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::FailedAfterCommit) == StateFailedAfterCommit, "Recovery FailedAfterCommit ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::Success) == ErrorSuccess, "Recovery Success ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::FeatureDisabled) == ErrorFeatureDisabled, "Recovery FeatureDisabled ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::InvalidState) == ErrorInvalidState, "Recovery InvalidState ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::InvalidArgument) == ErrorInvalidArgument, "Recovery InvalidArgument ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::CandidateNotRegistered) == ErrorCandidateNotRegistered, "Recovery CandidateNotRegistered ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::DuplicateAssemblyName) == ErrorDuplicateAssemblyName, "Recovery DuplicateAssemblyName ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::BaselineAssemblyNotFound) == ErrorBaselineAssemblyNotFound, "Recovery BaselineAssemblyNotFound ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::BaselineBuildMismatch) == ErrorBaselineBuildMismatch, "Recovery BaselineBuildMismatch ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::AssemblyNameMismatch) == ErrorAssemblyNameMismatch, "Recovery AssemblyNameMismatch ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::BadImage) == ErrorBadImage, "Recovery BadImage ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::UnsupportedAssembly) == ErrorUnsupportedAssembly, "Recovery UnsupportedAssembly ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::ClosureMemberMissing) == ErrorClosureMemberMissing, "Recovery ClosureMemberMissing ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::UnexpectedClosureMember) == ErrorUnexpectedClosureMember, "Recovery UnexpectedClosureMember ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::ReferenceResolutionFailed) == ErrorReferenceResolutionFailed, "Recovery ReferenceResolutionFailed ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::ReferenceEscapesClosure) == ErrorReferenceEscapesClosure, "Recovery ReferenceEscapesClosure ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::BaselineAlreadyUsed) == ErrorBaselineAlreadyUsed, "Recovery BaselineAlreadyUsed ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::ResourceAbiMismatch) == ErrorResourceAbiMismatch, "Recovery ResourceAbiMismatch ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::RuntimeAbiMismatch) == ErrorRuntimeAbiMismatch, "Recovery RuntimeAbiMismatch ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::AlreadyCommitted) == ErrorAlreadyCommitted, "Recovery AlreadyCommitted ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::ModuleInitializerFailed) == ErrorModuleInitializerFailed, "Recovery ModuleInitializerFailed ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::InternalError) == ErrorInternal, "Recovery InternalError ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::BaselineMethodExecution) == ErrorBaselineMethodExecution, "Recovery BaselineMethodExecution ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::CapabilityUnavailable) == ErrorCapabilityUnavailable, "Recovery CapabilityUnavailable ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::MetadataCapacityExceeded) == ErrorCapacityExceeded, "Recovery MetadataCapacityExceeded ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowError::MetadataBudgetMismatch) == ErrorBudgetMismatch, "Recovery MetadataBudgetMismatch ABI changed");
+    auto& transaction = Current();
+    RecoveryInput input{};
+    AssemblyShadowError terminal = AssemblyShadowError::Success;
+    std::string reason;
+    uint64_t retainedBytes;
+    {
+        std::lock_guard<std::mutex> lock(transaction.mutex);
+        input.state = static_cast<int32_t>(s_state.load(std::memory_order_acquire));
+        input.published = s_active.load(std::memory_order_acquire) != nullptr;
+        input.knownBaselineUseRejection = transaction.recoveryBaselineRejection;
+        input.lastError = static_cast<int32_t>(transaction.lastError);
+        terminal = transaction.recoveryTerminalError;
+        reason = terminal == AssemblyShadowError::Success ? transaction.detail : transaction.recoveryTerminalDetail;
+        retainedBytes = transaction.retainedBytes;
+    }
+    // Durable lock-free failure facts dominate later mutable API results.
+    const TypeFailure* guard = s_typeFailure.load(std::memory_order_acquire);
+    const bool unexpected = s_unexpectedFailure.load(std::memory_order_acquire);
+    const bool lateUse = s_lateBaselineUse.load(std::memory_order_acquire);
+    const bool reference = s_referenceViolation.load(std::memory_order_acquire);
+    input.poisoned = guard || unexpected || lateUse || reference;
+    if (guard) { terminal = guard->error; reason = guard->detail; }
+    else if (unexpected) { terminal = AssemblyShadowError::InternalError; reason = "Unexpected native mutation failure requires restart."; }
+    else if (lateUse) { terminal = AssemblyShadowError::BaselineAlreadyUsed; reason = "Physical baseline use after publication requires restart."; }
+    else if (reference) { terminal = AssemblyShadowError::ReferenceEscapesClosure; reason = "Reference guard failure requires restart."; }
+    if (terminal == AssemblyShadowError::Success &&
+        (input.state == StateFailed || input.state == StateFailedAfterCommit))
+        terminal = AssemblyShadowError::InternalError;
+    input.terminalFailure = terminal != AssemblyShadowError::Success;
+    const auto decision = Classify(input);
+    const char* names[] = {"RestartRequired", "CorrectInputOrAbort", "AbortRequired", "BaselineEligibleAfterAbort", "ActiveShadow", "BaselineUnselected"};
+    std::ostringstream out;
+    out << std::boolalpha << "{\"schemaVersion\":1,\"enabled\":true,\"capabilityVersion\":1,\"stateCode\":" << input.state
+        << ",\"state\":" << AssemblyShadowDiagnostics::Quote(AssemblyShadowDiagnostics::StateName(static_cast<AssemblyShadowState>(input.state)))
+        << ",\"published\":" << input.published << ",\"abortAllowed\":" << decision.abortAllowed
+        << ",\"dispositionCode\":" << static_cast<int32_t>(decision.disposition)
+        << ",\"disposition\":" << AssemblyShadowDiagnostics::Quote(names[static_cast<int32_t>(decision.disposition)])
+        << ",\"terminalFailureCode\":" << static_cast<int32_t>(terminal)
+        << ",\"reason\":" << AssemblyShadowDiagnostics::Quote(reason)
+        << ",\"retainedBytes\":" << retainedBytes
+        << ",\"baselineEligibilityRequiresStartupValidation\":" << decision.requireStartupValidation << '}';
+    json = out.str();
+    return AssemblyShadowError::Success;
 }
 
 AssemblyShadowError AssemblyShadow::ValidateTransaction()
@@ -842,6 +1030,10 @@ AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
 {
     ShadowDiagnosticSnapshot snapshot;
     snapshot.enabled = true;
+    snapshot.startupCandidateSchemaVersion = hybridclr::g_assemblyShadowStartupCandidateSchemaVersion;
+    snapshot.startupObservationMode = "ConfigureOnly";
+    for (const char** name = hybridclr::g_assemblyShadowStartupCandidates; *name; ++name)
+        snapshot.startupCandidateNames.push_back(*name);
     auto& transaction = Current();
     {
         std::lock_guard<std::mutex> lock(transaction.mutex);
@@ -1462,6 +1654,9 @@ namespace il2cpp { namespace vm {
 AssemblyShadowError AssemblyShadow::ConfigureCandidates(const char*, const std::vector<std::string>&, const std::vector<std::string>&) { return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::BeginTransaction(const char*, const char*, const std::vector<std::string>&, int32_t) { return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::StageAssembly(const uint8_t*, size_t, const uint8_t*, size_t) { return AssemblyShadowError::FeatureDisabled; }
+AssemblyShadowError AssemblyShadow::ReserveMetadataBudget(const std::vector<uint64_t>&, int32_t) { return AssemblyShadowError::FeatureDisabled; }
+AssemblyShadowError AssemblyShadow::GetMetadataCapacityJson(const std::vector<uint64_t>&, std::string& json) { json = "{\"schemaVersion\":1,\"enabled\":false,\"profileVersion\":0}"; return AssemblyShadowError::FeatureDisabled; }
+AssemblyShadowError AssemblyShadow::GetRecoveryInfoJson(std::string& json) { json = "{\"schemaVersion\":1,\"enabled\":false,\"capabilityVersion\":0}"; return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::ValidateTransaction() { return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::CommitTransaction() { return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::AbortTransaction() { return AssemblyShadowError::FeatureDisabled; }

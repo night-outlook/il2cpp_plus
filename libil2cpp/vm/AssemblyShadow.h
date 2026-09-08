@@ -35,6 +35,11 @@ public:
         const std::vector<std::string>& closureLoadOrder, int32_t runtimeAbiVersion);
     static AssemblyShadowError StageAssembly(const uint8_t* dll, size_t dllLength,
         const uint8_t* pdb, size_t pdbLength);
+    // Capability schema 1. Reserve the whole ordered closure before any Stage.
+    // Legacy transactions retain their original per-image admission contract.
+    static AssemblyShadowError ReserveMetadataBudget(const std::vector<uint64_t>& sizes, int32_t profileVersion);
+    static AssemblyShadowError GetMetadataCapacityJson(const std::vector<uint64_t>& sizes, std::string& json);
+    static AssemblyShadowError GetRecoveryInfoJson(std::string& json);
     static AssemblyShadowError ValidateTransaction();
     static AssemblyShadowError CommitTransaction();
     static AssemblyShadowError AbortTransaction();

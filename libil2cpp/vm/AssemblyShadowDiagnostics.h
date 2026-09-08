@@ -39,6 +39,9 @@ struct ShadowUseDiagnostic
 struct ShadowDiagnosticSnapshot
 {
     bool enabled = false;
+    int32_t startupCandidateSchemaVersion = 0;
+    std::vector<std::string> startupCandidateNames;
+    std::string startupObservationMode = "Unavailable";
     AssemblyShadowState state = AssemblyShadowState::Disabled;
     AssemblyShadowError lastError = AssemblyShadowError::Success;
     std::string detail;

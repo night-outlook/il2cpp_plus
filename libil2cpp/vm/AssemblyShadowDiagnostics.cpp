@@ -72,6 +72,13 @@ std::string AssemblyShadowDiagnostics::Serialize(const ShadowDiagnosticSnapshot&
     std::ostringstream output;
     output << std::boolalpha << "{\"schemaVersion\":1,\"enabled\":" << value.enabled
         << ",\"runtimeAbiVersion\":" << kAssemblyShadowRuntimeAbiVersion
+        << ",\"metadataBudgetCapabilityVersion\":" << (value.enabled ? 1 : 0)
+        << ",\"recoveryCapabilityVersion\":" << (value.enabled ? 1 : 0)
+        << ",\"startupCandidateSchemaVersion\":" << value.startupCandidateSchemaVersion
+        << ",\"startupObservationMode\":" << Quote(value.startupObservationMode)
+        << ",\"startupCandidateNames\":";
+    StringArray(output, value.startupCandidateNames);
+    output
         << ",\"state\":" << Quote(StateName(value.state))
         << ",\"stateCode\":" << static_cast<int>(value.state)
         << ",\"lastError\":" << static_cast<int>(value.lastError)
