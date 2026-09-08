@@ -15,6 +15,7 @@
 #include "hybridclr/metadata/MetadataUtil.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace hybridclr {
@@ -67,7 +68,17 @@ namespace {
         }
     }
 
-    bool FinishFailure() noexcept
+    NORETURN void TerminateBeforeHostContinuation() noexcept
+    {
+        // The host may ignore a false runtime-init result. Do not permit any
+        // host continuation, managed shutdown, or process-exit callbacks after
+        // refusing this process's startup contract.
+        std::fprintf(stderr, "[AssemblyShadowStartup] Terminating process before host continuation (exit=1)\n");
+        std::fflush(stderr);
+        std::_Exit(1);
+    }
+
+    NORETURN bool FinishFailure() noexcept
     {
         const Failure reason = s_gate.Reason();
         // Explicit refusal preserves the callback's transaction/recovery error.
@@ -78,7 +89,7 @@ namespace {
             AssemblyShadow::ReportUnexpectedFailure();
         if (!s_failureLogged.exchange(true, std::memory_order_acq_rel))
             std::fprintf(stderr, "[AssemblyShadowStartup] Failed: %s\n", Reason(reason));
-        return false;
+        TerminateBeforeHostContinuation();
     }
 
     bool InvokeBootstrap()
