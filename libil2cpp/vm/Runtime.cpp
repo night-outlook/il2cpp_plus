@@ -18,6 +18,7 @@
 #include "vm/Array.h"
 #include "vm/Assembly.h"
 #include "vm/AssemblyShadow.h"
+#include "vm/AssemblyShadowStartup.h"
 #include "vm/ClassLibraryPAL.h"
 #include "vm/COMEntryPoints.h"
 #include "vm/Class.h"
@@ -400,6 +401,9 @@ namespace vm
         il2cpp::utils::DebugSymbolReader::LoadDebugSymbols();
 #endif
 
+        // The earlier fully-initialized flag predates HybridCLR and module
+        // initialization. Only this complete tail admits the startup gateway.
+        AssemblyShadowStartup::MarkCoreReady();
         return true;
     }
 

@@ -9,6 +9,7 @@
 #include "vm/Array.h"
 #include "vm/Assembly.h"
 #include "vm/AssemblyShadow.h"
+#include "vm/AssemblyShadowStartup.h"
 #include "vm/Class.h"
 #include "vm/Domain.h"
 #include "vm/Exception.h"
@@ -97,7 +98,9 @@ int il2cpp_init(const char* domain_name)
     // Use environment's default locale
     setlocale(LC_ALL, "");
 
-    return Runtime::Init(domain_name);
+    // Runtime::Init has released its init lock before the optional bootstrap
+    // executes. The UTF-16 entry funnels through this same boundary.
+    return AssemblyShadowStartup::AfterRuntimeInit(Runtime::Init(domain_name));
 }
 
 int il2cpp_init_utf16(const Il2CppChar* domain_name)
