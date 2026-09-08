@@ -71,6 +71,10 @@ namespace {
         // Captured generic arguments cannot be identified by an AOT method's
         // declaring assembly, nor may their handles be logically remapped.
         std::unordered_map<Il2CppMetadataTypeHandle, Candidate*> byTypeHandle;
+    };
+
+    struct StableAotConfiguration
+    {
         NameIndex<const Il2CppAssembly*> stableByName;
         std::vector<std::string> stableNames;
         std::vector<const Il2CppAssembly*> netstandardProviders;
@@ -116,6 +120,12 @@ namespace {
     };
 
     std::atomic<CandidateRegistry*> s_candidates{nullptr};
+    std::atomic<const StableAotConfiguration*> s_configuration{nullptr};
+    // No heap-backed singleton or transaction is needed at metadata startup.
+    // Both successful and failed attempts forbid metadata replacement/reload.
+    enum class StartupAttempt { Unattempted, Initializing, Ready, Failed };
+    std::atomic<StartupAttempt> s_startupAttempt{StartupAttempt::Unattempted};
+    std::atomic<bool> s_earlyTracking{false};
     std::atomic<const ActiveSnapshot*> s_active{nullptr};
     std::atomic<AssemblyShadowState> s_state{AssemblyShadowState::Disabled};
     std::atomic<bool> s_lateBaselineUse{false};
@@ -339,6 +349,38 @@ namespace {
         return assembly && assembly->image && hybridclr::metadata::IsInterpreterImage(assembly->image);
     }
 
+    // Physical tables and raw TypeDef handles only; never materialize a class.
+    AssemblyShadowError BuildCandidateRegistry(CandidateRegistry* registry, const std::vector<std::string>& names)
+    {
+        registry->byName.Reserve(names.size());
+        registry->byAssembly.reserve(names.size());
+        registry->entries.reserve(names.size());
+        for (const auto& name : names)
+        {
+            std::string canonical;
+            if (!CanonicalName(name.c_str(), canonical)) return AssemblyShadowError::InvalidArgument;
+            if (registry->byName.Find(canonical.c_str())) return AssemblyShadowError::DuplicateAssemblyName;
+            const Il2CppAssembly* baseline = MetadataCache::GetAotAssemblyByNamePhysical(canonical.c_str());
+            if (!baseline) return AssemblyShadowError::BaselineAssemblyNotFound;
+            if (!baseline->image || !baseline->aname.name) return AssemblyShadowError::InternalError;
+            if (Interpreter(baseline)) return AssemblyShadowError::UnsupportedAssembly;
+            std::unique_ptr<Candidate> candidate(new Candidate());
+            candidate->name = baseline->aname.name;
+            candidate->baseline = baseline;
+            registry->byName.Add(candidate->name, candidate.get());
+            if (!registry->byAssembly.emplace(baseline, candidate.get()).second)
+                return AssemblyShadowError::DuplicateAssemblyName;
+            for (uint32_t index = 0; index < baseline->image->typeCount; ++index)
+            {
+                Il2CppMetadataTypeHandle handle = MetadataCache::GetAssemblyTypeHandle(baseline->image, index);
+                if (!handle || !registry->byTypeHandle.emplace(handle, candidate.get()).second)
+                    return AssemblyShadowError::InternalError;
+            }
+            registry->entries.push_back(std::move(candidate));
+        }
+        return AssemblyShadowError::Success;
+    }
+
     AssemblyShadowError Result(Transaction& transaction, AssemblyShadowError error, const std::string& detail = "")
     {
         const auto state = s_state.load(std::memory_order_acquire);
@@ -413,7 +455,7 @@ namespace {
             }
             return candidate->baseline; // An unchanged, registered candidate.
         }
-        return registry->stableByName.Find(name);
+        return s_configuration.load(std::memory_order_acquire)->stableByName.Find(name);
     }
 
     bool CanResolvePrivateFacade(const char* name, const CandidateRegistry* registry)
@@ -421,14 +463,14 @@ namespace {
         return hybridclr::metadata::Image::CanUseLogicalNetStandardFacade(name,
             registry->byName.Find(name) != nullptr,
             MetadataCache::GetAotAssemblyByNamePhysical(name) != nullptr,
-            registry->netstandardProviders.size());
+            s_configuration.load(std::memory_order_acquire)->netstandardProviders.size());
     }
 
     bool ResolvePrivateFacade(const char* name, std::vector<const Il2CppAssembly*>& providers, void*)
     {
         const CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
         if (!registry || !CanResolvePrivateFacade(name, registry)) return false;
-        providers = registry->netstandardProviders;
+        providers = s_configuration.load(std::memory_order_acquire)->netstandardProviders;
         return true;
     }
 
@@ -490,7 +532,7 @@ namespace {
                                 "Manifest load order is not provider-before-consumer: " + reference + " -> " + member.candidate->name);
                     }
                 }
-                else if (!registry->stableByName.Find(reference.c_str()) && !CanResolvePrivateFacade(reference.c_str(), registry))
+                else if (!s_configuration.load(std::memory_order_acquire)->stableByName.Find(reference.c_str()) && !CanResolvePrivateFacade(reference.c_str(), registry))
                 {
                     return Result(transaction,
                         MetadataCache::GetAotAssemblyByNamePhysical(reference.c_str()) ?
@@ -561,63 +603,130 @@ namespace {
     }
 }
 
+bool AssemblyShadow::BeginStartupTrackingInitialization() noexcept
+{
+    StartupAttempt expected = StartupAttempt::Unattempted;
+    if (s_startupAttempt.compare_exchange_strong(expected, StartupAttempt::Initializing, std::memory_order_acq_rel)) return true;
+    // A process-lifetime registry cannot survive replacement of physical tables.
+    FailStartupTrackingInitialization();
+    return false;
+}
+
+void AssemblyShadow::FailStartupTrackingInitialization() noexcept
+{
+    s_startupAttempt.store(StartupAttempt::Failed, std::memory_order_release);
+    s_unexpectedFailure.store(true, std::memory_order_release);
+    s_state.store(s_active.load(std::memory_order_acquire) ? AssemblyShadowState::FailedAfterCommit :
+        AssemblyShadowState::Failed, std::memory_order_release);
+}
+
+bool AssemblyShadow::InitializeStartupCandidates() noexcept
+{
+    if (s_startupAttempt.load(std::memory_order_acquire) != StartupAttempt::Initializing)
+    {
+        FailStartupTrackingInitialization();
+        return false;
+    }
+    try
+    {
+        if (hybridclr::g_assemblyShadowStartupCandidateSchemaVersion != 1)
+        {
+            FailStartupTrackingInitialization();
+            return false;
+        }
+        std::vector<std::string> names;
+        for (const char** name = hybridclr::g_assemblyShadowStartupCandidates; *name; ++name) names.emplace_back(*name);
+        if (!names.empty())
+        {
+            std::unique_ptr<CandidateRegistry> registry(new CandidateRegistry());
+            if (BuildCandidateRegistry(registry.get(), names) != AssemblyShadowError::Success)
+            {
+                FailStartupTrackingInitialization();
+                return false;
+            }
+            s_candidates.store(registry.release(), std::memory_order_release);
+            s_earlyTracking.store(true, std::memory_order_release);
+        }
+        StartupAttempt expected = StartupAttempt::Initializing;
+        if (!s_startupAttempt.compare_exchange_strong(expected, StartupAttempt::Ready, std::memory_order_acq_rel))
+        {
+            FailStartupTrackingInitialization();
+            return false;
+        }
+        return true;
+    }
+    catch (...)
+    {
+        FailStartupTrackingInitialization();
+        return false;
+    }
+}
+
 AssemblyShadowError AssemblyShadow::ConfigureCandidates(const char* baselineBuildId,
     const std::vector<std::string>& names, const std::vector<std::string>& stableAotNames)
 {
     auto& transaction = Current();
     std::lock_guard<std::mutex> lock(transaction.mutex);
-    if (s_state.load() != AssemblyShadowState::Disabled || s_candidates.load()) return WrongState(transaction);
+    if (s_state.load() != AssemblyShadowState::Disabled || s_configuration.load()) return WrongState(transaction);
     if (!baselineBuildId || !*baselineBuildId || names.empty())
         return Result(transaction, AssemblyShadowError::InvalidArgument, "A baseline ID and candidates are required.");
-    std::unique_ptr<CandidateRegistry> registry(new CandidateRegistry());
-    registry->byName.Reserve(names.size());
-    registry->byAssembly.reserve(names.size());
-    registry->entries.reserve(names.size());
-    for (const auto& name : names)
+    CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
+    std::unique_ptr<CandidateRegistry> legacyRegistry;
+    if (registry)
     {
-        std::string canonical;
-        if (!CanonicalName(name.c_str(), canonical)) return Result(transaction, AssemblyShadowError::InvalidArgument, name);
-        if (registry->byName.Find(canonical.c_str())) return Result(transaction, AssemblyShadowError::DuplicateAssemblyName, name);
-        const Il2CppAssembly* baseline = MetadataCache::GetAotAssemblyByNamePhysical(canonical.c_str());
-        if (!baseline) return Result(transaction, AssemblyShadowError::BaselineAssemblyNotFound, name);
-        if (Interpreter(baseline)) return Result(transaction, AssemblyShadowError::UnsupportedAssembly, name);
-        std::unique_ptr<Candidate> candidate(new Candidate());
-        candidate->name = baseline->aname.name;
-        candidate->baseline = baseline;
-        registry->byName.Add(candidate->name, candidate.get());
-        registry->byAssembly.emplace(baseline, candidate.get());
-        for (uint32_t index = 0; index < baseline->image->typeCount; ++index)
+        // Compare normalized sets without replacing identities or their records.
+        NameIndex<bool> provided;
+        provided.Reserve(names.size());
+        for (const auto& name : names)
         {
-            Il2CppMetadataTypeHandle handle = MetadataCache::GetAssemblyTypeHandle(baseline->image, index);
-            if (!handle || !registry->byTypeHandle.emplace(handle, candidate.get()).second)
-                return Result(transaction, AssemblyShadowError::InternalError, "Candidate physical type identity is missing or duplicated.");
+            std::string canonical;
+            if (!CanonicalName(name.c_str(), canonical)) return Result(transaction, AssemblyShadowError::InvalidArgument, name);
+            if (provided.Find(canonical.c_str())) return Result(transaction, AssemblyShadowError::DuplicateAssemblyName, name);
+            provided.Add(canonical, true);
+            if (!registry->byName.Find(canonical.c_str()))
+                return Result(transaction, AssemblyShadowError::CandidateNotRegistered, name);
         }
-        registry->entries.push_back(std::move(candidate));
+        if (names.size() != registry->entries.size())
+            return Result(transaction, AssemblyShadowError::InvalidArgument, "Configure must match the embedded candidate set.");
     }
-    registry->stableByName.Reserve(stableAotNames.size());
+    else
+    {
+        // Empty generated lists retain the legacy ConfigureOnly contract.
+        if (hybridclr::g_assemblyShadowStartupCandidates[0])
+            return Result(transaction, AssemblyShadowError::InvalidState, "Embedded startup candidates have not been initialized.");
+        legacyRegistry.reset(new CandidateRegistry());
+        registry = legacyRegistry.get();
+        AssemblyShadowError error = BuildCandidateRegistry(registry, names);
+        if (error != AssemblyShadowError::Success) return Result(transaction, error, "Candidate physical identity validation failed.");
+    }
+    std::unique_ptr<StableAotConfiguration> configuration(new StableAotConfiguration());
+    configuration->stableByName.Reserve(stableAotNames.size());
     for (const auto& name : stableAotNames)
     {
         std::string canonical;
         if (!CanonicalName(name.c_str(), canonical)) return Result(transaction, AssemblyShadowError::InvalidArgument, name);
-        if (registry->byName.Find(canonical.c_str()) || registry->stableByName.Find(canonical.c_str()))
+        if (registry->byName.Find(canonical.c_str()) || configuration->stableByName.Find(canonical.c_str()))
             return Result(transaction, AssemblyShadowError::DuplicateAssemblyName, name);
         const Il2CppAssembly* assembly = MetadataCache::GetAotAssemblyByNamePhysical(canonical.c_str());
         if (!assembly) return Result(transaction, AssemblyShadowError::BaselineAssemblyNotFound, name);
         if (Interpreter(assembly)) return Result(transaction, AssemblyShadowError::UnsupportedAssembly, name);
-        registry->stableByName.Add(assembly->aname.name, assembly);
-        registry->stableNames.push_back(assembly->aname.name);
+        configuration->stableByName.Add(assembly->aname.name, assembly);
+        configuration->stableNames.push_back(assembly->aname.name);
     }
     // Facade providers are the intersection of upstream's finite framework
     // provider list and explicitly approved physical stable AOT assemblies.
     // Candidates cannot enter stableByName, even when named after a provider.
     for (const char* const* name = hybridclr::metadata::Image::GetNetStandardProviderNames(); *name; ++name)
-        if (const Il2CppAssembly* provider = registry->stableByName.Find(*name))
-            registry->netstandardProviders.push_back(provider);
-    transaction.owner = std::this_thread::get_id();
-    transaction.baselineBuildId = baselineBuildId;
-    s_candidates.store(registry.release(), std::memory_order_release);
-    s_state.store(AssemblyShadowState::CandidatesRegistered, std::memory_order_release);
+        if (const Il2CppAssembly* provider = configuration->stableByName.Find(*name))
+            configuration->netstandardProviders.push_back(provider);
+    // Complete allocations before committing ownership/configuration.
+    std::string buildId(baselineBuildId);
     Event(transaction, "candidates-registered");
+    transaction.baselineBuildId.swap(buildId);
+    transaction.owner = std::this_thread::get_id();
+    if (legacyRegistry) s_candidates.store(legacyRegistry.release(), std::memory_order_release);
+    s_configuration.store(configuration.release(), std::memory_order_release);
+    s_state.store(AssemblyShadowState::CandidatesRegistered, std::memory_order_release);
     return Result(transaction, AssemblyShadowError::Success);
 }
 
@@ -1020,7 +1129,8 @@ AssemblyShadowError AssemblyShadow::GetAssemblyExecutionMode(const char* name, A
     mode = AssemblyExecutionMode::AotBaseline;
     const CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
     if (!name || !*name) return AssemblyShadowError::InvalidArgument;
-    if (!registry || !registry->byName.Find(name)) return AssemblyShadowError::CandidateNotRegistered;
+    if (!s_configuration.load(std::memory_order_acquire) || !registry || !registry->byName.Find(name))
+        return AssemblyShadowError::CandidateNotRegistered;
     if (const ActiveSnapshot* active = s_active.load(std::memory_order_acquire))
         if (active->byName.Find(name)) mode = AssemblyExecutionMode::InterpreterShadow;
     return AssemblyShadowError::Success;
@@ -1031,13 +1141,15 @@ AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
     ShadowDiagnosticSnapshot snapshot;
     snapshot.enabled = true;
     snapshot.startupCandidateSchemaVersion = hybridclr::g_assemblyShadowStartupCandidateSchemaVersion;
-    snapshot.startupObservationMode = "ConfigureOnly";
+    snapshot.startupObservationMode = s_earlyTracking.load(std::memory_order_acquire) ? "EarlyTracking" : "ConfigureOnly";
     for (const char** name = hybridclr::g_assemblyShadowStartupCandidates; *name; ++name)
         snapshot.startupCandidateNames.push_back(*name);
     auto& transaction = Current();
     {
         std::lock_guard<std::mutex> lock(transaction.mutex);
         snapshot.state = s_state.load(std::memory_order_acquire);
+        if (const StableAotConfiguration* configuration = s_configuration.load(std::memory_order_acquire))
+            snapshot.stableAotNames = configuration->stableNames;
         snapshot.lastError = s_unexpectedFailure.load() ? AssemblyShadowError::InternalError :
             (s_lateBaselineUse.load() ? AssemblyShadowError::BaselineAlreadyUsed : transaction.lastError);
         snapshot.detail = s_unexpectedFailure.load() ? "Unexpected native failure sealed the transaction; restart required." :
@@ -1076,7 +1188,6 @@ AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
     }
     if (registry)
     {
-        snapshot.stableAotNames = registry->stableNames;
         std::vector<UseRecord> uses(registry->entries.size());
         {
             UsageLock usage;
@@ -1179,7 +1290,7 @@ const Il2CppAssembly* AssemblyShadow::ResolveReferencedAssembly(const Il2CppAsse
     {
         const CandidateRegistry* registry = s_candidates.load(std::memory_order_acquire);
         Candidate* unchanged = registry->byName.Find(referencedName);
-        const Il2CppAssembly* approved = unchanged ? unchanged->baseline : registry->stableByName.Find(referencedName);
+        const Il2CppAssembly* approved = unchanged ? unchanged->baseline : s_configuration.load(std::memory_order_acquire)->stableByName.Find(referencedName);
         if (!approved || (physicalProvider && physicalProvider != approved))
         {
             FailReference(requester, referencedName, referenceIndex, site);
@@ -1651,6 +1762,9 @@ std::string AssemblyShadow::InspectObject(const Il2CppObject* object)
 }}
 #else
 namespace il2cpp { namespace vm {
+bool AssemblyShadow::BeginStartupTrackingInitialization() noexcept { return true; }
+bool AssemblyShadow::InitializeStartupCandidates() noexcept { return true; }
+void AssemblyShadow::FailStartupTrackingInitialization() noexcept {}
 AssemblyShadowError AssemblyShadow::ConfigureCandidates(const char*, const std::vector<std::string>&, const std::vector<std::string>&) { return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::BeginTransaction(const char*, const char*, const std::vector<std::string>&, int32_t) { return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::StageAssembly(const uint8_t*, size_t, const uint8_t*, size_t) { return AssemblyShadowError::FeatureDisabled; }

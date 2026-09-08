@@ -157,8 +157,16 @@ const MethodInfo* il2cpp::vm::MetadataCache::GetMethodInfoFromMethodHandle(Il2Cp
 
 bool il2cpp::vm::MetadataCache::Initialize()
 {
+    // Reject retries before any physical table can be replaced. The registry
+    // retains physical pointers for process lifetime; reload is unsupported.
+    if (!AssemblyShadow::BeginStartupTrackingInitialization()) return false;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    try
+    {
+#endif
     if (!il2cpp::vm::GlobalMetadata::Initialize(&s_ImagesCount, &s_AssembliesCount))
     {
+        AssemblyShadow::FailStartupTrackingInitialization();
         return false;
     }
 
@@ -182,6 +190,14 @@ bool il2cpp::vm::MetadataCache::Initialize()
     s_ImagesTable = (Il2CppImage*)IL2CPP_CALLOC(s_ImagesCount, sizeof(Il2CppImage));
     s_AssembliesTable = (Il2CppAssembly*)IL2CPP_CALLOC(s_AssembliesCount, sizeof(Il2CppAssembly));
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    if (!s_ImagesTable || !s_AssembliesTable)
+    {
+        AssemblyShadow::FailStartupTrackingInitialization();
+        return false;
+    }
+#endif
+
     // setup all the Il2CppImages. There are not many and it avoid locks later on
     for (int32_t imageIndex = 0; imageIndex < s_ImagesCount; imageIndex++)
     {
@@ -194,6 +210,13 @@ bool il2cpp::vm::MetadataCache::Initialize()
 
         std::string nameNoExt = il2cpp::utils::PathUtils::PathNoExtension(image->name);
         image->nameNoExt = (char*)IL2CPP_CALLOC(nameNoExt.size() + 1, sizeof(char));
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        if (!image->nameNoExt)
+        {
+            AssemblyShadow::FailStartupTrackingInitialization();
+            return false;
+        }
+#endif
         strcpy(const_cast<char*>(image->nameNoExt), nameNoExt.c_str());
 
         for (uint32_t codeGenModuleIndex = 0; codeGenModuleIndex < s_Il2CppCodeRegistration->codeGenModulesCount; ++codeGenModuleIndex)
@@ -218,6 +241,8 @@ bool il2cpp::vm::MetadataCache::Initialize()
         Assembly::Register(assembly);
     }
 
+    if (!AssemblyShadow::InitializeStartupCandidates()) return false;
+
     InitializeUnresolvedSignatureTable();
 
 #if IL2CPP_ENABLE_NATIVE_STACKTRACES
@@ -226,6 +251,14 @@ bool il2cpp::vm::MetadataCache::Initialize()
     il2cpp::utils::NativeSymbol::RegisterMethods(managedMethods);
 #endif
     return true;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    }
+    catch (...)
+    {
+        AssemblyShadow::FailStartupTrackingInitialization();
+        return false;
+    }
+#endif
 }
 
 void il2cpp::vm::MetadataCache::ExecuteEagerStaticClassConstructors()

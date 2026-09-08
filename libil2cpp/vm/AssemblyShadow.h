@@ -23,6 +23,13 @@ enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
 class AssemblyShadow
 {
 public:
+    // Runtime startup only. Begin must precede every metadata initialization
+    // attempt; physical metadata replacement/reload is unsupported when ON.
+    // Initialize runs once after physical assembly registration and before any
+    // class/signature startup. Native-only, noexcept, and no transaction owner.
+    static bool BeginStartupTrackingInitialization() noexcept;
+    static bool InitializeStartupCandidates() noexcept;
+    static void FailStartupTrackingInitialization() noexcept;
     // Bootstrap-only mutation APIs. Lock order is transaction -> metadata ->
     // assembly -> usage/cache. No managed execution is permitted under these locks.
     static AssemblyShadowError ConfigureCandidates(const char* baselineBuildId,
@@ -91,7 +98,7 @@ public:
     static bool AssertMethodIsActive(const MethodInfo* method, const char* site) noexcept;
     static void RequireActiveMethod(const MethodInfo* method, const char* site);
     // Observation hooks never initialize classes or resolve metadata. Counters
-    // have process lifetime; class observations begin after ConfigureCandidates.
+    // have process lifetime; class observations begin when candidate identities are published.
     static void ObserveClassCctorStarted(Il2CppClass* klass);
     static void ObserveInterpreterTransformation(const MethodInfo* method);
 
