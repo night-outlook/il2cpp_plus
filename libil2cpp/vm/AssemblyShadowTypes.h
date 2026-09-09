@@ -69,5 +69,8 @@ enum class BaselineUseKind : int32_t
 };
 
 static const int32_t kAssemblyShadowRuntimeAbiVersion = 2;
+// Exact wire contracts, shared by full diagnostics and live compact queries.
+static const int32_t kAssemblyShadowMetadataBudgetCapabilityVersion = 2;
+static const int32_t kAssemblyShadowRecoveryCapabilityVersion = 1;
 
 }}
