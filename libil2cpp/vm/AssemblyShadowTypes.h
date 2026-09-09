@@ -68,6 +68,6 @@ enum class BaselineUseKind : int32_t
     MethodExecution = 8,
 };
 
-static const int32_t kAssemblyShadowRuntimeAbiVersion = 1;
+static const int32_t kAssemblyShadowRuntimeAbiVersion = 2;
 
 }}

@@ -61,6 +61,7 @@
 
 #include "hybridclr/metadata/MetadataUtil.h"
 #include "hybridclr/metadata/MetadataModule.h"
+#include "hybridclr/metadata/InterpreterMetadataRange.h"
 
 
 static int32_t s_MetadataImagesCount = 0;
@@ -1127,6 +1128,28 @@ const MethodInfo* il2cpp::vm::GlobalMetadata::GetMethodInfoFromVTableSlot(const 
     return GetMethodInfoFromEncodedIndex(vTableMethodReference);
 }
 
+static uint32_t GetInterpreterMemberRawIndex(hybridclr::metadata::InterpreterImage* image,
+    int32_t encodedStart, int32_t localIndex, uint32_t memberCount,
+    hybridclr::metadata::TableType table)
+{
+    using namespace hybridclr::metadata;
+    if (localIndex < 0 || static_cast<uint32_t>(localIndex) >= memberCount)
+        hybridclr::RaiseExecutionEngineException("Interpreter member ordinal is outside its declaring type");
+    const auto decode = [](uint32_t encoded) -> InterpreterMetadataRange::DecodedIndex
+    {
+        if (encoded == static_cast<uint32_t>(kInvalidIndex))
+            return InterpreterMetadataRange::DecodedIndex();
+        return InterpreterMetadataRange::DecodedIndex(true,
+            DecodeImageIndex(encoded), DecodeMetadataIndex(encoded));
+    };
+    uint32_t rawIndex = 0;
+    if (InterpreterMetadataRange::ResolveOffset(encodedStart, image->GetIndex(),
+        static_cast<uint32_t>(localIndex), image->GetRawImage().GetTableRowNum(table),
+        decode, rawIndex) != InterpreterMetadataRange::Error::None)
+        hybridclr::RaiseExecutionEngineException("Interpreter member range has an invalid owner or raw index");
+    return rawIndex;
+}
+
 static int CompareFieldDefaultValues(const void* pkey, const void* pelem)
 {
     return (int)(((Il2CppFieldDefaultValue*)pkey)->fieldIndex - ((Il2CppFieldDefaultValue*)pelem)->fieldIndex);
@@ -1140,12 +1163,15 @@ static const Il2CppFieldDefaultValue* GetFieldDefaultValueEntry(const FieldInfo*
     if (il2cpp::vm::Type::IsGenericInstance(&parent->byval_arg))
         parent = il2cpp::vm::GenericClass::GetTypeDefinition(parent->generic_class);
 
-    fieldIndex += reinterpret_cast<const Il2CppTypeDefinition*>(parent->typeMetadataHandle)->fieldStart;
-
-    if (hybridclr::metadata::IsInterpreterIndex((uint32_t)fieldIndex))
+    const Il2CppTypeDefinition* typeDefinition = reinterpret_cast<const Il2CppTypeDefinition*>(parent->typeMetadataHandle);
+    if (hybridclr::metadata::IsInterpreterType(typeDefinition))
     {
-        return hybridclr::metadata::MetadataModule::GetFieldDefaultValueEntry((uint32_t)fieldIndex);
+        auto* image = hybridclr::metadata::MetadataModule::GetImage(typeDefinition);
+        const uint32_t rawIndex = GetInterpreterMemberRawIndex(image, typeDefinition->fieldStart,
+            fieldIndex, typeDefinition->field_count, hybridclr::metadata::TableType::FIELD);
+        return image->GetFieldDefaultValueEntryByRawIndex(rawIndex);
     }
+    fieldIndex += typeDefinition->fieldStart;
 
     Il2CppFieldDefaultValue key;
     key.fieldIndex = fieldIndex;
@@ -1292,7 +1318,24 @@ static const Il2CppFieldDefinition* GetFieldDefinitionFromIndex(FieldIndex index
 
 const Il2CppFieldDefinition* il2cpp::vm::GlobalMetadata::GetFieldDefinitionFromTypeDefAndFieldIndex(const Il2CppTypeDefinition* typeDef, FieldIndex index)
 {
+    if (hybridclr::metadata::IsInterpreterType(typeDef))
+    {
+        auto* image = hybridclr::metadata::MetadataModule::GetImage(typeDef);
+        return image->GetFieldDefinitionFromRawIndex(GetInterpreterMemberRawIndex(image,
+            typeDef->fieldStart, index, typeDef->field_count, hybridclr::metadata::TableType::FIELD));
+    }
     return GetFieldDefinitionFromIndex(typeDef->fieldStart + index);
+}
+
+const Il2CppMethodDefinition* il2cpp::vm::GlobalMetadata::GetMethodDefinitionFromTypeDefAndMethodIndex(const Il2CppTypeDefinition* typeDef, MethodIndex index)
+{
+    if (hybridclr::metadata::IsInterpreterType(typeDef))
+    {
+        auto* image = hybridclr::metadata::MetadataModule::GetImage(typeDef);
+        return image->GetMethodDefinitionFromRawIndex(GetInterpreterMemberRawIndex(image,
+            typeDef->methodStart, index, typeDef->method_count, hybridclr::metadata::TableType::METHOD));
+    }
+    return GetMethodDefinitionFromIndex(typeDef->methodStart + index);
 }
 
 Il2CppMetadataFieldInfo il2cpp::vm::GlobalMetadata::GetFieldInfo(const Il2CppClass* klass, TypeFieldIndex fieldIndex)
@@ -1303,7 +1346,7 @@ Il2CppMetadataFieldInfo il2cpp::vm::GlobalMetadata::GetFieldInfo(const Il2CppCla
     IL2CPP_ASSERT(fieldIndex >= 0 && fieldIndex < typeDefinition->field_count);
     IL2CPP_ASSERT(typeDefinition->fieldStart != kFieldIndexInvalid);
 
-    const Il2CppFieldDefinition* fieldDefinition = GetFieldDefinitionFromIndex(typeDefinition->fieldStart + fieldIndex);
+    const Il2CppFieldDefinition* fieldDefinition = GetFieldDefinitionFromTypeDefAndFieldIndex(typeDefinition, fieldIndex);
 
     return {
             GetIl2CppTypeFromIndex(fieldDefinition->typeIndex),
@@ -1320,7 +1363,7 @@ Il2CppMetadataMethodInfo il2cpp::vm::GlobalMetadata::GetMethodInfo(const Il2CppC
     IL2CPP_ASSERT(index >= 0 && index < typeDefinition->method_count);
     IL2CPP_ASSERT(typeDefinition->methodStart != kMethodIndexInvalid);
 
-    const Il2CppMethodDefinition* methodDefinition = GetMethodDefinitionFromIndex(typeDefinition->methodStart + index);
+    const Il2CppMethodDefinition* methodDefinition = GetMethodDefinitionFromTypeDefAndMethodIndex(typeDefinition, index);
 
     return {
             reinterpret_cast<Il2CppMetadataMethodDefinitionHandle>(methodDefinition),
@@ -1513,13 +1556,13 @@ const Il2CppType* il2cpp::vm::GlobalMetadata::GetGenericParameterConstraintFromI
 
     IL2CPP_ASSERT(index >= 0 && index < genericParameter->constraintsCount);
 
-    index = genericParameter->constraintsStart + index;
-
     if (hybridclr::metadata::IsInterpreterIndex(genericParameter->ownerIndex))
     {
         return hybridclr::metadata::MetadataModule::GetImage(hybridclr::metadata::DecodeImageIndex(genericParameter->ownerIndex))
-            ->GetGenericParameterConstraintFromIndex(index);
+            ->GetGenericParameterConstraintFromIndex(genericParameter, index);
     }
+
+    index = genericParameter->constraintsStart + index;
 
     IL2CPP_ASSERT(index >= 0 && static_cast<uint32_t>(index) <= s_GlobalMetadataHeader->genericParameterConstraintsSize / sizeof(TypeIndex));
     const TypeIndex* constraintIndices = (const TypeIndex*)((const char*)s_GlobalMetadata + s_GlobalMetadataHeader->genericParameterConstraintsOffset);

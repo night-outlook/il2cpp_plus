@@ -1030,7 +1030,7 @@ const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByName(const char* n
 
     for (auto assembly : s_cliAssemblies)
     {
-        if (comparer(assembly->aname.name, assemblyName) || comparer(assembly->image->name, assemblyName))
+        if (assembly->token && (comparer(assembly->aname.name, assemblyName) || comparer(assembly->image->name, assemblyName)))
             return assembly;
     }
 
@@ -1053,6 +1053,17 @@ void il2cpp::vm::MetadataCache::RegisterInterpreterAssembly(Il2CppAssembly* asse
     s_cliAssemblies.push_back(assembly);
 }
 
+void il2cpp::vm::MetadataCache::PrepareInterpreterAssemblyRegistration(Il2CppAssembly* assembly)
+{
+    for (Il2CppAssembly* registered : s_cliAssemblies)
+        if (registered == assembly)
+            return;
+    // Both registries can now append without allocation after codec
+    // publication. Caller holds g_MetadataLock, preserving lock order.
+    s_cliAssemblies.reserve(s_cliAssemblies.size() + 1);
+    il2cpp::vm::Assembly::ReserveRegistration(1);
+}
+
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByNameOriginal(const char* name)
 {
@@ -1073,7 +1084,7 @@ const Il2CppAssembly* il2cpp::vm::MetadataCache::GetAssemblyByNamePhysicalInterp
     if (!NameHash(requested, ignored)) return nullptr;
     il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
     for (const Il2CppAssembly* assembly : s_cliAssemblies)
-        if (NameEquals(requested, ViewName(assembly->aname.name))) return assembly;
+        if (assembly->token && NameEquals(requested, ViewName(assembly->aname.name))) return assembly;
     return nullptr;
 }
 
@@ -1099,7 +1110,7 @@ namespace
     {
         const std::vector<Il2CppAssembly*>* assemblies;
         bool (*tryBegin)(void*);
-        void (*publishActive)(void*);
+        bool (*publishActive)(void*);
         void* context;
     };
 
@@ -1109,17 +1120,23 @@ namespace
         return publication->tryBegin(publication->context);
     }
 
-    void PublishShadowRegistries(void* opaque)
+    bool PublishShadowRegistries(void* opaque)
     {
         auto* publication = static_cast<ShadowPublicationContext*>(opaque);
+        const size_t originalSize = s_cliAssemblies.size();
         for (Il2CppAssembly* assembly : *publication->assemblies) s_cliAssemblies.push_back(assembly);
-        publication->publishActive(publication->context);
+        if (!publication->publishActive(publication->context))
+        {
+            s_cliAssemblies.resize_uninitialized(originalSize);
+            return false;
+        }
+        return true;
     }
 }
 
 bool il2cpp::vm::MetadataCache::PublishInterpreterAssembliesBatch(
     const std::vector<Il2CppAssembly*>& assemblies,
-    bool (*tryBegin)(void*), void (*publishActive)(void*), void* context)
+    bool (*tryBegin)(void*), bool (*publishActive)(void*), void* context)
 {
     il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
     s_cliAssemblies.reserve(s_cliAssemblies.size() + assemblies.size());

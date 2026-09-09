@@ -31,6 +31,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cstdio>
+#include <limits>
 
 namespace hybridclr {
     extern const uint32_t g_assemblyShadowStartupCandidateSchemaVersion;
@@ -548,7 +549,9 @@ namespace {
     {
         Transaction* transaction;
         ActiveSnapshot* snapshot;
+        std::vector<uint32_t> imageIndices;
         Candidate* used = nullptr;
+        bool runtimePublicationFailed = false;
     };
 
     bool TryBeginPublication(void* context)
@@ -562,13 +565,20 @@ namespace {
         return true; // Keep the short lock through the release-store below.
     }
 
-    void PublishActive(void* context)
+    bool PublishActive(void* context)
     {
         auto& publication = *static_cast<Publication*>(context);
+        if (!InterpreterAssembly::PublishStagedImagesBatch(publication.imageIndices))
+        {
+            publication.runtimePublicationFailed = true;
+            UnlockUsage();
+            return false;
+        }
         for (const auto& member : publication.transaction->closure)
-            InterpreterAssembly::PublishStagedImage(member.staged);
+            member.staged->published = true;
         s_active.store(publication.snapshot, std::memory_order_release);
         UnlockUsage();
+        return true;
     }
 
     void CopyDetail(char* destination, size_t capacity, const char* source)
@@ -816,28 +826,29 @@ AssemblyShadowError AssemblyShadow::StageAssembly(const uint8_t* dll, size_t dll
 
 AssemblyShadowError AssemblyShadow::ReserveMetadataBudget(const std::vector<uint64_t>& sizes, int32_t profileVersion)
 {
-    using Budget = hybridclr::metadata::InterpreterImageBudget;
+    using Admission = hybridclr::metadata::InterpreterImageAdmission;
+    using IndexRuntime = hybridclr::metadata::InterpreterMetadataIndexRuntime;
     auto& transaction = Current();
     std::lock_guard<std::mutex> lock(transaction.mutex);
     if (s_state.load() != AssemblyShadowState::Staging || !Owner(transaction) ||
         StagedCount(transaction) != 0 || transaction.budgetReserved)
         return WrongState(transaction);
-    if (profileVersion != Budget::kProfileVersion)
+    if (profileVersion != Admission::kProfileVersion)
         return Result(transaction, AssemblyShadowError::CapabilityUnavailable, "Metadata encoding profile is unsupported.");
     if (sizes.size() != transaction.closure.size() || sizes.empty())
         return Result(transaction, AssemblyShadowError::MetadataBudgetMismatch, "One exact DLL size per ordered closure member is required.");
     // Prepare all transaction storage before committing global monotonic cursors.
     std::vector<uint64_t> capturedSizes(sizes);
-    std::vector<uint32_t> indices(sizes.size());
-    const auto report = hybridclr::metadata::InterpreterImage::ReserveImageBudget(sizes);
-    if (!report.IsSuccess())
+    std::vector<uint32_t> indices;
+    IndexRuntime::Error runtimeError = IndexRuntime::Error::None;
+    const auto report = hybridclr::metadata::InterpreterImage::ReserveImageBudget(sizes, indices, runtimeError);
+    if (!report.IsSuccess() || runtimeError != IndexRuntime::Error::None)
     {
         const size_t index = report.firstFailureIndex;
         return Result(transaction, AssemblyShadowError::MetadataCapacityExceeded,
             "Metadata capacity rejected before Stage: " +
             (index < transaction.closure.size() ? transaction.closure[index].candidate->name : std::string("invalid budget state")));
     }
-    for (size_t i = 0; i < indices.size(); ++i) indices[i] = report.allocations[i].imageIndex;
     transaction.budgetSizes.swap(capturedSizes);
     transaction.reservedImageIndices.swap(indices);
     transaction.budgetReserved = true;
@@ -847,47 +858,60 @@ AssemblyShadowError AssemblyShadow::ReserveMetadataBudget(const std::vector<uint
 
 AssemblyShadowError AssemblyShadow::GetMetadataCapacityJson(const std::vector<uint64_t>& sizes, std::string& json)
 {
-    using Budget = hybridclr::metadata::InterpreterImageBudget;
-    uint64_t ordinary, shadow, reserved;
-    const auto before = hybridclr::metadata::InterpreterImage::GetImageBudgetState(ordinary, shadow, reserved);
-    if (!Budget::IsValidState(before))
+    using Admission = hybridclr::metadata::InterpreterImageAdmission;
+    using IndexRuntime = hybridclr::metadata::InterpreterMetadataIndexRuntime;
+    using Codec = IndexRuntime::Codec;
+    Codec::Stats stats{};
+    uint64_t ordinary = 0;
+    uint64_t shadow = 0;
+    uint64_t reserved = 0;
+    if (hybridclr::metadata::InterpreterImage::GetMetadataCapacitySnapshot(
+        stats, ordinary, shadow, reserved) != IndexRuntime::Error::None)
     {
         json.clear();
         return AssemblyShadowError::InternalError;
     }
-    const auto report = Budget::Evaluate(before, sizes);
+    const auto report = Admission::Evaluate(stats.reservationCount,
+        sizes.empty() ? nullptr : sizes.data(), sizes.size());
+    uint64_t aggregateInputBytes = 0;
+    for (uint64_t size : sizes)
+        aggregateInputBytes = size > std::numeric_limits<uint64_t>::max() - aggregateInputBytes
+            ? std::numeric_limits<uint64_t>::max() : aggregateInputBytes + size;
     std::ostringstream out;
-    auto cursors = [&](const Budget::State& state) {
-        out << '[';
-        for (int kind = 0; kind != 4; ++kind) { if (kind) out << ','; out << state.cursors[kind]; }
-        out << ']';
-    };
-    out << "{\"schemaVersion\":1,\"enabled\":true,\"profileVersion\":" << Budget::kProfileVersion
-        << ",\"indexBits\":" << Budget::kMetadataIndexBits << ",\"kindBits\":" << Budget::kMetadataKindBits << ",\"cursors\":";
-    cursors(before);
-    out << ",\"remainingSlots\":[";
-    for (int kind = 0; kind != 4; ++kind)
+    const char* failure = "None";
+    switch (report.error)
     {
-        if (kind) out << ',';
-        const uint32_t terminal = kind == 3 ? Budget::kKind3ReservedImageIndex : Budget::kMaxMetadataImageIndexWithoutKind;
-        out << (terminal - before.cursors[kind]) / Budget::CursorStride(kind);
+    case Admission::Error::None: break;
+    case Admission::Error::EmptyDll: failure = "EmptyDll"; break;
+    case Admission::Error::DllTooLarge: failure = "DllTooLarge"; break;
+    case Admission::Error::ImageLimit: failure = "ImageLimit"; break;
+    case Admission::Error::InvalidInput: failure = "InvalidInput"; break;
+    default: failure = "InvalidState"; break;
     }
-    out << "],\"requiredImages\":" << sizes.size() << ",\"acceptedImages\":" << report.allocations.size()
+    out << "{\"schemaVersion\":2,\"enabled\":true,\"profileVersion\":" << Admission::kProfileVersion
+        << ",\"maximumImageCount\":" << Admission::kMaximumImages
+        << ",\"maximumDllBytes\":" << Admission::kMaximumDllBytes
+        << ",\"usablePageCapacity\":" << Codec::kUsablePageCount
+        << ",\"chargedPageCeiling\":" << Codec::kMaxChargedPages
+        << ",\"minimumFreePageMargin\":" << (Codec::kUsablePageCount - Codec::kMaxChargedPages)
+        << ",\"reservedPages\":" << stats.reservedPages
+        << ",\"mappedPages\":" << stats.mappedPages
+        << ",\"lifetimeReservedImageCount\":" << stats.reservationCount
+        << ",\"remainingImageCount\":" << (Admission::kMaximumImages - stats.reservationCount)
+        << ",\"requiredImages\":" << sizes.size()
+        // Admission is all-or-nothing. firstFailingIndex identifies the
+        // rejected input, but no prefix is accepted when any member fails.
+        << ",\"acceptedImages\":" << (report.IsSuccess() ? sizes.size() : 0)
         << ",\"firstFailingIndex\":" << (report.IsSuccess() ? -1 : static_cast<int64_t>(report.firstFailureIndex))
-        << ",\"firstFailingSize\":" << report.firstFailureSize
-        << ",\"failureReason\":" << AssemblyShadowDiagnostics::Quote(report.IsSuccess() ? "None" :
-            (report.firstFailure == Budget::Error::Exhausted ? "Exhausted" : "InvalidSizeOrProfileState"))
-        << ",\"fits\":" << (report.IsSuccess() ? "true" : "false") << ",\"allocations\":[";
-    for (size_t i = 0; i < report.allocations.size(); ++i)
-    {
-        if (i) out << ',';
-        out << "{\"imageIndex\":" << report.allocations[i].imageIndex << ",\"kind\":" << report.allocations[i].kind
-            << ",\"dllSize\":" << sizes[i] << '}';
-    }
-    out << "],\"finalCursors\":";
-    cursors(report.finalState);
-    out << ",\"ordinaryAllocatedCount\":" << ordinary << ",\"shadowAllocatedCount\":" << shadow
-        << ",\"reservedImageCount\":" << reserved << '}';
+        << ",\"firstFailingSize\":" << (report.IsSuccess() || report.firstFailureIndex >= sizes.size() ? 0 : sizes[report.firstFailureIndex])
+        << ",\"failureReason\":" << AssemblyShadowDiagnostics::Quote(failure)
+        << ",\"fitsPreliminary\":" << (report.IsSuccess() ? "true" : "false")
+        << ",\"runtimeFinalizationRequired\":true"
+        << ",\"aggregateInputDllBytes\":" << aggregateInputBytes
+        << ",\"aggregateInputDllBytesInformational\":true"
+        << ",\"ordinaryAllocatedCount\":" << ordinary
+        << ",\"shadowAllocatedCount\":" << shadow
+        << ",\"reservedShadowImageCount\":" << reserved << '}';
     json = out.str();
     return AssemblyShadowError::Success;
 }
@@ -1047,12 +1071,18 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
     Publication publication;
     publication.transaction = &transaction;
     publication.snapshot = snapshot.get();
+    publication.imageIndices.reserve(transaction.closure.size());
+    for (const auto& member : transaction.closure)
+        publication.imageIndices.push_back(member.staged->interpreterImage
+            ? member.staged->interpreterImage->GetIndex() : 0);
     s_state.store(AssemblyShadowState::Committing, std::memory_order_release);
     if (!MetadataCache::PublishInterpreterAssembliesBatch(assemblies, TryBeginPublication, PublishActive, &publication))
     {
         s_state.store(AssemblyShadowState::Validated, std::memory_order_release);
-        return Result(transaction, AssemblyShadowError::BaselineAlreadyUsed,
-            publication.used ? publication.used->name : "Candidate use changed before publication.");
+        return publication.runtimePublicationFailed
+            ? Result(transaction, AssemblyShadowError::InternalError, "Sparse metadata publication failed before activation.")
+            : Result(transaction, AssemblyShadowError::BaselineAlreadyUsed,
+                publication.used ? publication.used->name : "Candidate use changed before publication.");
     }
     snapshot.release(); // Immutable active mapping is process-lifetime.
     Event(transaction, "active-published");
@@ -1111,6 +1141,30 @@ AssemblyShadowError AssemblyShadow::AbortTransaction()
     AssemblyShadowState state = s_state.load();
     if ((state != AssemblyShadowState::Staging && state != AssemblyShadowState::Staged && state != AssemblyShadowState::Validated) || !Owner(transaction))
         return WrongState(transaction);
+    if (transaction.budgetReserved)
+    {
+        for (uint32_t imageIndex : transaction.reservedImageIndices)
+            if (hybridclr::metadata::InterpreterImage::AbortImage(imageIndex) !=
+                hybridclr::metadata::InterpreterMetadataIndexRuntime::Error::None)
+            {
+                s_state.store(AssemblyShadowState::Failed, std::memory_order_release);
+                return Result(transaction, AssemblyShadowError::InternalError,
+                    "Failed to seal a reserved sparse metadata identity during abort.");
+            }
+    }
+    else
+    {
+        for (const auto& member : transaction.closure)
+            if (member.staged && member.staged->interpreterImage &&
+                hybridclr::metadata::InterpreterImage::AbortImage(
+                member.staged->interpreterImage->GetIndex()) !=
+                hybridclr::metadata::InterpreterMetadataIndexRuntime::Error::None)
+            {
+                s_state.store(AssemblyShadowState::Failed, std::memory_order_release);
+                return Result(transaction, AssemblyShadowError::InternalError,
+                    "Failed to seal a staged sparse metadata identity during abort.");
+            }
+    }
     // Metadata does not have a proven destructor. Retain privately and seal this
     // process; never reset image indices or advertise this as an unload/retry.
     s_state.store(AssemblyShadowState::Aborted, std::memory_order_release);
@@ -1769,7 +1823,7 @@ AssemblyShadowError AssemblyShadow::ConfigureCandidates(const char*, const std::
 AssemblyShadowError AssemblyShadow::BeginTransaction(const char*, const char*, const std::vector<std::string>&, int32_t) { return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::StageAssembly(const uint8_t*, size_t, const uint8_t*, size_t) { return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::ReserveMetadataBudget(const std::vector<uint64_t>&, int32_t) { return AssemblyShadowError::FeatureDisabled; }
-AssemblyShadowError AssemblyShadow::GetMetadataCapacityJson(const std::vector<uint64_t>&, std::string& json) { json = "{\"schemaVersion\":1,\"enabled\":false,\"profileVersion\":0}"; return AssemblyShadowError::FeatureDisabled; }
+AssemblyShadowError AssemblyShadow::GetMetadataCapacityJson(const std::vector<uint64_t>&, std::string& json) { json = "{\"schemaVersion\":2,\"enabled\":false,\"profileVersion\":0}"; return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::GetRecoveryInfoJson(std::string& json) { json = "{\"schemaVersion\":1,\"enabled\":false,\"capabilityVersion\":0}"; return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::ValidateTransaction() { return AssemblyShadowError::FeatureDisabled; }
 AssemblyShadowError AssemblyShadow::CommitTransaction() { return AssemblyShadowError::FeatureDisabled; }

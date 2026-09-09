@@ -2424,6 +2424,9 @@ namespace vm
 
     MonoGenericParameterInfo* Class::GetOrCreateMonoGenericParameterInfo(Il2CppMetadataGenericParameterHandle parameterHandle)
     {
+        // Keep the reflection cache lookup, lazy constraint resolution and
+        // publication in one critical section, including concurrent first use.
+        il2cpp::os::FastAutoLock lock(&g_MetadataLock);
         Il2CppGenericParameterInfo paramInfo = il2cpp::vm::MetadataCache::GetGenericParameterInfo(parameterHandle);
 
         MonoGenericParameterInfo *monoParam = (MonoGenericParameterInfo*)il2cpp::vm::Reflection::GetMonoGenericParameterInfo(parameterHandle);

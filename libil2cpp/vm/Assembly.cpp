@@ -100,7 +100,7 @@ namespace vm
         AssemblyVector& assemblies = s_Assemblies;
         for (AssemblyVector::const_reverse_iterator assembly = assemblies.rbegin(); assembly != assemblies.rend(); ++assembly)
         {
-            if (strcmp((*assembly)->aname.name, name) == 0)
+            if ((*assembly)->token && strcmp((*assembly)->aname.name, name) == 0)
                 return *assembly;
         }
 
@@ -115,6 +115,7 @@ namespace vm
         const Il2CppAssembly* result = nullptr;
         for (const Il2CppAssembly* assembly : s_Assemblies)
         {
+            if (!assembly->token) continue;
             bool interpreter = hybridclr::metadata::IsInterpreterImage(assembly->image);
             if ((preference == PhysicalAssemblyPreference::AotOnly && interpreter) ||
                 (preference == PhysicalAssemblyPreference::InterpreterOnly && !interpreter)) continue;
@@ -232,6 +233,12 @@ namespace vm
         ++s_assemblyVersion;
     }
 
+    void Assembly::ReserveRegistration(size_t additionalCount)
+    {
+        os::FastAutoLock lock(&s_assemblyLock);
+        s_Assemblies.reserve(s_Assemblies.size() + additionalCount);
+    }
+
     void Assembly::InvalidateAssemblyList()
     {
         os::FastAutoLock lock(&s_assemblyLock);
@@ -239,17 +246,37 @@ namespace vm
         ++s_assemblyVersion;
     }
 
+    bool Assembly::PublishInterpreterPlaceholder(void (*commit)(void*),
+        bool (*publish)(void*), void (*rollback)(void*), void* context)
+    {
+        if (!commit || !publish || !rollback) return false;
+        os::FastAutoLock lock(&s_assemblyLock);
+        commit(context);
+        if (!publish(context))
+        {
+            rollback(context);
+            return false;
+        }
+        ++s_assemblyVersion;
+        return true;
+    }
+
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
     bool Assembly::PublishShadowBatch(const AssemblyVector& assemblies,
-        bool (*tryBegin)(void*), void (*publish)(void*), void* context)
+        bool (*tryBegin)(void*), bool (*publish)(void*), void* context)
     {
         os::FastAutoLock lock(&s_assemblyLock);
         s_Assemblies.reserve(s_Assemblies.size() + assemblies.size());
         if (!tryBegin(context)) return false;
         // From here to publish there are only reserved pointer appends/stores.
         // A reader cannot observe half a batch or a batch with the old mapping.
+        const size_t originalSize = s_Assemblies.size();
         for (const Il2CppAssembly* assembly : assemblies) s_Assemblies.push_back(assembly);
-        publish(context);
+        if (!publish(context))
+        {
+            s_Assemblies.resize(originalSize);
+            return false;
+        }
         ++s_assemblyVersion;
         return true;
     }

@@ -30,6 +30,12 @@ namespace vm
         static const Il2CppAssembly* GetLoadedAssembly(const char* name);
         static const Il2CppAssembly* Load(const char* name);
         static void Register(const Il2CppAssembly* assembly);
+        static void ReserveRegistration(size_t additionalCount);
+        // Caller holds g_MetadataLock. Callbacks must not throw, allocate, or
+        // enter managed code. The assembly registry lock makes the placeholder
+        // mutation and codec activation one reader-visible commit.
+        static bool PublishInterpreterPlaceholder(void (*commit)(void*),
+            bool (*publish)(void*), void (*rollback)(void*), void* context);
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
         static void GetAllPhysicalAssemblies(AssemblyVector& assemblies);
         static const Il2CppAssembly* GetLoadedAssemblyPhysical(const char* name,
@@ -39,7 +45,7 @@ namespace vm
         // nonthrowing and must not allocate or enter managed code. Storage is
         // reserved before tryBegin; publication and version bump share one lock.
         static bool PublishShadowBatch(const AssemblyVector& assemblies,
-            bool (*tryBegin)(void*), void (*publish)(void*), void* context);
+            bool (*tryBegin)(void*), bool (*publish)(void*), void* context);
         static uint64_t CaptureShadowEnumeration(AssemblyVector& assemblies);
 #endif
         static void InvalidateAssemblyList();

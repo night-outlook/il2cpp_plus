@@ -206,10 +206,11 @@ namespace vm
         static Il2CppMetadataTypeHandle GetTypeHandleFromIndex(const Il2CppImage* image, TypeDefinitionIndex typeIndex);
 
         static void RegisterInterpreterAssembly(Il2CppAssembly* assembly);
+        static void PrepareInterpreterAssemblyRegistration(Il2CppAssembly* assembly);
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
         static const Il2CppAssembly* GetAotAssemblyByNamePhysical(const char* name);
         static bool PublishInterpreterAssembliesBatch(const std::vector<Il2CppAssembly*>& assemblies,
-            bool (*tryBegin)(void*), void (*publishActive)(void*), void* context);
+            bool (*tryBegin)(void*), bool (*publishActive)(void*), void* context);
 #endif
         static const Il2CppAssembly* LoadAssemblyFromBytes(const char* assemblyBytes, size_t length, const char* rawSymbolStoreBytes, size_t rawSymbolStoreLength);
         static const Il2CppGenericMethod* FindGenericMethod(std::function<bool(const Il2CppGenericMethod*)> predic);
