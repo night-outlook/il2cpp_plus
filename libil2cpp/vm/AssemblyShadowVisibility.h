@@ -17,7 +17,9 @@ class AssemblyShadowVisibility
 public:
     // Called by the transaction owner after skeleton creation, before any
     // runtime metadata can reach a shared class/type cache. Retained on Abort.
-    static void RegisterPrivateImage(const Il2CppImage* image);
+    // imageId comes from the transaction-owned InterpreterImage, not its token.
+    // False rejects mismatched or rebound identity without registering it.
+    static bool RegisterPrivateImage(const Il2CppImage* image, uint32_t imageId);
 
     // Raw metadata inspection only: no allocation, locks, lazy materialization,
     // or private-image lookup through MetadataModule. The generation overloads

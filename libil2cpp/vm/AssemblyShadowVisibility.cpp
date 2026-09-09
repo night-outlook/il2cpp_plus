@@ -8,6 +8,7 @@
 #include "il2cpp-class-internals.h"
 #include "os/Mutex.h"
 #include "hybridclr/metadata/MetadataUtil.h"
+#include "hybridclr/metadata/InterpreterMetadataIndexRuntime.h"
 
 #include <atomic>
 
@@ -48,10 +49,9 @@ namespace
 
         bool ContainsEncodedIndex(int32_t index) const
         {
-            const uint32_t imageIndex = hybridclr::metadata::DecodeImageIndex(index);
-            if (imageIndex == 0) return false;
             for (const PrivateImage* entry = images; entry; entry = entry->previous)
-                if (entry->index == imageIndex) return Matches(entry);
+                if (hybridclr::metadata::InterpreterMetadataIndexRuntime::TokenBelongsToImageForVisibility(
+                    index, entry->index)) return Matches(entry);
             return false;
         }
     };
@@ -143,18 +143,22 @@ namespace
     }
 }
 
-void AssemblyShadowVisibility::RegisterPrivateImage(const Il2CppImage* image)
+bool AssemblyShadowVisibility::RegisterPrivateImage(const Il2CppImage* image, uint32_t index)
 {
-    IL2CPP_ASSERT(image && image->assembly && hybridclr::metadata::IsInterpreterImage(image));
+    // The transaction supplies its retained InterpreterImage identity. A token
+    // can confirm provenance, but cannot authorize private metadata decoding.
+    if (!image || !image->assembly || !hybridclr::metadata::IsInterpreterImage(image) ||
+        !hybridclr::metadata::InterpreterMetadataIndexRuntime::TokenBelongsToImageForVisibility(image->token, index))
+        return false;
     const PrivateImage* previous = s_privateImages.load(std::memory_order_acquire);
-    const uint32_t index = hybridclr::metadata::DecodeImageIndex(image->token);
     for (const PrivateImage* entry = previous; entry; entry = entry->previous)
     {
-        if (entry->image == image) return;
-        IL2CPP_ASSERT(entry->index != index);
+        if (entry->image == image) return entry->index == index;
+        if (entry->index == index) return false;
     }
     const PrivateImage* entry = new PrivateImage{ image, index, previous };
     s_privateImages.store(entry, std::memory_order_release);
+    return true;
 }
 
 bool AssemblyShadowVisibility::IsClassVisible(const Il2CppClass* klass)

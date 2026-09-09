@@ -817,7 +817,11 @@ AssemblyShadowError AssemblyShadow::StageAssembly(const uint8_t* dll, size_t dll
     }
     // Register private identity before runtime metadata can populate shared
     // generic/array caches. Public class walkers must not expose those entries.
-    AssemblyShadowVisibility::RegisterPrivateImage(staged->image);
+    if (!AssemblyShadowVisibility::RegisterPrivateImage(staged->image, staged->interpreterImage->GetIndex()))
+    {
+        s_state.store(AssemblyShadowState::Failed, std::memory_order_release);
+        return Result(transaction, AssemblyShadowError::InternalError, "Private image registration identity mismatch.");
+    }
     member.staged = staged;
     Event(transaction, "skeleton-created", candidate->name);
     if (StagedCount(transaction) == transaction.closure.size()) s_state.store(AssemblyShadowState::Staged, std::memory_order_release);
