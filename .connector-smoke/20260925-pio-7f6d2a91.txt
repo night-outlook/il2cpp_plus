@@ -1,0 +1,9 @@
+GitHub Connector write-path smoke test
+
+Repository: night-outlook/il2cpp_plus
+Base branch: codex/assembly-shadow-r01b-h1
+Base commit: 6be7f38bec2fa4677d24efc1a4a1294240789933
+Disposable branch: codex/connector-smoke-20260925-pio-7f6d2a91
+Authorization: PrimaryImplementationOwner.txt mandatory Connector write smoke test.
+Scope: transport verification only; not product acceptance or a Local Validation handoff.
+Do not merge this disposable branch. No candidate source, evidence, or handoff file is modified.
