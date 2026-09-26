@@ -2,6 +2,7 @@
 #include "AssemblyShadowDiagnostics.h"
 #include "AssemblyShadowRecovery.h"
 #include "AssemblyShadowR02Diagnostics.h"
+#include "AssemblyShadowObservationMemo.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowName.h"
@@ -178,6 +179,12 @@ namespace {
     {
         if (assembly_shadow_r02::ObservationCounters::Level < 2) return;
         if (!klass || !klass->image || !klass->image->assembly) return;
+        if (assembly_shadow_r02::ObservationMemo::Contains(klass))
+        {
+            assembly_shadow_r02::ObservationCounters::Add(
+                assembly_shadow_r02::Metric::ObservationMemoHits, 1);
+            return;
+        }
         const CandidateRegistry* candidates = s_candidates.load(std::memory_order_acquire);
         if (!candidates) return; // Startup execution policy is a separate proof.
         const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
@@ -188,12 +195,17 @@ namespace {
         for (size_t probe = 0; probe < s_executionClasses.size(); ++probe)
         {
             Il2CppClass*& entry = s_executionClasses[slot];
-            if (entry == klass) return;
+            if (entry == klass)
+            {
+                assembly_shadow_r02::ObservationMemo::Remember(klass);
+                return;
+            }
             if (!entry)
             {
                 if (s_executionClassCount == kMaximumExecutionClasses) break;
                 entry = klass;
                 ++s_executionClassCount;
+                assembly_shadow_r02::ObservationMemo::Remember(klass);
                 return;
             }
             slot = (slot + 1) % s_executionClasses.size();

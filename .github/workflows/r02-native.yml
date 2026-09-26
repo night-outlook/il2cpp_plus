@@ -7,7 +7,7 @@ on:
       - 'tools/r02/**'
       - 'libil2cpp/vm/AssemblyShadow*'
 permissions:
-  contents: write
+  contents: read
 jobs:
   primary:
     runs-on: ubuntu-24.04
@@ -17,9 +17,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify committed integration before any preparation
-        id: source
-        continue-on-error: true
+      - name: Verify immutable committed integration
         run: |
           mkdir -p "$RUNNER_TEMP/r02-primary"
           python3 tools/r02/finalize_sources.py --verify --output "$RUNNER_TEMP/r02-primary/source-verified.json"
@@ -29,20 +27,6 @@ jobs:
         run: |
           python3 tools/r02/run_tests.py --output "$RUNNER_TEMP/r02-primary/native" --sanitizers
           python3 tools/r02/run_revision_tests.py --output "$RUNNER_TEMP/r02-primary/revision" --sanitizers
-      - name: Prepare immutable source objects only when committed integration differs
-        if: success() && steps.source.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          R02_RESULTS: ${{ runner.temp }}/r02-primary
-        run: |
-          python3 tools/r02/finalize_sources.py --prepare --output "$RUNNER_TEMP/r02-primary/prepared.json"
-          git diff --check
-          git diff > "$RUNNER_TEMP/r02-primary/prepared-source.diff"
-          python3 tools/r02/prepare_git_objects.py
-      - name: Committed-source acceptance boundary
-        if: always()
-        run: |
-          test '${{ steps.source.outcome }}' = 'success'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
