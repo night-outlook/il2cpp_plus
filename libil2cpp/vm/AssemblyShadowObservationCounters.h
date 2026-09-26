@@ -27,6 +27,8 @@ enum class Metric : size_t
     AdmissionHits, AdmissionMisses, AdmissionBuilds, AdmissionRejects,
     AdmissionEntries, AdmissionRetainedBytes, AdmissionUnready, BaselineChecks,
     FieldWorkspaces, InterfaceWorkspaces, LayoutChecks,
+    CounterpartHits, CounterpartMisses, CounterpartEntries, CounterpartAbsent,
+    CacheFixedBytes, CounterpartRetainedBytes,
     Count
 };
 
@@ -52,6 +54,7 @@ private:
         ThreadSlot slots[kThreadCapacity];
         std::atomic<uint32_t> claimed{0};
         std::atomic<uint64_t> droppedThreads{0};
+        std::atomic<bool> saturated{false};
     };
 
     static State& Data()
@@ -92,7 +95,9 @@ public:
         if (slot >= kThreadCapacity) return 0;
         auto& value = Data().slots[slot].values[static_cast<size_t>(metric)];
         const uint64_t old = value.load(std::memory_order_relaxed);
-        const uint64_t next = amount > UINT64_MAX - old ? UINT64_MAX : old + amount;
+        const bool overflow = amount > UINT64_MAX - old;
+        const uint64_t next = overflow ? UINT64_MAX : old + amount;
+        if (overflow) Data().saturated.store(true, std::memory_order_relaxed);
         // A TLS slot has exactly one writer. Atomic stores let diagnostic
         // readers sample safely without contended read/modify/write traffic.
         value.store(next, order == std::memory_order_relaxed ?
@@ -112,7 +117,12 @@ public:
         {
             uint64_t part = state.slots[i].values[static_cast<size_t>(metric)].load(
                 order == std::memory_order_relaxed ? std::memory_order_relaxed : std::memory_order_acquire);
-            total = part > UINT64_MAX - total ? UINT64_MAX : total + part;
+            if (part > UINT64_MAX - total)
+            {
+                total = UINT64_MAX;
+                state.saturated.store(true, std::memory_order_relaxed);
+            }
+            else total += part;
         }
         return total;
     }
@@ -121,10 +131,15 @@ public:
     {
         return Level == 0 ? 0 : Data().droppedThreads.load(std::memory_order_relaxed);
     }
+    static bool Saturated() noexcept
+    {
+        return Level != 0 && Data().saturated.load(std::memory_order_relaxed);
+    }
     static size_t RetainedBytes() noexcept { return Level == 0 ? 0 : sizeof(State); }
     static const char* Coverage() noexcept
     {
-        return Level == 0 ? "Disabled" : DroppedThreads() ? "Truncated" : "BoundedComplete";
+        return Level == 0 ? "Disabled" : DroppedThreads() ? "Truncated" :
+            Saturated() ? "Saturated" : "BoundedComplete";
     }
 };
 

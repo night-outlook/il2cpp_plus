@@ -1,0 +1,43 @@
+name: R02 Primary source and native checks
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - '.github/workflows/r02-native.yml'
+      - 'tools/r02/**'
+      - 'libil2cpp/vm/AssemblyShadow*'
+permissions:
+  contents: write
+jobs:
+  primary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reproduce exact source edits
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/r02-primary"
+          python3 tools/r02/source_edits.py --output "$RUNNER_TEMP/r02-primary/source-edits.json"
+          python3 tools/r02/source_edits.py --verify --output "$RUNNER_TEMP/r02-primary/source-verified.json"
+          git diff --check
+          git diff --stat
+          git diff > "$RUNNER_TEMP/r02-primary/prepared-source.diff"
+      - name: Production header tests
+        shell: bash
+        run: python3 tools/r02/run_tests.py --output "$RUNNER_TEMP/r02-primary/native" --sanitizers
+      - name: Prepare immutable Git objects or verify committed source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          R02_RESULTS: ${{ runner.temp }}/r02-primary
+        run: python3 tools/r02/prepare_git_objects.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: r02-native-${{ github.sha }}
+          path: ${{ runner.temp }}/r02-primary
+          retention-days: 14
+          if-no-files-found: error
