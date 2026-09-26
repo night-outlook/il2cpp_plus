@@ -265,7 +265,7 @@ def assembly(text: str) -> str:
             '    if (count) Assembly::CaptureShadowEnumeration(assemblies);')
         return once(body, '    output << "]}";',
             '    output << "]";\n    assembly_shadow_r02::AppendDiagnostics(output);\n    output << "}";')
-    text = replace_function(text, 'AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(', diagnostics)
+    text = replace_function(text, 'AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& json)\n{\n    json.clear();\n    std::array<', diagnostics)
     return text
 
 
