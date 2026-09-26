@@ -63,6 +63,16 @@ class AllocationProofCache
 {
     using Certificate = AllocationCertificate<Class>;
     AdmissionCache<Certificate> cache_;
+    static void Propagate(const Certificate& value)
+    {
+        Certificate* parent = AllocationProofTrace<Class>::Current();
+        if (!parent || parent == &value) return;
+        parent->complete = parent->complete && value.complete;
+        parent->involvesShadow = parent->involvesShadow || value.involvesShadow;
+        for (const auto& dependency : value.dependencies)
+            parent->Observe(dependency.baseline, dependency.active, dependency.structural);
+    }
+
     struct BuildFrame
     {
         const AllocationProofCache* owner;
@@ -102,6 +112,7 @@ public:
         {
             validate(hit);
             ObservationCounters::Add(Metric::AdmissionHits, 1);
+            Propagate(*hit);
             return hit->target;
         }
         ObservationCounters::Add(Metric::AdmissionMisses, 1);
@@ -113,6 +124,7 @@ public:
         {
             validate(hit);
             ObservationCounters::Add(Metric::AdmissionHits, 1);
+            Propagate(*hit);
             return hit->target;
         }
         BuildScope scope(this, key);
@@ -135,16 +147,24 @@ public:
             // Preserve the uncached path's result when layout is not final;
             // absence of readiness is never a positive reusable certificate.
             ObservationCounters::Add(Metric::AdmissionUnready, 1);
+            Propagate(value);
             return value.target;
         }
         const size_t bytes = cache_.EntryBytes() + value.DynamicBytes();
         bool inserted = false;
-        const Certificate* result = cache_.Publish(key, std::move(value), inserted);
+        const Certificate* result;
+        try { result = cache_.Publish(key, std::move(value), inserted); }
+        catch (...)
+        {
+            ObservationCounters::Add(Metric::AdmissionRejects, 1);
+            throw;
+        }
         if (inserted)
         {
             ObservationCounters::Add(Metric::AdmissionEntries, 1);
             ObservationCounters::Add(Metric::AdmissionRetainedBytes, bytes);
         }
+        Propagate(*result);
         return result->target;
     }
 

@@ -1,5 +1,6 @@
 #pragma once
 #include "AssemblyShadowObservationCounters.h"
+#include "AssemblyShadowObservationMemo.h"
 #include <ostream>
 
 namespace il2cpp { namespace vm { namespace assembly_shadow_r02 {
@@ -30,17 +31,20 @@ inline void AppendDiagnostics(std::ostream& output)
         {"cacheFixedBytes", Metric::CacheFixedBytes},
         {"counterpartRetainedBytes", Metric::CounterpartRetainedBytes},
         {"genericContextChecks", Metric::GenericContextChecks},
-        {"observationLockContentions", Metric::ObservationLockContentions}
+        {"observationLockContentions", Metric::ObservationLockContentions},
+        {"observationMemoHits", Metric::ObservationMemoHits}
     };
     for (const auto& field : fields)
         output << ",\"" << field.name << "\":" << ObservationCounters::Read(field.metric);
-    output << ",\"counterStorageBytes\":" << ObservationCounters::RetainedBytes()
+    output << ",\"observationMemoTlsBytesPerThread\":" << ObservationMemo::TlsBytesPerThread()
+        << ",\"counterStorageBytes\":" << ObservationCounters::RetainedBytes()
         << ",\"counterThreadCapacity\":" << ObservationCounters::kThreadCapacity
         << ",\"droppedCounterThreads\":" << ObservationCounters::DroppedThreads()
         << ",\"counterSaturated\":" << (ObservationCounters::Saturated() ? "true" : "false")
         << ",\"counterCoverage\":\"" << ObservationCounters::Coverage() << "\""
         << ",\"classesCoverage\":\"" << (ObservationCounters::Level < 2 ? "Disabled" :
-            ObservationCounters::Read(Metric::DroppedClasses) ? "Truncated" : "BoundedComplete") << "\""
+            ObservationCounters::DroppedThreads() || ObservationCounters::Read(Metric::DroppedClasses) ? "Truncated" :
+            ObservationCounters::Saturated() ? "Saturated" : "BoundedComplete") << "\""
         << ",\"memoryAccountingAvailable\":" << (ObservationCounters::Level != 0 &&
             !ObservationCounters::DroppedThreads() && !ObservationCounters::Saturated() ? "true" : "false")
         << ",\"memoryAccountingScope\":\"R02StructuresExcludingAllocatorOverhead\"}";

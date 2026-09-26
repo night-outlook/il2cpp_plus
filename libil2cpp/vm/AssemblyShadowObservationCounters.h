@@ -28,7 +28,7 @@ enum class Metric : size_t
     AdmissionEntries, AdmissionRetainedBytes, AdmissionUnready, BaselineChecks,
     FieldWorkspaces, InterfaceWorkspaces, LayoutChecks,
     CounterpartHits, CounterpartMisses, CounterpartEntries, CounterpartAbsent,
-    CacheFixedBytes, CounterpartRetainedBytes,
+    CacheFixedBytes, CounterpartRetainedBytes, ObservationMemoHits,
     Count
 };
 
