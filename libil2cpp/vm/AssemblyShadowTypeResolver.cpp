@@ -2,6 +2,10 @@
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadow.h"
 #include "AssemblyShadowDiagnostics.h"
+#include "AssemblyShadowAllocationProof.h"
+#include "AssemblyShadowR02Diagnostics.h"
+#include "vm/MetadataLock.h"
+#include "os/Atomic.h"
 #include "vm/Class.h"
 #include "vm/GenericClass.h"
 #include "vm/GlobalMetadata.h"
@@ -34,13 +38,17 @@ struct ResolverState
     std::unordered_map<const MethodInfo*, const MethodInfo*> reflectionMethods;
     std::unordered_map<const Il2CppType*, const Il2CppType*> knownBaselines;
     std::unordered_map<std::string, std::unique_ptr<OwnedType>> types;
-    std::atomic<uint64_t> hits{0}, misses{0}, rebuilds{0}, allocations{0}, failures{0};
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::DefinitionHits> hits;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::DefinitionMisses> misses;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::CompositeRebuilds> rebuilds;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::AllocationRemaps> allocations;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::GuardFailures> failures;
 };
 ResolverState& State() { static ResolverState* state = new ResolverState(); return *state; }
-void Increment(std::atomic<uint64_t>& counter)
+template<assembly_shadow_r02::Metric Id>
+void Increment(assembly_shadow_r02::ObservationCounter<Id>& counter)
 {
-    uint64_t value = counter.load(std::memory_order_relaxed);
-    while (value != UINT64_MAX && !counter.compare_exchange_weak(value, value + 1, std::memory_order_relaxed)) {}
+    counter.fetch_add(1, std::memory_order_relaxed);
 }
 void Fail(const char* label, const std::string& detail, AssemblyShadowError code = AssemblyShadowError::ReferenceResolutionFailed)
 {
@@ -70,6 +78,7 @@ void MatchDefinition(const Il2CppClass* baseline, const Il2CppClass* active, con
 }
 Il2CppClass* FindDefinition(const Il2CppImage* image, const ShadowTypeKey& key, bool optional = false)
 {
+    assembly_shadow_r02::ObservationCounters::Add(assembly_shadow_r02::Metric::DefinitionSearches, 1);
     Il2CppClass* result = nullptr;
     for (size_t depth = 0; depth < key.declarations.size(); ++depth)
     {
@@ -85,6 +94,7 @@ Il2CppClass* FindDefinition(const Il2CppImage* image, const ShadowTypeKey& key, 
         {
             for (uint32_t index = 0; index < image->typeCount; ++index)
             {
+                assembly_shadow_r02::ObservationCounters::Add(assembly_shadow_r02::Metric::DefinitionRows, 1);
                 auto handle = MetadataCache::GetAssemblyTypeHandle(image, index);
                 if (!MetadataCache::TypeIsNested(handle)) consider(handle);
             }
@@ -92,7 +102,11 @@ Il2CppClass* FindDefinition(const Il2CppImage* image, const ShadowTypeKey& key, 
         else
         {
             void* iterator = nullptr;
-            while (auto handle = MetadataCache::GetNestedTypes(result->typeMetadataHandle, &iterator)) consider(handle);
+            while (auto handle = MetadataCache::GetNestedTypes(result->typeMetadataHandle, &iterator))
+            {
+                assembly_shadow_r02::ObservationCounters::Add(assembly_shadow_r02::Metric::DefinitionRows, 1);
+                consider(handle);
+            }
         }
         if (!found)
         {
@@ -363,6 +377,7 @@ struct InstanceFieldLayout
 
 std::vector<InstanceFieldLayout> InstanceFieldLayouts(const Il2CppClass* klass)
 {
+    assembly_shadow_r02::ObservationCounters::Add(assembly_shadow_r02::Metric::FieldWorkspaces, 1);
     std::vector<InstanceFieldLayout> fields;
     for (uint32_t index = 0; index < klass->field_count; ++index)
     {
@@ -389,6 +404,7 @@ std::vector<std::string> StructuralInstanceFields(const Il2CppClass* klass)
 
 std::vector<std::string> Interfaces(const Il2CppClass* klass)
 {
+    assembly_shadow_r02::ObservationCounters::Add(assembly_shadow_r02::Metric::InterfaceWorkspaces, 1);
     std::vector<std::string> interfaces;
     for (uint16_t index = 0; index < klass->interfaces_count; ++index)
     {
@@ -447,6 +463,12 @@ void CheckLayout(Il2CppClass* source, Il2CppClass* target, const char* site, uin
 {
     if (source == target) return;
     if (!source || !target || depth > kMaximumDepth) Fail("ShadowLayoutMismatch", site, AssemblyShadowError::ResourceAbiMismatch);
+    assembly_shadow_r02::ObservationCounters::Add(assembly_shadow_r02::Metric::LayoutChecks, 1);
+    if (auto* trace = assembly_shadow_r02::AllocationProofTrace<Il2CppClass>::Current())
+    {
+        trace->Observe(source, target, structural);
+        if (!structural && (!source->size_inited || !target->size_inited)) trace->complete = false;
+    }
     const std::string key = AssemblyShadowTypeKey::Format(&source->byval_arg) + " Site=" + site;
     MatchDefinition(source, target, key);
     if (source->initialized || source->cctor_started || source->is_vtable_initialized)
@@ -490,6 +512,43 @@ void CheckLayout(Il2CppClass* source, Il2CppClass* target, const char* site, uin
         CheckLayout(source->parent, target->parent, site, depth + 1, structural);
 }
 
+Il2CppClass* BaselineCounterpart(Il2CppClass* active, const Il2CppImage* image)
+{
+    using namespace assembly_shadow_r02;
+    const uint64_t generation = AssemblyShadow::ActiveGeneration();
+    if (!generation || Private())
+        return FindDefinition(image, AssemblyShadowTypeKey::Make(active), true);
+    // A null value is an authenticated absence, not an allocation certificate.
+    static AdmissionCache<Il2CppClass*>* cache = [] {
+        auto* value = new AdmissionCache<Il2CppClass*>();
+        ObservationCounters::Add(Metric::CacheFixedBytes, sizeof(*value));
+        return value;
+    }();
+    const AdmissionKey key{generation, active, image, 2};
+    if (const auto* found = cache->Find(key))
+    {
+        ObservationCounters::Add(Metric::CounterpartHits, 1);
+        return *found;
+    }
+    ObservationCounters::Add(Metric::CounterpartMisses, 1);
+    il2cpp::os::FastAutoLock metadataLock(&g_MetadataLock);
+    if (const auto* found = cache->Find(key))
+    {
+        ObservationCounters::Add(Metric::CounterpartHits, 1);
+        return *found;
+    }
+    Il2CppClass* baseline = FindDefinition(image, AssemblyShadowTypeKey::Make(active), true);
+    bool inserted = false;
+    const auto* result = cache->Publish(key, baseline, inserted);
+    if (inserted)
+    {
+        ObservationCounters::Add(Metric::CounterpartEntries, 1);
+        ObservationCounters::Add(Metric::CounterpartRetainedBytes, cache->EntryBytes());
+        if (!baseline) ObservationCounters::Add(Metric::CounterpartAbsent, 1);
+    }
+    return *result;
+}
+
 void CheckActiveComponents(const Il2CppType* type, const char* site, uint32_t depth = 0)
 {
     if (!type || depth > kMaximumDepth) Fail("ShadowUnsupportedTypeShape", "AllocationComponents");
@@ -523,7 +582,9 @@ void CheckActiveComponents(const Il2CppType* type, const char* site, uint32_t de
     // definition solely for safety comparison, never Init/SetupFields and never
     // to manufacture optional diagnostic pointer evidence. Patch-added types
     // have no baseline counterpart and remain legal.
-    Il2CppClass* baseline = FindDefinition(baselineAssembly->image, AssemblyShadowTypeKey::Make(active), true);
+    Il2CppClass* baseline = BaselineCounterpart(active, baselineAssembly->image);
+    if (auto* trace = assembly_shadow_r02::AllocationProofTrace<Il2CppClass>::Current())
+        trace->Observe(baseline, active, AssemblyShadowTypeKey::GenericArity(active) != 0);
     if (baseline) CheckLayout(baseline, active, site, depth, AssemblyShadowTypeKey::GenericArity(active) != 0);
 }
 std::string Pointer(const void* pointer)
@@ -621,23 +682,75 @@ const MethodInfo* AssemblyShadowTypeResolver::ResolveReflectionMethod(const Meth
 
 Il2CppClass* AssemblyShadowTypeResolver::ResolveAllocation(Il2CppClass* klass, const char* site)
 {
+    using namespace assembly_shadow_r02;
+    using Certificate = AllocationCertificate<Il2CppClass>;
     if (!klass) return nullptr;
     if (!site) site = "<unspecified>";
     if (AssemblyShadow::IsResolvingTypeMetadata())
         Fail("ShadowAllocationDuringMetadataResolution", site, AssemblyShadowError::BaselineAlreadyUsed);
-    Il2CppClass* target = ResolveClass(klass);
-    if (target != klass)
+    const uint64_t generation = AssemblyShadow::ActiveGeneration();
+    auto build = [&](Certificate& certificate) {
+        Il2CppClass* target = ResolveClass(klass);
+        if (target != klass)
+        {
+            AssemblyShadowTypeMetadataScope scope;
+            CheckLayout(klass, target, site);
+            Increment(State().allocations);
+            certificate.involvesShadow = true;
+        }
+        if (generation)
+        {
+            AssemblyShadowTypeMetadataScope scope;
+            CheckActiveComponents(&target->byval_arg, site);
+        }
+        // A first allocation can precede lazy size finalization. Preserve its
+        // successful uncached behavior, but retry proof after metadata is ready.
+        certificate.complete = certificate.complete && target->size_inited;
+        return target;
+    };
+    if (!generation || Private())
     {
-        AssemblyShadowTypeMetadataScope scope;
-        CheckLayout(klass, target, site);
-        Increment(State().allocations);
+        Certificate temporary;
+        return build(temporary);
     }
-    if (AssemblyShadow::ActiveGeneration())
-    {
-        AssemblyShadowTypeMetadataScope scope;
-        CheckActiveComponents(&target->byval_arg, site);
-    }
-    return target;
+    static AllocationProofCache<Il2CppClass>* cache = [] {
+        auto* value = new AllocationProofCache<Il2CppClass>();
+        ObservationCounters::Add(Metric::CacheFixedBytes, sizeof(*value));
+        return value;
+    }();
+    // Conservative allocation profile 1; full physical class identity keeps
+    // closed generics, arrays, baseline inputs and active inputs distinct.
+    const AdmissionKey key{generation, klass, nullptr, 1};
+    auto validate = [&](const Certificate* certificate) {
+        if (AssemblyShadow::IsResolvingTypeMetadata())
+            Fail("ShadowAllocationDuringMetadataResolution", site, AssemblyShadowError::BaselineAlreadyUsed);
+        if (Private() || AssemblyShadow::ActiveGeneration() != generation)
+            Fail("ShadowAdmissionContextChanged", site, AssemblyShadowError::InvalidState);
+        if (!certificate) return;
+        if (certificate->involvesShadow)
+        {
+            AssemblyShadowState state;
+            AssemblyShadow::GetState(state); // Atomic acquire, no transaction lock.
+            if (state == AssemblyShadowState::Failed || state == AssemblyShadowState::FailedAfterCommit)
+                Fail("ShadowAllocationAfterFailure", site, AssemblyShadowError::InvalidState);
+        }
+        // These are the same mutable baseline-state conditions as CheckLayout,
+        // including every recursively checked parent/component. Guarded engine
+        // entry points remain authoritative; no old object's class is remapped.
+        for (const auto& dependency : certificate->dependencies)
+        {
+            Il2CppClass* baseline = dependency.baseline;
+            if (!baseline) continue;
+            ObservationCounters::Add(Metric::BaselineChecks, 1);
+            if (baseline->initialized || baseline->is_vtable_initialized ||
+                os::Atomic::LoadRelaxed(reinterpret_cast<const int32_t*>(&baseline->cctor_started)) != 0)
+                Fail("ShadowBaselineAlreadyInitialized", AssemblyShadowTypeKey::Format(&baseline->byval_arg) +
+                    " Site=" + site, AssemblyShadowError::BaselineAlreadyUsed);
+        }
+    };
+    // Exceptions used to report failure are unrelated BCL allocations. They
+    // must remain constructible; poison rejection applies to Shadow proofs.
+    return cache->Resolve<il2cpp::os::FastAutoLock>(key, &g_MetadataLock, build, validate);
 }
 
 bool AssemblyShadowTypeResolver::ContainsBaseline(const Il2CppType* type)
@@ -703,7 +816,9 @@ AssemblyShadowError AssemblyShadowTypeResolver::GetInfo(const Il2CppType* type, 
             << ",\"containsShadowTypes\":" << contains
             << ",\"definitionCacheHits\":" << state.hits.load() << ",\"definitionCacheMisses\":" << state.misses.load()
             << ",\"compositeRebuilds\":" << state.rebuilds.load() << ",\"allocationRemaps\":" << state.allocations.load()
-            << ",\"guardFailures\":" << state.failures.load() << "}";
+            << ",\"guardFailures\":" << state.failures.load();
+        assembly_shadow_r02::AppendDiagnostics(output);
+        output << "}";
         json = output.str();
         return AssemblyShadowError::Success;
     }

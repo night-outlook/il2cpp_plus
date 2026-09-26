@@ -1,6 +1,7 @@
 #include "AssemblyShadow.h"
 #include "AssemblyShadowDiagnostics.h"
 #include "AssemblyShadowRecovery.h"
+#include "AssemblyShadowR02Diagnostics.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowName.h"
@@ -137,14 +138,14 @@ namespace {
     std::atomic<const TypeFailure*> s_typeFailure{nullptr};
     std::atomic_flag s_usageLock = ATOMIC_FLAG_INIT;
     uint64_t s_usageGeneration = 0;
-    std::atomic<uint64_t> s_methodChecks{0};
-    std::atomic<uint64_t> s_shadowMethodChecks{0};
-    std::atomic<uint64_t> s_rejectedBaselineMethods{0};
-    std::atomic<uint64_t> s_baselineClassCctorStarted{0};
-    std::atomic<uint64_t> s_shadowClassCctorStarted{0};
-    std::atomic<uint64_t> s_interpreterTransformations{0};
-    std::atomic<uint64_t> s_shadowInterpreterTransformations{0};
-    std::atomic<uint64_t> s_droppedClassObservations{0};
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::MethodChecks> s_methodChecks;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::ShadowMethodChecks> s_shadowMethodChecks;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::RejectedBaselineMethods> s_rejectedBaselineMethods;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::BaselineCctors> s_baselineClassCctorStarted;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::ShadowCctors> s_shadowClassCctorStarted;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::Transformations> s_interpreterTransformations;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::ShadowTransformations> s_shadowInterpreterTransformations;
+    assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::DroppedClasses> s_droppedClassObservations;
     // Process-lifetime physical identities only. Never allocate on an execution
     // observation or acquire metadata/transaction locks from this short lock.
     const size_t kMaximumExecutionClasses = 1024;
@@ -156,7 +157,14 @@ namespace {
     {
         ExecutionObservationLock()
         {
-            while (s_executionObservationLock.test_and_set(std::memory_order_acquire)) std::this_thread::yield();
+            bool contended = false;
+            while (s_executionObservationLock.test_and_set(std::memory_order_acquire))
+            {
+                contended = true;
+                std::this_thread::yield();
+            }
+            if (contended) assembly_shadow_r02::ObservationCounters::Add(
+                assembly_shadow_r02::Metric::ObservationLockContentions, 1);
         }
         ~ExecutionObservationLock() { s_executionObservationLock.clear(std::memory_order_release); }
     };
@@ -168,6 +176,7 @@ namespace {
 
     void ObserveExecutionClass(Il2CppClass* klass)
     {
+        if (assembly_shadow_r02::ObservationCounters::Level < 2) return;
         if (!klass || !klass->image || !klass->image->assembly) return;
         const CandidateRegistry* candidates = s_candidates.load(std::memory_order_acquire);
         if (!candidates) return; // Startup execution policy is a separate proof.
@@ -1364,6 +1373,7 @@ AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& jso
     json.clear();
     std::array<Il2CppClass*, kMaximumExecutionClasses> classes{};
     size_t count = 0;
+    if (assembly_shadow_r02::ObservationCounters::Level >= 2)
     {
         ExecutionObservationLock lock;
         for (Il2CppClass* klass : s_executionClasses)
@@ -1372,7 +1382,7 @@ AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& jso
     // No observation lock remains held while reading physical metadata. The
     // inventory creates neither classes nor generic instances, including AOT.
     AssemblyVector assemblies;
-    Assembly::CaptureShadowEnumeration(assemblies);
+    if (count) Assembly::CaptureShadowEnumeration(assemblies);
     AssemblyShadowTypeKey::MetadataTypeImages images;
     for (const Il2CppAssembly* assembly : assemblies)
         for (uint32_t index = 0; index < assembly->image->typeCount; ++index)
@@ -1440,7 +1450,9 @@ AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& jso
             << ",\"staticStoragePointer\":" << AssemblyShadowDiagnostics::Quote(pointer)
             << ",\"pointerDetailsAvailable\":" << details << ",\"staticStorageAvailable\":" << (storage != nullptr) << '}';
     }
-    output << "]}";
+    output << "]";
+    assembly_shadow_r02::AppendDiagnostics(output);
+    output << "}";
     json = output.str();
     return AssemblyShadowError::Success;
 }
@@ -1603,6 +1615,7 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
         }
         else if (method->is_inflated || method->klass->generic_class)
         {
+            assembly_shadow_r02::ObservationCounters::Add(assembly_shadow_r02::Metric::GenericContextChecks, 1);
             UsageLock lock;
             CapturedArgumentVisitor visitor(candidates, s_active.load(std::memory_order_acquire), site, argumentFailure);
             bool valid = !method->is_inflated || visitor.Context(method->genericMethod->context, "class_inst", "method_inst");
