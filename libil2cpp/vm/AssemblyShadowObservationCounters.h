@@ -3,8 +3,9 @@
 // Compile-time observation policy, independent of correctness guards.
 // 0: correctness only; 1: bounded counters; 2: detailed class observations.
 // Keep level 2 as the compatibility default for existing diagnostic fixtures.
+#include "AssemblyShadowDiagnosticsProfile.h"
 #ifndef HYBRIDCLR_ASSEMBLY_SHADOW_DIAGNOSTICS_LEVEL
-#define HYBRIDCLR_ASSEMBLY_SHADOW_DIAGNOSTICS_LEVEL 2
+#define HYBRIDCLR_ASSEMBLY_SHADOW_DIAGNOSTICS_LEVEL HYBRIDCLR_R02_DEFAULT_DIAGNOSTICS_LEVEL
 #endif
 #if HYBRIDCLR_ASSEMBLY_SHADOW_DIAGNOSTICS_LEVEL < 0 || HYBRIDCLR_ASSEMBLY_SHADOW_DIAGNOSTICS_LEVEL > 2
 #error Invalid HYBRIDCLR_ASSEMBLY_SHADOW_DIAGNOSTICS_LEVEL
