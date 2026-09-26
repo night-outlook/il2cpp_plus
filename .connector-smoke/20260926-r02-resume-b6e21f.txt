@@ -1,0 +1,3 @@
+R02 resumed Primary Implementation GitHub Connector tree/commit/ref smoke test.
+Base: 5569087670ec215e92872e465a24641ac83b4905
+Disposable transport evidence only; do not merge.
