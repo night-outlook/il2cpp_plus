@@ -1,0 +1,2 @@
+R02 H Primary Connector transport check. Disposable only; not product evidence.
+Base: 3981da12f2cd3ee878a04dda6f573d0ad3faeda5
