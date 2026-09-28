@@ -1,4 +1,5 @@
 #include "vm/AssemblyShadowAllocationProof.h"
+#include "vm/AssemblyShadowLayoutReadiness.h"
 #include "vm/AssemblyShadowR02Diagnostics.h"
 #include <atomic>
 #include <cstdlib>
@@ -52,8 +53,64 @@ static void Nested()
     for (int i = 0; i < 10000; ++i) cache.Resolve<Guard>(Key(&outer), &mutex, parent, Validate);
     CHECK(before == allocationCount.load());
 }
+static void FrozenDefinitionReadiness()
+{
+    PhysicalLayoutState baselineLayout{false, false, true, true, false,
+        false, false, false, true, 32};
+    CHECK(BaselineLayoutReady(baselineLayout, 16));
+    CHECK(!baselineLayout.sizeInitialized && !baselineLayout.sizeInitializationPending);
+    auto bad = baselineLayout;
+    bad.interpreterImage = true; CHECK(!BaselineLayoutReady(bad, 16));
+    bad = baselineLayout; bad.genericInstance = true; CHECK(!BaselineLayoutReady(bad, 16));
+    bad = baselineLayout; bad.genericDefinition = true; CHECK(!BaselineLayoutReady(bad, 16));
+    bad = baselineLayout; bad.array = true; CHECK(!BaselineLayoutReady(bad, 16));
+    bad = baselineLayout; bad.managedDefinition = false; CHECK(!BaselineLayoutReady(bad, 16));
+    bad = baselineLayout; bad.hasImage = false; CHECK(!BaselineLayoutReady(bad, 16));
+    bad = baselineLayout; bad.hasDefinition = false; CHECK(!BaselineLayoutReady(bad, 16));
+    bad = baselineLayout; bad.sizeInitializationPending = true; CHECK(!BaselineLayoutReady(bad, 16));
+    bad = baselineLayout; bad.instanceSize = 0; CHECK(!BaselineLayoutReady(bad, 16));
+    bad.instanceSize = 15; CHECK(!BaselineLayoutReady(bad, 16));
+    CHECK(!BaselineLayoutReady(baselineLayout, 0));
+    bad.interpreterImage = true; bad.sizeInitialized = true; CHECK(BaselineLayoutReady(bad, 16));
+
+    Class input, baseline, active; Cache cache; std::recursive_mutex mutex;
+    bool targetReady = false, poison = false; int builds = 0, guards = 0;
+    auto build = [&](Cert& c) {
+        ++builds; c.Observe(&baseline, &active, false);
+        c.complete = BaselineLayoutReady(baselineLayout, 16) && targetReady;
+        return &active;
+    };
+    auto validate = [&](const Cert* c) {
+        ++guards;
+        if (poison) throw std::runtime_error("poison");
+        Validate(c);
+    };
+    CHECK(cache.Resolve<Guard>(Key(&input), &mutex, build, validate) == &active);
+    CHECK(!cache.Find(Key(&input))); // Target is still incomplete: no publication.
+    targetReady = true;
+    CHECK(cache.Resolve<Guard>(Key(&input), &mutex, build, validate) == &active);
+    CHECK(cache.Find(Key(&input)) && builds == 2);
+    const auto allocations = allocationCount.load();
+    const int guardStart = guards;
+    for (int n = 0; n < 10000; ++n)
+        CHECK(cache.Resolve<Guard>(Key(&input), &mutex, build, validate) == &active);
+    CHECK(builds == 2 && guards - guardStart == 20000);
+    CHECK(allocationCount.load() == allocations);
+    CHECK(!baseline.used && !baselineLayout.sizeInitialized);
+    baseline.used = true;
+    bool rejected = false;
+    try { cache.Resolve<Guard>(Key(&input), &mutex, build, validate); }
+    catch (const std::runtime_error&) { rejected = true; }
+    CHECK(rejected && builds == 2);
+    baseline.used = false; poison = true; rejected = false;
+    try { cache.Resolve<Guard>(Key(&input), &mutex, build, validate); }
+    catch (const std::runtime_error&) { rejected = true; }
+    CHECK(rejected && builds == 2);
+}
+
 static void Unready()
 {
+    FrozenDefinitionReadiness();
     Class outer, inner, active; Cache cache; std::recursive_mutex mutex;
     bool ready = false;
     auto child = [&](Cert& c) { c.complete = ready; return &active; };

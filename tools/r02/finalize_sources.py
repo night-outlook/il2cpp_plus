@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import subprocess
 import source_edits as recipe
+import h_layout_repair
 
 
 def memoize(text: str) -> str:
@@ -48,7 +49,7 @@ def expected_sources(root: Path) -> tuple[dict, dict]:
         if recipe.blob(raw) != expected_blob:
             raise ValueError('Immutable H1 source blob mismatch: ' + name)
         before = raw.decode('utf-8')
-        after = memoize(recipe.assembly(before)) if name.endswith('/AssemblyShadow.cpp') else recipe.resolver(before)
+        after = memoize(recipe.assembly(before)) if name.endswith('/AssemblyShadow.cpp') else h_layout_repair.apply(recipe.resolver(before))
         if name.endswith('/AssemblyShadow.cpp'):
             for signature in recipe.SAFETY_BODIES:
                 a, b = recipe.function_span(before, signature)
