@@ -4,7 +4,9 @@
 #include "AssemblyShadowDiagnostics.h"
 #include "AssemblyShadowAllocationProof.h"
 #include "AssemblyShadowLayoutReadiness.h"
+#include "AssemblyShadowLogicalMethod.h"
 #include <cstdio>
+#include <cstring>
 #include "AssemblyShadowR02Diagnostics.h"
 #include "vm/MetadataLock.h"
 #include "os/Atomic.h"
@@ -184,18 +186,7 @@ Il2CppClass* RawClass(const Il2CppType* type)
 
 std::string MethodSignature(const MethodInfo* method)
 {
-    if (!method || !method->klass || !method->name || !method->return_type ||
-        (method->parameters_count && !method->parameters) || method->is_inflated)
-        Fail("ShadowInvalidMethodSignature", "MalformedDefinition");
-    std::string key = std::string(method->name) + " flags=" + std::to_string(method->flags) +
-        " iflags=" + std::to_string(method->iflags) + " slot=" + std::to_string(method->slot) +
-        " generic=" + std::to_string(method->is_generic != 0) + " arity=" +
-        std::to_string(method->is_generic ? MetadataCache::GetGenericContainerCount(method->genericContainerHandle) : 0) +
-        " parameters=" + std::to_string(method->parameters_count) +
-        " return=" + AssemblyShadowTypeKey::Format(method->return_type);
-    for (uint16_t index = 0; index < method->parameters_count; ++index)
-        key += " parameter=" + AssemblyShadowTypeKey::Format(method->parameters[index]);
-    return key;
+    return assembly_shadow_evolution::LogicalMethodKey(method);
 }
 
 const MethodInfo* FindMethodDefinition(const MethodInfo* baseline, Il2CppClass* activeClass)
@@ -206,12 +197,21 @@ const MethodInfo* FindMethodDefinition(const MethodInfo* baseline, Il2CppClass* 
     {
         Il2CppMetadataMethodInfo raw = MetadataCache::GetMethodInfo(activeClass, index);
         const MethodInfo* candidate = MetadataCache::GetMethodInfoFromMethodHandle(raw.handle);
-        if (!candidate || candidate->klass != activeClass) Fail("ShadowInvalidMethodSignature", signature);
+        if (!candidate || candidate->klass != activeClass || !candidate->name) Fail("ShadowInvalidMethodSignature", signature);
+        // Unrelated overload families need not have representable signatures.
+        // For a potentially matching family an unsupported shape fails closed;
+        // equal counts of discarded custom modifiers are never accepted as proof.
+        if (std::strcmp(candidate->name, baseline->name) || candidate->parameters_count != baseline->parameters_count ||
+            candidate->is_generic != baseline->is_generic ||
+            ((candidate->flags ^ baseline->flags) & METHOD_ATTRIBUTE_STATIC)) continue;
+        if (candidate->is_generic && MetadataCache::GetGenericContainerCount(candidate->genericContainerHandle) !=
+            MetadataCache::GetGenericContainerCount(baseline->genericContainerHandle)) continue;
         if (MethodSignature(candidate) != signature) continue;
         if (result) Fail("ShadowAmbiguousMethodDefinition", signature);
         result = candidate;
     }
     if (!result) Fail("ShadowMethodNotFound", signature);
+    assembly_shadow_evolution::RequireMethodCompatibility(baseline, result);
     return result;
 }
 
@@ -559,6 +559,75 @@ void CheckLayout(Il2CppClass* source, Il2CppClass* target, const char* site, uin
         CheckLayout(source->parent, target->parent, site, depth + 1, structural);
 }
 
+// A staging screen reads signatures without asking for unmaterialized open
+// generic offsets. It never creates objects, runs Class::Init or publishes a
+// ClassAdmissionCertificate. Platform-dependent changed layouts reuse the
+// exact existing CheckLayout implementation once their metadata is ready.
+std::vector<std::string> StagedFieldShapes(const Il2CppClass* klass)
+{
+    std::vector<std::string> fields;
+    for (uint32_t index = 0; index < klass->field_count; ++index)
+    {
+        const auto field = MetadataCache::GetFieldInfo(klass, index);
+        if (!field.name || !field.type) Fail("NativeLayoutIncompatible", "MissingFieldMetadata", AssemblyShadowError::ResourceAbiMismatch);
+        if (field.type->attrs & FIELD_ATTRIBUTE_STATIC) continue;
+        Il2CppType type = *field.type;
+        type.attrs = 0;
+        fields.push_back(assembly_shadow_evolution::MethodPart(field.name) +
+            assembly_shadow_evolution::MethodPart(AssemblyShadowTypeKey::Format(&type)));
+    }
+    return fields;
+}
+
+std::string StagedDeclarationIdentity(Il2CppClass* klass)
+{
+    ShadowTypeKey key = AssemblyShadowTypeKey::Make(klass);
+    // Find an existing declaration even when malformed metadata changes its
+    // arity without changing its name. MatchDefinition then rejects that change.
+    for (auto& declaration : key.declarations) declaration.genericArity = 0;
+    return key.ToString();
+}
+
+bool CheckStagedPair(Il2CppClass* baseline, Il2CppClass* target)
+{
+    const std::string key = AssemblyShadowTypeKey::Make(target).ToString();
+    MatchDefinition(baseline, target, key);
+    if ((baseline->parent == nullptr) != (target->parent == nullptr) ||
+        (baseline->parent && AssemblyShadowTypeKey::Format(&baseline->parent->byval_arg) !=
+            AssemblyShadowTypeKey::Format(&target->parent->byval_arg)) ||
+        Interfaces(baseline) != Interfaces(target) ||
+        baseline->packingSize != target->packingSize ||
+        ((baseline->flags ^ target->flags) & TYPE_ATTRIBUTE_LAYOUT_MASK) ||
+        assembly_shadow_evolution::DeclarationContracts(baseline) != assembly_shadow_evolution::DeclarationContracts(target))
+        Fail("NativeLayoutIncompatible", key + " DeclarationOrInterfaceContract", AssemblyShadowError::ResourceAbiMismatch);
+    const bool fieldsChanged = StagedFieldShapes(baseline) != StagedFieldShapes(target);
+    if (AssemblyShadowTypeKey::GenericArity(baseline) || AssemblyShadowTypeKey::GenericArity(target))
+    {
+        if (fieldsChanged) Fail("NativeLayoutIncompatible", key + " OpenGenericStructuralChange", AssemblyShadowError::ResourceAbiMismatch);
+        return false; // A later constructed physical type still needs its own certificate.
+    }
+    const bool baselineReady = assembly_shadow_r02::BaselineLayoutReady(
+        PhysicalLayout(baseline), static_cast<uint32_t>(sizeof(Il2CppObject)));
+    const bool targetReady = target->size_inited != 0;
+    if (!baselineReady || !targetReady)
+    {
+        if (fieldsChanged) Fail("NativeLayoutNeedsNativeProof", key + " ChangedLayoutUnavailableBeforePublication", AssemblyShadowError::ResourceAbiMismatch);
+        return false; // Unchanged metadata is not a physical allocation proof.
+    }
+    bool physicalChanged = baseline->instance_size != target->instance_size ||
+        (baseline->byval_arg.valuetype && baseline->native_size != target->native_size);
+    if (!physicalChanged && !fieldsChanged && baseline->typeMetadataHandle && target->typeMetadataHandle)
+    {
+        const auto before = InstanceFieldLayouts(baseline);
+        const auto after = InstanceFieldLayouts(target);
+        for (size_t index = 0; index < before.size(); ++index)
+            if (before[index].offset != after[index].offset) { physicalChanged = true; break; }
+    }
+    if (!fieldsChanged && !physicalChanged) return false;
+    CheckLayout(baseline, target, "NativeLayoutAdmissionV1:Validate");
+    return true;
+}
+
 Il2CppClass* BaselineCounterpart(Il2CppClass* active, const Il2CppImage* image)
 {
     using namespace assembly_shadow_r02;
@@ -638,6 +707,53 @@ std::string Pointer(const void* pointer)
 {
     std::ostringstream text; text << "0x" << std::hex << reinterpret_cast<uintptr_t>(pointer); return text.str();
 }
+}
+
+void AssemblyShadowTypeResolver::ValidateStagedImage(const Il2CppImage* image)
+{
+    if (!Private() || AssemblyShadow::ActiveGeneration() || !image || !image->assembly ||
+        !hybridclr::metadata::IsInterpreterImage(image))
+        Fail("NativeLayoutAdmissionContext", "PrivateUnpublishedImageRequired", AssemblyShadowError::InvalidState);
+    AssemblyShadowTypeMetadataScope scope;
+    const auto* baseline = MetadataCache::GetAotAssemblyByNamePhysical(image->assembly->aname.name);
+    if (!baseline || !baseline->image || hybridclr::metadata::IsInterpreterImage(baseline->image))
+        Fail("NativeLayoutAdmissionContext", "PhysicalAotBaselineRequired", AssemblyShadowError::InvalidState);
+    // An explicit work bound, not a claim that every size below it is supported.
+    // Existing metadata quotas, field-count limits and depth bounds also apply.
+    const uint32_t maximumTypeRows = 1048576;
+    if (baseline->image->typeCount > maximumTypeRows || image->typeCount > maximumTypeRows)
+        Fail("NativeLayoutAdmissionLimit", "TypeRowBudget", AssemblyShadowError::ResourceAbiMismatch);
+    std::unordered_map<std::string, Il2CppClass*> before;
+    before.reserve(baseline->image->typeCount);
+    for (uint32_t index = 0; index < baseline->image->typeCount; ++index)
+    {
+        auto* klass = MetadataCache::GetTypeInfoFromHandle(MetadataCache::GetAssemblyTypeHandle(baseline->image, index));
+        if (!klass || klass->image != baseline->image || !before.emplace(StagedDeclarationIdentity(klass), klass).second)
+            Fail("NativeLayoutIncompatible", "AmbiguousPhysicalBaseline", AssemblyShadowError::ResourceAbiMismatch);
+    }
+    uint32_t paired = 0, changed = 0, added = 0;
+    std::unordered_map<std::string, bool> seen;
+    seen.reserve(image->typeCount);
+    for (uint32_t index = 0; index < image->typeCount; ++index)
+    {
+        auto* klass = MetadataCache::GetTypeInfoFromHandle(MetadataCache::GetAssemblyTypeHandle(image, index));
+        if (!klass || klass->image != image)
+            Fail("NativeLayoutIncompatible", "InvalidStagedTypeOwner", AssemblyShadowError::ResourceAbiMismatch);
+        std::string key = StagedDeclarationIdentity(klass);
+        if (!seen.emplace(key, true).second)
+            Fail("NativeLayoutIncompatible", "AmbiguousStagedDeclaration", AssemblyShadowError::ResourceAbiMismatch);
+        auto found = before.find(key);
+        if (found == before.end()) { ++added; continue; }
+        ++paired;
+        if (CheckStagedPair(found->second, klass)) ++changed;
+    }
+#if HYBRIDCLR_ASSEMBLY_SHADOW_DIAGNOSTICS_LEVEL >= 2
+    static std::atomic<uint32_t> emitted{0};
+    const uint32_t sample = emitted.fetch_add(1, std::memory_order_relaxed);
+    if (sample < 16)
+        std::fprintf(stderr, "[R03NativeLayoutAdmissionV1] sample=%u assembly=%.160s baselineRows=%u targetRows=%u paired=%u changedProofs=%u added=%u\n",
+            sample, image->assembly->aname.name, baseline->image->typeCount, image->typeCount, paired, changed, added);
+#endif
 }
 
 Il2CppClass* AssemblyShadowTypeResolver::ResolveDefinition(Il2CppClass* klass)
