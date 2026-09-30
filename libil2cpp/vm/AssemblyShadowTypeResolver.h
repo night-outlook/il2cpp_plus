@@ -16,6 +16,11 @@ public:
     // commit. Canonicalize that metadata structurally without weakening the
     // separate managed-execution guard, which must never remap a MethodInfo.
     static const MethodInfo* ResolveReflectionMethod(const MethodInfo* method);
+    // Caller holds the metadata lock and complete private staging resolver.
+    // Run after this image's metadata/layout setup, before it is marked ready.
+    // No business initialization, object allocation, publication or certificate
+    // is authorized by this screen. Constructed types keep allocation guards.
+    static void ValidateStagedImage(const Il2CppImage* image);
     static Il2CppClass* ResolveAllocation(Il2CppClass* klass, const char* site);
     static void RecordUse(const Il2CppType* type, BaselineUseKind kind, const char* site);
     static bool ContainsBaseline(const Il2CppType* type);
