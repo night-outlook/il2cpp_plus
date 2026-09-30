@@ -1,0 +1,5 @@
+Disposable GitHub Connector write/read-back smoke test for R03 entry.
+Repository: night-outlook/il2cpp_plus
+Base branch: codex/assembly-shadow-r01b-h1
+Base commit: a6e0b39c58c1c41bec1baa0a716c6bc6d77e3e4c
+Not implementation, validation, acceptance, or handoff authority.
