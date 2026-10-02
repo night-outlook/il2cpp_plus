@@ -1,0 +1,1 @@
+Disposable Connector write/read-back test for R03-LG-001 identity observation. No feature source or evidence is changed by this branch.
