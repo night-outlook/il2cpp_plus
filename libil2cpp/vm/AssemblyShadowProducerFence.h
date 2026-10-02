@@ -106,7 +106,7 @@ public:
         if (!report_.requested) return true;
         if (!report_.released || owner_ != std::this_thread::get_id())
         { report_.invalid = true; return false; }
-        const auto deadline = Clock::now() + std::chrono::milliseconds(kMaximumLeaseMs);
+        const auto deadline = Clock::now() + std::chrono::milliseconds(static_cast<uint32_t>(kMaximumLeaseMs));
         if (!changed_.wait_until(lock, deadline, [&] { return report_.deferredCompleted == report_.deferred; }))
         { report_.invalid = true; return false; }
         report_.drained = true; return !report_.expired && !report_.invalid;
