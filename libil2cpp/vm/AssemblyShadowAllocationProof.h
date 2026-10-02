@@ -5,6 +5,7 @@
 // mutex. Completed entries and their dependency arrays live for the process.
 #include "AssemblyShadowAdmissionCache.h"
 #include "AssemblyShadowObservationCounters.h"
+#include "AssemblyShadowRuntimeProbe.h"
 #include <stdexcept>
 #include <vector>
 
@@ -115,7 +116,7 @@ public:
             Propagate(*hit);
             return hit->target;
         }
-        ObservationCounters::Add(Metric::AdmissionMisses, 1);
+        assembly_shadow_r03::RuntimeProbe::Count(Metric::AdmissionMisses, 1, key);
         Guard lock(metadataMutex);
         // A different thread may have completed this physical type while we
         // waited for metadata. Never build twice merely because both missed.
@@ -128,7 +129,7 @@ public:
             return hit->target;
         }
         BuildScope scope(this, key);
-        ObservationCounters::Add(Metric::AdmissionBuilds, 1);
+        assembly_shadow_r03::RuntimeProbe::Count(Metric::AdmissionBuilds, 1, key);
         Certificate value;
         try
         {
@@ -139,14 +140,14 @@ public:
         }
         catch (...)
         {
-            ObservationCounters::Add(Metric::AdmissionRejects, 1);
+            assembly_shadow_r03::RuntimeProbe::Count(Metric::AdmissionRejects, 1, key);
             throw;
         }
         if (!value.complete)
         {
             // Preserve the uncached path's result when layout is not final;
             // absence of readiness is never a positive reusable certificate.
-            ObservationCounters::Add(Metric::AdmissionUnready, 1);
+            assembly_shadow_r03::RuntimeProbe::Count(Metric::AdmissionUnready, 1, key);
             Propagate(value);
             return value.target;
         }
@@ -156,13 +157,13 @@ public:
         try { result = cache_.Publish(key, std::move(value), inserted); }
         catch (...)
         {
-            ObservationCounters::Add(Metric::AdmissionRejects, 1);
+            assembly_shadow_r03::RuntimeProbe::Count(Metric::AdmissionRejects, 1, key);
             throw;
         }
         if (inserted)
         {
-            ObservationCounters::Add(Metric::AdmissionEntries, 1);
-            ObservationCounters::Add(Metric::AdmissionRetainedBytes, bytes);
+            assembly_shadow_r03::RuntimeProbe::Count(Metric::AdmissionEntries, 1, key);
+            assembly_shadow_r03::RuntimeProbe::Count(Metric::AdmissionRetainedBytes, bytes, key);
         }
         Propagate(*result);
         return result->target;

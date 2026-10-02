@@ -17,6 +17,7 @@
 #include "metadata/GenericMethod.h"
 #include "hybridclr/metadata/AssemblyShadowBridge.h"
 #include "hybridclr/metadata/MetadataUtil.h"
+#include "hybridclr/metadata/MetadataModule.h"
 #include "il2cpp-tabledefs.h"
 #include <atomic>
 #include <algorithm>
@@ -608,10 +609,31 @@ bool CheckStagedPair(Il2CppClass* baseline, Il2CppClass* target)
     }
     const bool baselineReady = assembly_shadow_r02::BaselineLayoutReady(
         PhysicalLayout(baseline), static_cast<uint32_t>(sizeof(Il2CppObject)));
-    const bool targetReady = target->size_inited != 0;
+    // InitRuntimeMetadatas already computes and seals concrete definition
+    // sizes/offsets. size_inited additionally includes lazy field/static setup,
+    // which must NOT be forced merely to manufacture prepublication proof.
+    const Il2CppTypeDefinitionSizes* targetDefinition = nullptr;
+    const bool definitionReady = hybridclr::metadata::MetadataModule::GetImage(target)->
+        TryGetReadyDefinitionLayout(target, targetDefinition);
+    const bool targetReady = !target->size_init_pending && (target->size_inited || definitionReady);
+    assembly_shadow_r03::LayoutRow observation;
+    observation.baseline = baseline; observation.target = target;
+    observation.fieldsChanged = fieldsChanged; observation.baselineReady = baselineReady;
+    observation.targetReady = targetReady; observation.targetDefinitionReady = definitionReady;
+    observation.sourceSizeInited = baseline->size_inited; observation.targetSizeInited = target->size_inited;
+    observation.sourcePending = baseline->size_init_pending; observation.targetPending = target->size_init_pending;
+    observation.baselineInitialized = baseline->initialized; observation.baselineVtable = baseline->is_vtable_initialized;
+    observation.baselineCctor = baseline->cctor_started; observation.targetInitialized = target->initialized;
+    observation.targetVtable = target->is_vtable_initialized; observation.targetCctor = target->cctor_started;
+    observation.sourceSize = baseline->instance_size; observation.targetSize = target->instance_size;
+    observation.sourceNativeSize = baseline->native_size; observation.targetNativeSize = target->native_size;
     if (!baselineReady || !targetReady)
     {
-        if (fieldsChanged) Fail("NativeLayoutNeedsNativeProof", key + " ChangedLayoutUnavailableBeforePublication", AssemblyShadowError::ResourceAbiMismatch);
+        observation.error = fieldsChanged ? static_cast<int32_t>(AssemblyShadowError::ResourceAbiMismatch) : 0;
+        assembly_shadow_r03::RuntimeProbe::RecordLayout(observation);
+        if (fieldsChanged) Fail("NativeLayoutNeedsNativeProof", key + " ChangedLayoutUnavailableBeforePublication" +
+            " BaselineReady=" + std::to_string(baselineReady) + " TargetReady=" + std::to_string(targetReady) +
+            " TargetDefinitionReady=" + std::to_string(definitionReady), AssemblyShadowError::ResourceAbiMismatch);
         return false; // Unchanged metadata is not a physical allocation proof.
     }
     bool physicalChanged = baseline->instance_size != target->instance_size ||
@@ -623,8 +645,24 @@ bool CheckStagedPair(Il2CppClass* baseline, Il2CppClass* target)
         for (size_t index = 0; index < before.size(); ++index)
             if (before[index].offset != after[index].offset) { physicalChanged = true; break; }
     }
-    if (!fieldsChanged && !physicalChanged) return false;
-    CheckLayout(baseline, target, "NativeLayoutAdmissionV1:Validate");
+    if (!fieldsChanged && !physicalChanged)
+    { assembly_shadow_r03::RuntimeProbe::RecordLayout(observation); return false; }
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+    const auto sourceFields = InstanceFieldLayouts(baseline), targetFields = InstanceFieldLayouts(target);
+    observation.sourceFieldCount = static_cast<uint32_t>(sourceFields.size());
+    observation.targetFieldCount = static_cast<uint32_t>(targetFields.size());
+    observation.truncated = sourceFields.size() > 16 || targetFields.size() > 16;
+    for (size_t i = 0; i < sourceFields.size() && i < 16; ++i)
+    { observation.sourceOffsets[i] = sourceFields[i].offset; observation.sourceAttrs[i] = sourceFields[i].type->attrs; }
+    for (size_t i = 0; i < targetFields.size() && i < 16; ++i)
+    { observation.targetOffsets[i] = targetFields[i].offset; observation.targetAttrs[i] = targetFields[i].type->attrs;
+      observation.targetStorage[i] = PrimitiveStorageSize(targetFields[i].type); }
+#endif
+    try { CheckLayout(baseline, target, "NativeLayoutAdmissionV1:Validate"); }
+    catch (const ShadowTypeResolutionFailure& error)
+    { observation.error = static_cast<int32_t>(error.error); assembly_shadow_r03::RuntimeProbe::RecordLayout(observation); throw; }
+    observation.physicalProof = true;
+    assembly_shadow_r03::RuntimeProbe::RecordLayout(observation);
     return true;
 }
 
@@ -849,6 +887,7 @@ Il2CppClass* AssemblyShadowTypeResolver::ResolveAllocation(Il2CppClass* klass, c
     using Certificate = AllocationCertificate<Il2CppClass>;
     if (!klass) return nullptr;
     if (!site) site = "<unspecified>";
+    assembly_shadow_r03::RuntimeProbe::SiteScope probeSite(site);
     if (AssemblyShadow::IsResolvingTypeMetadata())
         Fail("ShadowAllocationDuringMetadataResolution", site, AssemblyShadowError::BaselineAlreadyUsed);
     const uint64_t generation = AssemblyShadow::ActiveGeneration();
@@ -980,6 +1019,7 @@ AssemblyShadowError AssemblyShadowTypeResolver::GetInfo(const Il2CppType* type, 
             << ",\"definitionCacheHits\":" << state.hits.load() << ",\"definitionCacheMisses\":" << state.misses.load()
             << ",\"compositeRebuilds\":" << state.rebuilds.load() << ",\"allocationRemaps\":" << state.allocations.load()
             << ",\"guardFailures\":" << state.failures.load();
+        assembly_shadow_r03::RuntimeProbe::ObserverSnapshot();
         assembly_shadow_r02::AppendDiagnostics(output);
         output << "}";
         json = output.str();
