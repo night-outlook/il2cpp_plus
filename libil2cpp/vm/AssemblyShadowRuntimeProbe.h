@@ -12,6 +12,9 @@
 #endif
 #include <cstring>
 #include <mutex>
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+#include "AssemblyShadowProducerFence.h"
+#endif
 
 namespace il2cpp { namespace vm { namespace assembly_shadow_r03 {
 using assembly_shadow_r02::AdmissionKey;
@@ -43,9 +46,32 @@ class RuntimeProbe
 {
 public:
     static constexpr size_t kEvents = 128, kSamples = 6, kLayouts = 32;
+    struct Producer
+    {
+        const void* finalizerClass = nullptr;
+        const void* callback = nullptr;
+        uint64_t osThread = 0;
+        bool recognizedArrayPool = false;
+    };
+    static Producer& CurrentProducer() { static thread_local Producer value; return value; }
+    class ProducerScope
+    {
+        Producer previous_;
+    public:
+        ProducerScope(const void* klass, const void* callback, uint64_t osThread, bool recognized)
+            : previous_(CurrentProducer())
+        {
+            auto& value = CurrentProducer(); value.finalizerClass = klass;
+            value.callback = callback; value.osThread = osThread; value.recognizedArrayPool = recognized;
+        }
+        ~ProducerScope() { CurrentProducer() = previous_; }
+        ProducerScope(const ProducerScope&) = delete;
+        ProducerScope& operator=(const ProducerScope&) = delete;
+    };
     struct Event
     {
         AdmissionKey key{};
+        Producer producer;
         Metric metric = Metric::AdmissionMisses;
         uint64_t amount = 0, thread = 0;
         uint32_t phase = 0;
@@ -144,7 +170,7 @@ public:
         auto& r = s.report;
         if (r.events == kEvents) { r.overflow = true; return; }
         Event& e = r.event[r.events++]; e.key = key; e.metric = metric;
-        e.amount = amount; e.thread = Thread(); e.phase = s.phase;
+        e.amount = amount; e.thread = Thread(); e.phase = s.phase; e.producer = CurrentProducer();
         const char* site = Site(); const size_t length = std::strlen(site);
         if (length >= sizeof(e.site)) r.overflow = true;
         std::memcpy(e.site, site, length < sizeof(e.site) ? length : sizeof(e.site) - 1);

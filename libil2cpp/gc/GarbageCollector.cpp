@@ -19,6 +19,9 @@
 #include "vm/RCW.h"
 #include "vm/Runtime.h"
 #include "vm/Thread.h"
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW && HYBRIDCLR_R03_RUNTIME_PROBE
+#include "vm/AssemblyShadowFinalizerProbe.h"
+#endif
 #endif
 
 using namespace il2cpp::os;
@@ -65,7 +68,7 @@ namespace gc
 //
 // 1. Those that do not exist in CCW cache. Finalizer is normally registered with
 //    the GC.
-// 2. Those that are in the CCW cache. In such case, GC won't know about the call,
+// 2. Those that are in CCW cache. In such case, GC won't know about the call,
 //    but instead we'll find the object in the CCW cache and RegisterFinalizer will
 //    set "hasFinalizer" field to true, while SuppressFinalizer will set it to false
 //
@@ -175,6 +178,16 @@ namespace gc
 
         finalizer = Class::GetFinalizer(o->klass);
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW && HYBRIDCLR_R03_RUNTIME_PROBE
+        // Diagnostic profile only. Matching is metadata-only on an already
+        // finalizable BCL object; no business type or managed code is touched.
+        // The lease wait occurs BEFORE Invoke and outside metadata/probe locks.
+        const MethodInfo* callback = assembly_shadow_r03::ArrayPoolCallback(o);
+        assembly_shadow_r03::RuntimeProbe::ProducerScope producer(o->klass, callback,
+            static_cast<uint64_t>(il2cpp::os::Thread::CurrentThreadId()), callback != NULL);
+        assembly_shadow_r03::ProducerFence::Callback lease(
+            assembly_shadow_r03::ProducerFence::Instance(), callback != NULL);
+#endif
         Runtime::Invoke(finalizer, o, NULL, &exc);
 
         if (exc)
