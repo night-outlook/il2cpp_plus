@@ -14,6 +14,7 @@
 #include <mutex>
 #if HYBRIDCLR_R03_RUNTIME_PROBE
 #include "AssemblyShadowProducerFence.h"
+#include "AssemblyShadowProbeTypeSnapshot.h"
 #endif
 
 namespace il2cpp { namespace vm { namespace assembly_shadow_r03 {
@@ -25,6 +26,9 @@ struct LayoutRow
 {
     const void* baseline = nullptr;
     const void* target = nullptr;
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+    ProbeTypeSnapshot baselineIdentity, targetIdentity;
+#endif
     bool fieldsChanged = false, baselineReady = false, targetReady = false;
     bool targetDefinitionReady = false, physicalProof = false;
     bool sourceSizeInited = false, targetSizeInited = false;
@@ -175,12 +179,9 @@ public:
         if (length >= sizeof(e.site)) r.overflow = true;
         std::memcpy(e.site, site, length < sizeof(e.site) ? length : sizeof(e.site) - 1);
     }
-    static void RecordLayout(const LayoutRow& row)
-    {
-        auto& s = Data(); std::lock_guard<std::mutex> lock(s.mutex);
-        if (s.report.layouts == kLayouts) { s.report.overflow = true; return; }
-        s.report.layout[s.report.layouts++] = row;
-    }
+    // Defined in the VM adapter. It snapshots definition identity before the
+    // staged caller's ownership scope ends, and only then copies the row.
+    static void RecordLayout(const LayoutRow& row);
     static Report Read()
     {
         auto& s = Data(); std::lock_guard<std::mutex> lock(s.mutex);
