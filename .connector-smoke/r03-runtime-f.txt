@@ -1,0 +1,1 @@
+Disposable R03 runtime-f Connector write smoke. Base: codex/assembly-shadow-r01b-h1 at 1abb6bcaa85226f08c67f9da65edb3c58e8cb399. Not product or validation authority.
