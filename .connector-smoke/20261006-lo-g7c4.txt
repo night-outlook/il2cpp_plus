@@ -1,0 +1,4 @@
+Disposable GitHub Connector tree/commit/ref smoke test for R03 LO continuation.
+Repository: night-outlook/il2cpp_plus
+Base: 1cf87f8209790f9fb2ebec97487dc1990ccd56c5
+No product acceptance or active branch change.
