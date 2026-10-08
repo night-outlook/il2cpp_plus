@@ -1,0 +1,41 @@
+name: R03 IR terminal source preparation
+on:
+  push:
+    branches: [codex/ir-r03-fix-20261008-034db097-smoke]
+    paths: ['tools/r03_ir/**', 'libil2cpp/vm/AssemblyShadowTerminalExecution.inc', '.github/workflows/r03-ir-prepare.yml']
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Execute exact production predicates with host records
+        run: python3 -B tools/r03_ir/run_terminal_tests.py --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/terminal-host"
+      - name: Prepare the reviewed native bytes
+        run: python3 -B tools/r03_ir/apply_terminal.py
+      - name: Prepare immutable source objects only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          R02_RESULTS: ${{ runner.temp }}/terminal-host
+        run: python3 -B tools/r02/prepare_git_objects.py
+      - name: Record exact input and output identity
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'terminal-host';root.mkdir(exist_ok=True)
+          files=[{'path':str(p.relative_to(root)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'size':p.stat().st_size} for p in sorted(root.rglob('*')) if p.is_file()]
+          (root/'provenance.json').write_text(json.dumps({'kind':'R03IRPreparedNative','workflowCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'files':files,'refModified':False,'runtimeAcceptance':False,'unityRun':False},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: r03-ir-native-preparation-${{ github.sha }}
+          path: ${{ runner.temp }}/terminal-host
+          retention-days: 30
+          if-no-files-found: error
