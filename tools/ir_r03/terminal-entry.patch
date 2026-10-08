@@ -1,0 +1,136 @@
+--- a/libil2cpp/vm/AssemblyShadow.cpp
++++ b/libil2cpp/vm/AssemblyShadow.cpp
+@@ -262,6 +262,9 @@
+         CapturedArgumentFailure& failure;
+         size_t remaining = 1024;
+         char path[512] = {};
++        // Terminal diagnostic screening uses borrowed metadata only and never
++        // records candidate use. Normal generic identity checks are unchanged.
++        bool terminalDiagnostic = false;
+ 
+         CapturedArgumentVisitor(const CandidateRegistry* registry, const ActiveSnapshot* snapshot,
+             const char* useSite, CapturedArgumentFailure& result)
+@@ -306,6 +309,13 @@
+                 case IL2CPP_TYPE_VALUETYPE:
+                 {
+                     if (!type->data.typeHandle) return Fail("NullDefinition");
++                    if (terminalDiagnostic)
++                    {
++                        if (candidates && candidates->byTypeHandle.count(type->data.typeHandle))
++                            return Fail("TerminalCandidateArgument");
++                        const auto* definition = reinterpret_cast<const Il2CppTypeDefinition*>(type->data.typeHandle);
++                        return !hybridclr::metadata::IsInterpreterType(definition) || Fail("TerminalInterpreterArgument");
++                    }
+                     if (!candidates) return true;
+                     auto found = candidates->byTypeHandle.find(type->data.typeHandle);
+                     if (found == candidates->byTypeHandle.end()) return true;
+@@ -371,6 +381,47 @@
+         return assembly && assembly->image && hybridclr::metadata::IsInterpreterImage(assembly->image);
+     }
+ 
++    // Identity validity does not imply permission to enter business code.
++    // Check the latched cause as well as state: first-cause publication precedes
++    // the release-store of the terminal state in guard rejection paths.
++    bool HasTerminalExecutionFailure() noexcept
++    {
++        const auto state = s_state.load(std::memory_order_acquire);
++        return state == AssemblyShadowState::Failed || state == AssemblyShadowState::FailedAfterCommit ||
++            s_typeFailure.load(std::memory_order_acquire) || s_unexpectedFailure.load(std::memory_order_acquire);
++    }
++
++    bool TerminalMethodEntryAllowed(const MethodInfo* method, const MethodInfo* definition) noexcept
++    {
++        if (!HasTerminalExecutionFailure()) return true;
++        const auto* configuration = s_configuration.load(std::memory_order_acquire);
++        const auto* candidates = s_candidates.load(std::memory_order_acquire);
++        if (!configuration || !method || !definition) return false;
++        // Only explicitly configured physical stable AOT owners can keep the
++        // fixed diagnostic/exception path alive. Names or remapped owners alone
++        // do not grant the allowance; candidate and interpreter owners cannot.
++        const Il2CppAssembly* owners[] = {PhysicalMethodAssembly(method), PhysicalMethodAssembly(definition)};
++        for (const auto* owner : owners)
++            if (!owner || !owner->aname.name ||
++                configuration->stableByName.Find(owner->aname.name) != owner ||
++                (candidates && candidates->byAssembly.count(owner))) return false;
++        if (method->is_inflated || method->klass->generic_class)
++        {
++            CapturedArgumentFailure failure;
++            CapturedArgumentVisitor visitor(candidates, nullptr, "terminal-fixed-diagnostic", failure);
++            visitor.terminalDiagnostic = true;
++            if (method->is_inflated && (!method->genericMethod || definition == method || definition->is_inflated ||
++                !visitor.Context(method->genericMethod->context, "class_inst", "method_inst"))) return false;
++            if (method->klass->generic_class)
++            {
++                const auto& context = method->klass->generic_class->context;
++                if (!context.class_inst || context.method_inst ||
++                    !visitor.Context(context, "declaring_class_inst", "declaring_method_inst")) return false;
++            }
++        }
++        return true;
++    }
++
+     // Physical tables and raw TypeDef handles only; never materialize a class.
+     AssemblyShadowError BuildCandidateRegistry(CandidateRegistry* registry, const std::vector<std::string>& names)
+     {
+@@ -1574,6 +1625,9 @@
+     s_methodChecks.fetch_add(1, std::memory_order_relaxed);
+     const MethodInfo* definition = method && method->is_inflated && method->genericMethod ?
+         method->genericMethod->methodDefinition : method;
++    // On an already terminal transaction, do not run another identity check
++    // that could replace a transaction-only first cause with a new guard error.
++    if (!TerminalMethodEntryAllowed(method, definition)) return false;
+     const Il2CppAssembly* owners[2] = {PhysicalMethodAssembly(method), PhysicalMethodAssembly(definition)};
+     AssemblyShadowError error = AssemblyShadowError::Success;
+@@ -1647,7 +1701,8 @@
+             }
+         }
+     }
+-    if (error == AssemblyShadowError::Success) return true;
++    if (error == AssemblyShadowError::Success)
++        return TerminalMethodEntryAllowed(method, definition);
+ 
+     // No managed exception or metadata query is allowed in this boolean hook.
+     // Failure strings allocate only on rejection, outside usage/observation locks.
+@@ -1684,6 +1739,42 @@
+     if (!AssertMethodIsActive(method, site))
+     {
+         const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
++        if (HasTerminalExecutionFailure())
++        {
++            // Invalid/failed startup configuration may not have designated the
++            // physical core library as stable. Do not recursively try to invoke
++            // its exception constructor through the same rejecting guard.
++            const auto* configuration = s_configuration.load(std::memory_order_acquire);
++            const auto* corlib = Image::GetCorlib();
++            const auto* owner = corlib ? corlib->assembly : nullptr;
++            const auto* candidates = s_candidates.load(std::memory_order_acquire);
++            if (!owner || !owner->aname.name || !configuration ||
++                configuration->stableByName.Find(owner->aname.name) != owner ||
++                (candidates && candidates->byAssembly.count(owner)))
++                throw ShadowTypeResolutionFailure(failure ? failure->error : AssemblyShadowError::InvalidState,
++                    failure ? failure->detail : "Terminal execution rejected without a fixed exception owner.");
++        }
++        if (!failure && HasTerminalExecutionFailure())
++        {
++            // Transaction failures (notably module initializers) can have no
++            // TypeFailure. Do not manufacture an InternalError over their
++            // original recovery cause. Never take this lock in metadata scope.
++            if (IsResolvingTypeMetadata() || StagingBridge::IsStaging())
++                throw ShadowTypeResolutionFailure(AssemblyShadowError::InvalidState,
++                    "Managed execution is forbidden in terminal/private metadata state.");
++            std::string detail;
++            {
++                auto& transaction = Current();
++                std::lock_guard<std::mutex> lock(transaction.mutex);
++                detail = transaction.recoveryTerminalDetail.empty() ?
++                    "Assembly Shadow transaction is terminal; business execution requires restart." :
++                    transaction.recoveryTerminalDetail;
++            }
++            // This is a throwing boundary, not the noexcept boolean guard.
++            // Exception construction is fixed AOT; poison is never cleared.
++            Exception::Raise(Exception::GetInvalidOperationException(detail.c_str()));
++            throw std::runtime_error("Assembly Shadow terminal method execution rejected.");
++        }
+         FailTypeResolution(failure ? failure->error : AssemblyShadowError::InternalError,
+             failure ? failure->detail : "Assembly Shadow method execution rejected; diagnostic allocation failed.");
+         throw std::runtime_error("Assembly Shadow method execution rejected.");
