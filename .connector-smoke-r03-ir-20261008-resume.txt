@@ -1,0 +1,4 @@
+Disposable GitHub Connector write-path check only. Do not merge.
+Repository: night-outlook/il2cpp_plus
+Base: 1cf87f8209790f9fb2ebec97487dc1990ccd56c5
+No runtime, test, or acceptance effect.
