@@ -1,0 +1,4 @@
+Disposable Connector write verification for the R03 method-entry correction.
+Repository: night-outlook/il2cpp_plus
+Base: 1cf87f8209790f9fb2ebec97487dc1990ccd56c5
+This branch is not product or runtime evidence and must not be merged.
