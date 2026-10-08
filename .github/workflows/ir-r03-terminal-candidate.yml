@@ -27,33 +27,31 @@ jobs:
           PY
           git apply --recount --check tools/ir_r03/terminal-entry.patch
           git apply --recount tools/ir_r03/terminal-entry.patch
-          python3 - <<'PY'
-          import hashlib,pathlib
-          b=pathlib.Path('libil2cpp/vm/AssemblyShadow.cpp').read_bytes()
-          assert hashlib.sha256(b).hexdigest()=='51f2a0c8f887f5a9b1453769243d7dcaaccbd9d6f6bc2cdbb4ec39a4c0b8e664'
-          assert hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()=='b9734d52924a396bf75ff4c897c536b31cf450f3'
-          PY
+          python3 tools/ir_r03/complete_terminal_candidate.py
       - name: Actual guard fragments with sanitized fresh processes
         run: python3 tools/ir_r03/test_terminal_entry.py --native . --output guard-tests
       - name: Retained R02 header contracts
         run: |
           python3 tools/r02/run_tests.py --output r02-tests
           python3 tools/r02/run_revision_tests.py --output r02-revision-tests
-      - name: Store candidate blob only; Connector owns commit and branch publication
+      - name: Store tested blobs only; Connector owns feature commits and refs
         if: matrix.os == 'ubuntu-latest'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import hashlib,json,os,pathlib,urllib.request
-          p=pathlib.Path('libil2cpp/vm/AssemblyShadow.cpp');b=p.read_bytes()
-          expected='b9734d52924a396bf75ff4c897c536b31cf450f3'
-          assert hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()==expected
-          url='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']+'/git/blobs'
-          req=urllib.request.Request(url,data=json.dumps({'content':b.decode(),'encoding':'utf-8'}).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},method='POST')
-          with urllib.request.urlopen(req) as r:value=json.load(r)
-          assert value['sha']==expected
-          receipt={'candidateBlob':expected,'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b),'workflowCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'featureRefMoved':False,'runtimeAcceptance':False}
+          native=pathlib.Path('libil2cpp/vm/AssemblyShadow.cpp').read_bytes()
+          assert hashlib.sha256(native).hexdigest()=='f33c0704b97c8dfc6abace699a15e099e4e3d66968dc188246e74667e9cb43d6'
+          results=[]
+          for name in ('libil2cpp/vm/AssemblyShadow.cpp','tools/ir_r03/test_terminal_entry.py'):
+              b=pathlib.Path(name).read_bytes();expected=hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()
+              url='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']+'/git/blobs'
+              req=urllib.request.Request(url,data=json.dumps({'content':b.decode(),'encoding':'utf-8'}).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},method='POST')
+              with urllib.request.urlopen(req) as r:value=json.load(r)
+              assert value['sha']==expected
+              results.append({'path':name,'blob':expected,'sha256':hashlib.sha256(b).hexdigest(),'bytes':len(b)})
+          receipt={'files':results,'workflowCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'featureRefMoved':False,'runtimeAcceptance':False}
           pathlib.Path('guard-tests/candidate-blob.json').write_text(json.dumps(receipt,indent=2)+'\n')
           print(json.dumps(receipt))
           PY
@@ -68,4 +66,5 @@ jobs:
             libil2cpp/vm/AssemblyShadow.cpp
             tools/ir_r03/test_terminal_entry.py
             tools/ir_r03/terminal-entry.patch
+            tools/ir_r03/complete_terminal_candidate.py
           if-no-files-found: error
