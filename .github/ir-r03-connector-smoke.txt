@@ -1,0 +1,3 @@
+Disposable Connector write/readback test for terminal method-entry remediation.
+Base 1cf87f8209790f9fb2ebec97487dc1990ccd56c5.
+No feature ref or acceptance state changed.
