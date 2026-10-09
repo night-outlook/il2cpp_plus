@@ -1,0 +1,3 @@
+Operational GitHub Connector write path verification for R03 IR remediation.
+Base: 1cf87f8209790f9fb2ebec97487dc1990ccd56c5
+Not product source and must not merge.
