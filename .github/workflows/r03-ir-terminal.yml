@@ -1,0 +1,61 @@
+name: R03 IR terminal business-entry host policy
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - '.github/workflows/r03-ir-terminal.yml'
+      - 'libil2cpp/vm/AssemblyShadow.cpp'
+      - 'libil2cpp/vm/AssemblyShadowTerminalExecution.h'
+      - 'tools/r03/terminal_execution_tests.cpp'
+permissions:
+  contents: read
+jobs:
+  terminal-policy:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Compile and run exact standalone native policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/terminal"
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread -Ilibil2cpp \
+            tools/r03/terminal_execution_tests.cpp -o "$RUNNER_TEMP/terminal/terminal-policy"
+          "$RUNNER_TEMP/terminal/terminal-policy" | tee "$RUNNER_TEMP/terminal/result.json"
+          git diff --check
+          git diff --exit-code
+      - name: Verify actual native integration sites
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('libil2cpp/vm/AssemblyShadow.cpp').read_text()
+          expected=[
+            '#include "AssemblyShadowTerminalExecution.h"',
+            'if (TerminalMethodDenied(method)) return false;',
+            'return !TerminalMethodDenied(method);',
+            'if (TerminalMethodDenied(method)) RaiseTerminalExecutionRejected();',
+            'FixedDiagnosticExceptionScope diagnostic;',
+            'IsFixedDiagnosticConstructor',
+            'std::strcmp(method->name, ".ctor")',
+            'const TypeFailure* first = s_typeFailure.load(std::memory_order_acquire);',
+          ]
+          for item in expected:
+            assert item in s, item
+          assert s.count('FixedDiagnosticExceptionScope diagnostic;') >= 3
+          print('Native integration source contract: Passed')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: r03-terminal-policy-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/terminal/result.json
+          retention-days: 14
+          if-no-files-found: warn
