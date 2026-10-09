@@ -131,6 +131,12 @@ namespace {
     std::atomic<StartupAttempt> s_startupAttempt{StartupAttempt::Unattempted};
     std::atomic<bool> s_earlyTracking{false};
     std::atomic<const ActiveSnapshot*> s_active{nullptr};
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Disabled) == assembly_shadow_terminal::kDisabled,
+        "Terminal policy Disabled state ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::Failed) == assembly_shadow_terminal::kFailed,
+        "Terminal policy Failed state ABI changed");
+    static_assert(static_cast<int32_t>(AssemblyShadowState::FailedAfterCommit) == assembly_shadow_terminal::kFailedAfterCommit,
+        "Terminal policy FailedAfterCommit state ABI changed");
     std::atomic<AssemblyShadowState> s_state{AssemblyShadowState::Disabled};
     std::atomic<bool> s_lateBaselineUse{false};
     std::atomic<bool> s_unexpectedFailure{false};
