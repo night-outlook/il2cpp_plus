@@ -263,8 +263,11 @@ namespace {
             s_unexpectedFailure.load(std::memory_order_acquire) ||
             s_lateBaselineUse.load(std::memory_order_acquire) ||
             s_referenceViolation.load(std::memory_order_acquire);
+        if (!assembly_shadow_terminal::TerminalForBusiness(state, durable))
+            return false; // Healthy calls do not inspect names or class metadata.
         return assembly_shadow_terminal::RejectMethod(state, durable,
-            s_constructingFixedDiagnosticException, IsFixedDiagnosticConstructor(method));
+            s_constructingFixedDiagnosticException,
+            s_constructingFixedDiagnosticException && IsFixedDiagnosticConstructor(method));
     }
 
     // This terminal rejection is *not* a new failure. Do not overwrite the
