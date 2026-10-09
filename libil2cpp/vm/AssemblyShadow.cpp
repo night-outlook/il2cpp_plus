@@ -1,6 +1,7 @@
 #include "AssemblyShadow.h"
 #include "AssemblyShadowDiagnostics.h"
 #include "AssemblyShadowRecovery.h"
+#include "AssemblyShadowTerminalExecution.h"
 #include "AssemblyShadowR02Diagnostics.h"
 #include "AssemblyShadowObservationMemo.h"
 
@@ -219,6 +220,63 @@ namespace {
         std::unique_ptr<TypeFailure> failure(new TypeFailure{error, detail});
         const TypeFailure* expected = nullptr;
         if (s_typeFailure.compare_exchange_strong(expected, failure.get(), std::memory_order_acq_rel)) failure.release();
+    }
+
+    // A diagnostic throw constructs fixed corelib exception objects by invoking
+    // their AOT .ctors. Permit only that exact, physical constructor chain on
+    // this thread; never arbitrary callbacks, other methods, or interpreter IL.
+    // A second attempt to construct a diagnostic while already doing so fails
+    // natively rather than recursively trying to raise another managed error.
+    thread_local bool s_constructingFixedDiagnosticException = false;
+
+    struct FixedDiagnosticExceptionScope
+    {
+        FixedDiagnosticExceptionScope()
+        {
+            if (s_constructingFixedDiagnosticException)
+                throw std::runtime_error("Recursive Assembly Shadow diagnostic exception construction.");
+            s_constructingFixedDiagnosticException = true;
+        }
+        ~FixedDiagnosticExceptionScope() { s_constructingFixedDiagnosticException = false; }
+        FixedDiagnosticExceptionScope(const FixedDiagnosticExceptionScope&) = delete;
+        FixedDiagnosticExceptionScope& operator=(const FixedDiagnosticExceptionScope&) = delete;
+    };
+
+    bool IsFixedDiagnosticConstructor(const MethodInfo* method) noexcept
+    {
+        if (!method || !method->klass || !method->klass->image || !method->name ||
+            method->is_inflated || method->klass->generic_class || method->parameters_count ||
+            (method->flags & METHOD_ATTRIBUTE_STATIC) ||
+            method->klass->image != Image::GetCorlib() || !method->klass->namespaze ||
+            !method->klass->name || std::strcmp(method->klass->namespaze, "System") ||
+            std::strcmp(method->name, ".ctor"))
+            return false;
+        const char* name = method->klass->name;
+        return !std::strcmp(name, "Object") || !std::strcmp(name, "Exception") ||
+            !std::strcmp(name, "SystemException") || !std::strcmp(name, "InvalidOperationException");
+    }
+
+    bool TerminalMethodDenied(const MethodInfo* method) noexcept
+    {
+        const int32_t state = static_cast<int32_t>(s_state.load(std::memory_order_acquire));
+        const bool durable = s_typeFailure.load(std::memory_order_acquire) != nullptr ||
+            s_unexpectedFailure.load(std::memory_order_acquire) ||
+            s_lateBaselineUse.load(std::memory_order_acquire) ||
+            s_referenceViolation.load(std::memory_order_acquire);
+        return assembly_shadow_terminal::RejectMethod(state, durable,
+            s_constructingFixedDiagnosticException, IsFixedDiagnosticConstructor(method));
+    }
+
+    // This terminal rejection is *not* a new failure. Do not overwrite the
+    // initializer's transaction.recoveryTerminalError when s_typeFailure is
+    // absent; the original first error remains in GetRecoveryInfoJson.
+    void RaiseTerminalExecutionRejected()
+    {
+        const TypeFailure* first = s_typeFailure.load(std::memory_order_acquire);
+        const char* detail = first ? first->detail.c_str() :
+            "Assembly Shadow terminal failure: business execution rejected; use GetRecoveryInfoJson for the original cause.";
+        FixedDiagnosticExceptionScope diagnostic;
+        Exception::Raise(Exception::GetInvalidOperationException(detail));
     }
 
     Transaction& Current()
@@ -630,6 +688,7 @@ namespace {
         s_referenceViolation.store(true, std::memory_order_release);
         s_state.store(AssemblyShadowState::FailedAfterCommit, std::memory_order_release);
         // The sealed state and first-failure detail survive a managed catch.
+        FixedDiagnosticExceptionScope diagnostic;
         Exception::Raise(Exception::GetInvalidOperationException(detail.c_str()));
     }
 }
@@ -1572,6 +1631,9 @@ void AssemblyShadow::RecordBaselineUse(const Il2CppAssembly* assembly, BaselineU
 bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* site) noexcept
 {
     s_methodChecks.fetch_add(1, std::memory_order_relaxed);
+    // Terminal execution is denied before observing, allocating, or mutating
+    // method/candidate records. A valid current MethodInfo is not an escape.
+    if (TerminalMethodDenied(method)) return false;
     const MethodInfo* definition = method && method->is_inflated && method->genericMethod ?
         method->genericMethod->methodDefinition : method;
     const Il2CppAssembly* owners[2] = {PhysicalMethodAssembly(method), PhysicalMethodAssembly(definition)};
@@ -1647,7 +1709,8 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
             }
         }
     }
-    if (error == AssemblyShadowError::Success) return true;
+    // Cover terminal publication racing the ownership/generic checks.
+    if (error == AssemblyShadowError::Success) return !TerminalMethodDenied(method);
 
     // No managed exception or metadata query is allowed in this boolean hook.
     // Failure strings allocate only on rejection, outside usage/observation locks.
@@ -1683,6 +1746,7 @@ void AssemblyShadow::RequireActiveMethod(const MethodInfo* method, const char* s
 {
     if (!AssertMethodIsActive(method, site))
     {
+        if (TerminalMethodDenied(method)) RaiseTerminalExecutionRejected();
         const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
         FailTypeResolution(failure ? failure->error : AssemblyShadowError::InternalError,
             failure ? failure->detail : "Assembly Shadow method execution rejected; diagnostic allocation failed.");
@@ -1727,6 +1791,7 @@ void AssemblyShadow::FailTypeResolution(AssemblyShadowError error, const std::st
     // Allocating a managed exception inside the physical metadata scope would
     // itself be an allocation exposure. Unwind that scope natively first.
     if (IsResolvingTypeMetadata() || StagingBridge::IsStaging()) throw ShadowTypeResolutionFailure(error, detail);
+    FixedDiagnosticExceptionScope diagnostic;
     Exception::Raise(Exception::GetInvalidOperationException(detail.c_str()));
 }
 
