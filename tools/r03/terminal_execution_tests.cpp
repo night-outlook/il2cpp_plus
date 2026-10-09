@@ -3,6 +3,8 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <initializer_list>
+#include <cstdlib>
 #include <thread>
 
 using namespace il2cpp::vm::assembly_shadow_terminal;
