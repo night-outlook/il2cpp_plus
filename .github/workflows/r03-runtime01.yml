@@ -1,0 +1,55 @@
+name: R03 terminal native reporting contracts
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - '.github/workflows/r03-runtime01.yml'
+      - 'libil2cpp/vm/AssemblyShadowTerminalReporting.h'
+      - 'libil2cpp/vm/AssemblyShadow.cpp'
+      - 'libil2cpp/vm/Runtime.cpp'
+      - 'tools/r03/runtime01/**'
+permissions:
+  contents: read
+jobs:
+  reporting:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Test actual adapter and unchanged terminal policy with host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          OUT="$RUNNER_TEMP/runtime01"
+          mkdir "$OUT"
+          python3 -B tools/r03/runtime01/test_reporting.py 2>&1 | tee "$OUT/reporting.log"
+          R03_SANITIZERS=1 python3 -B tools/r03/runtime01/test_reporting.py 2>&1 | tee "$OUT/sanitized.log"
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread -Ilibil2cpp tools/r03/terminal_execution_tests.cpp -o "$OUT/policy"
+          "$OUT/policy" | tee "$OUT/policy.log"
+          git diff --check
+          git diff --exit-code
+      - name: Bind source hashes and raw test logs
+        if: always()
+        shell: python
+        run: |
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'runtime01';out.mkdir(exist_ok=True)
+          source=['libil2cpp/vm/AssemblyShadowTerminalReporting.h','libil2cpp/vm/Runtime.cpp','libil2cpp/vm/AssemblyShadow.cpp','libil2cpp/vm/AssemblyShadowTerminalExecution.h','tools/r03/runtime01/test_reporting.py']
+          rows=[{'path':p,'sha256':hashlib.sha256(Path(p).read_bytes()).hexdigest(),'gitBlob':subprocess.check_output(['git','rev-parse','HEAD:'+p],text=True).strip()} for p in source]
+          files=[{'path':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(out.iterdir()) if p.is_file()]
+          (out/'provenance.json').write_text(json.dumps({'head':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'sources':rows,'files':files,'coverage':'Actual adapter and Runtime::Invoke with VM mocks; standalone real policy header','unityRun':False,'runtimeAcceptance':False},indent=2)+'\n')
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: runtime01-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime01
+          retention-days: 14
+          if-no-files-found: error

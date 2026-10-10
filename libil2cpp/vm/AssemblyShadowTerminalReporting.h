@@ -11,9 +11,11 @@
 #include "vm/Image.h"
 #include "vm/MetadataCache.h"
 #include "vm/Object.h"
+#include "vm/Class.h"
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 namespace il2cpp { namespace vm { namespace assembly_shadow_reporting {
 
@@ -55,7 +57,10 @@ inline bool IsExactEngineReport(const MethodInfo* method, const void* instance)
     const Il2CppAssembly* physical =
         MetadataCache::GetAotAssemblyByNamePhysical("UnityEngine.CoreModule");
     if (!physical || !physical->image || method->klass->image != physical->image ||
-        method->klass->image->assembly != physical) return false;
+        method->klass->image->assembly != physical ||
+        AssemblyShadow::IsCandidate(physical) ||
+        AssemblyShadow::IsShadowedBaseline(physical) ||
+        AssemblyShadow::IsActiveShadow(physical)) return false;
     return PhysicalClassType(method->parameters[0], Image::GetCorlib(), "System", "Exception") &&
         PhysicalClassType(method->parameters[1], physical->image, "UnityEngine", "Object");
 }
@@ -89,6 +94,50 @@ inline void WriteMessage(const Il2CppException* error) noexcept
     std::fputc('"', stderr);
 }
 
+// This allocation is deliberately NOT Object::Box/Object::New. Those generic
+// paths include Runtime::ClassInit, finalizer registration and profiler callbacks.
+// Only original physical Boolean metadata and reference-free native allocation
+// are needed for this fixed engine return. Any failure terminates natively: it
+// must not ask Unity to report another managed exception recursively.
+inline Il2CppObject* FixedHandledResult() noexcept
+{
+    try
+    {
+        Il2CppClass* klass = il2cpp_defaults.boolean_class;
+        if (!klass || klass->image != Image::GetCorlib() ||
+            klass->generic_class || !klass->name || !klass->namespaze ||
+            std::strcmp(klass->name, "Boolean") || std::strcmp(klass->namespaze, "System"))
+            throw 0;
+        Class::Init(klass); // Native metadata setup only, never Runtime::ClassInit.
+        if (!klass->initialized_and_no_error || !klass->byval_arg.valuetype ||
+            klass->byval_arg.type != IL2CPP_TYPE_BOOLEAN ||
+            klass->has_references || klass->has_finalize ||
+            !klass->cctor_finished_or_no_cctor ||
+            klass->instance_size < sizeof(Il2CppObject) + sizeof(bool))
+            throw 0;
+        Il2CppObject* boxed = Object::NewPtrFree(klass);
+        if (!boxed || boxed->klass != klass) throw 0;
+        *static_cast<bool*>(Object::Unbox(boxed)) = true;
+        return boxed;
+    }
+    catch (...)
+    {
+        std::fputs("[AssemblyShadowTerminalReport] fatal=FixedBooleanAllocationFailed\n", stderr);
+        std::fflush(stderr);
+        std::abort();
+    }
+}
+
+inline void TracePhase(int32_t phase) noexcept
+{
+    AssemblyShadowState state;
+    AssemblyShadow::GetState(state);
+    std::fprintf(stderr, "[AssemblyShadowPhase] phase=%d state=%d generation=%llu\n",
+        static_cast<int>(phase), static_cast<int32_t>(state),
+        static_cast<unsigned long long>(AssemblyShadow::ActiveGeneration()));
+    std::fflush(stderr);
+}
+
 inline bool TryHandle(const MethodInfo* method, void* instance, void** arguments,
     Il2CppObject*& result)
 {
@@ -111,9 +160,7 @@ inline bool TryHandle(const MethodInfo* method, void* instance, void** arguments
     // it via the native sink above, NOT via the managed callback. Returning true
     // avoids the default managed reporting cascade; returning a failure/throw
     // recursively re-enters ScriptingInvocation (the E stack-overflow defect).
-    // Boxing Boolean is fixed VM allocation with no Boolean .cctor/user body.
-    bool handled = true;
-    result = Object::Box(il2cpp_defaults.boolean_class, &handled);
+    result = FixedHandledResult();
     return true;
 }
 

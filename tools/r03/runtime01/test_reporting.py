@@ -6,6 +6,8 @@ message reading from an Il2CppObject base and repeated bounded native logging.
 """
 import hashlib
 import json
+import os
+import signal
 from pathlib import Path
 import shutil
 import subprocess
@@ -24,7 +26,7 @@ struct Il2CppType { struct { const void* typeHandle=nullptr; } data; int type=18
 struct Il2CppAssembly;
 struct Il2CppImage { const Il2CppAssembly* assembly=nullptr; uint32_t typeCount=1; const void* handle=nullptr; const char* ns=nullptr; const char* name=nullptr; };
 struct Il2CppAssembly { Il2CppImage* image=nullptr; };
-struct Il2CppClass { Il2CppImage* image=nullptr; const char* name=nullptr; const char* namespaze=nullptr; void* generic_class=nullptr; Il2CppType byval_arg; Il2CppClass* parent=nullptr; bool cctor_finished_or_no_cctor=true; };
+struct Il2CppClass { Il2CppImage* image=nullptr; const char* name=nullptr; const char* namespaze=nullptr; void* generic_class=nullptr; Il2CppType byval_arg; Il2CppClass* parent=nullptr; bool cctor_finished_or_no_cctor=true,initialized_and_no_error=true,has_references=false,has_finalize=false; uint32_t instance_size=32; };
 struct Il2CppObject { Il2CppClass* klass=nullptr; };
 struct Il2CppString { int32_t length=0; uint16_t chars[2052]={}; };
 // Mirror the SDK base-class relationship, not the old incorrect named member.
@@ -33,11 +35,15 @@ struct MethodInfo { const char* name=nullptr; Il2CppClass* klass=nullptr; bool i
 struct Il2CppExceptionWrapper { Il2CppException* ex; };
 struct Defaults { Il2CppClass* exception_class=nullptr; Il2CppClass* boolean_class=nullptr; };
 inline Defaults il2cpp_defaults;
-inline bool denied=false;
+inline bool denied=false, candidate=false, shadowed=false, active=false;
+inline int allocationMode=0;
 inline int managedBodies=0, boxes=0, firstFailure=73;
 inline Il2CppImage coreImage, corlibImage, impostorImage;
 inline Il2CppAssembly engineAssembly;
-inline Il2CppObject boxedTrue, boxedFalse;
+struct MockBox { Il2CppObject header; bool value=false; };
+inline MockBox boxStorage;
+inline Il2CppObject& boxedTrue=boxStorage.header;
+inline Il2CppObject boxedFalse;
 inline Il2CppException rejection;
 namespace il2cpp { namespace gc { struct WriteBarrier {
  template<typename T> static void GenericStoreNull(T** p) { *p=nullptr; }
@@ -47,6 +53,10 @@ enum class AssemblyShadowState { Committed=6, FailedAfterCommit=9 };
 enum class BaselineUseKind { ClassInit };
 struct AssemblyShadow {
  static bool AssertMethodIsActive(const MethodInfo*,const char*) noexcept { return !denied; }
+ static bool IsCandidate(const Il2CppAssembly*) { return candidate; }
+ static bool IsShadowedBaseline(const Il2CppAssembly*) { return shadowed; }
+ static bool IsActiveShadow(const Il2CppAssembly*) { return active; }
+ static uint64_t ActiveGeneration() { return 2; }
  static void RequireUserCodeAllowed() {}
  static const MethodInfo* ResolveReflectionMethod(const MethodInfo* m) { return m; }
  static void RequireActiveMethod(const MethodInfo*,const char*) { if(denied) throw Il2CppExceptionWrapper{&rejection}; }
@@ -63,7 +73,17 @@ struct MetadataCache {
  }
 };
 struct Image { static const Il2CppImage* GetCorlib(){return &corlibImage;} };
-struct Object { static Il2CppObject* Box(Il2CppClass*,void* p){++boxes;return *static_cast<bool*>(p)?&boxedTrue:&boxedFalse;} };
+struct Class { static void Init(Il2CppClass*) {} };
+// Intentionally no Object::Box or Object::New API exists in this dependency model.
+struct Object {
+ static Il2CppObject* NewPtrFree(Il2CppClass* c) {
+  ++boxes;
+  if(allocationMode==1) throw Il2CppExceptionWrapper{&rejection};
+  if(allocationMode==2) return nullptr;
+  boxedTrue.klass=c;return &boxedTrue;
+ }
+ static void* Unbox(Il2CppObject*) { return &boxStorage.value; }
+};
 struct Runtime {
  static Il2CppObject* Invoke(const MethodInfo*,void*,void**,Il2CppException**);
  static Il2CppObject* InvokeWithThrow(const MethodInfo*,void*,void**) { ++managedBodies;return &boxedFalse; }
@@ -74,8 +94,10 @@ struct Runtime {
 MAIN = r'''
 #include <cassert>
 #include <iostream>
+#include <sys/resource.h>
 using il2cpp::vm::Runtime;
-int main() {
+int main(int argc,char** argv) {
+ rlimit limit{0,0};setrlimit(RLIMIT_CORE,&limit);
  int h1=0,h2=0;
  engineAssembly.image=&coreImage;coreImage.assembly=&engineAssembly;
  coreImage.handle=&h1;coreImage.ns="UnityEngine";coreImage.name="Object";
@@ -84,10 +106,25 @@ int main() {
  Il2CppType arg0,arg1,ret;arg0.data.typeHandle=&h2;arg1.data.typeHandle=&h1;ret.type=IL2CPP_TYPE_BOOLEAN;
  const Il2CppType* args[]={&arg0,&arg1};
  MethodInfo m;m.name="CallOverridenDebugHandler";m.klass=&cls;m.parameters=args;m.return_type=&ret;
+ Il2CppClass boolean;boolean.image=&corlibImage;boolean.name="Boolean";boolean.namespaze="System";
+ boolean.byval_arg.valuetype=true;boolean.byval_arg.type=IL2CPP_TYPE_BOOLEAN;
+ il2cpp_defaults.boolean_class=&boolean;
  Il2CppException* exc=&rejection;void* values[]={nullptr,nullptr};
+ (void)argc;(void)argv;
  assert(Runtime::Invoke(&m,nullptr,values,&exc)==&boxedFalse && !exc && managedBodies==1);
  denied=true;
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+ if(argc>1) {
+  if(!std::strcmp(argv[1],"throw")) allocationMode=1;
+  else if(!std::strcmp(argv[1],"null")) allocationMode=2;
+  else if(!std::strcmp(argv[1],"references")) boolean.has_references=true;
+  else if(!std::strcmp(argv[1],"foreign")) boolean.image=&impostorImage;
+  else if(!std::strcmp(argv[1],"cctor")) boolean.cctor_finished_or_no_cctor=false;
+  else if(!std::strcmp(argv[1],"small")) boolean.instance_size=0;
+  else if(!std::strcmp(argv[1],"metadata-error")) boolean.initialized_and_no_error=false;
+  else return 99;
+  Runtime::Invoke(&m,nullptr,values,&exc);return 100; // Must terminate, never recurse.
+ }
  Il2CppClass exceptionClass,derivedClass;derivedClass.parent=&exceptionClass;
  il2cpp_defaults.exception_class=&exceptionClass;
  Il2CppString message;message.length=4;
@@ -97,7 +134,7 @@ int main() {
  auto rejected=[&](){exc=nullptr;int before=managedBodies;assert(!Runtime::Invoke(&m,nullptr,values,&exc));assert(exc==&rejection && managedBodies==before);};
  int before=managedBodies;
  for(int i=0;i<20000;++i) {exc=&rejection;assert(Runtime::Invoke(&m,nullptr,values,&exc)==&boxedTrue && !exc);}
- assert(managedBodies==before && firstFailure==73);
+ assert(managedBodies==before && firstFailure==73 && boxStorage.value);
  // Directly exercise message bounds and invalid/null exception arguments.
  message.length=2050;
  for(int i=0;i<2050;++i)message.chars[i]='x';
@@ -107,6 +144,9 @@ int main() {
  il2cpp::vm::assembly_shadow_reporting::WriteMessage(nullptr);
  // No same-named callback with different identity/signature is admitted.
  m.name="Business";rejected();m.name="CallOverridenDebugHandler";
+ candidate=true;rejected();candidate=false;
+ shadowed=true;rejected();shadowed=false;
+ active=true;rejected();active=false;
  cls.image=&impostorImage;rejected();cls.image=&coreImage;
  cls.name="Other";rejected();cls.name="Debug";
  cls.namespaze="User";rejected();cls.namespaze="UnityEngine";
@@ -125,7 +165,7 @@ int main() {
  assert(Runtime::Invoke(&m,nullptr,values,nullptr)==&boxedTrue);
  m.name="Business";assert(!Runtime::Invoke(&m,nullptr,values,nullptr));
  assert(firstFailure==73 && managedBodies==1);
- std::cout << "{\"result\":\"Passed\",\"feature\":\"ON\",\"repeatReports\":20000,\"managedBodiesAfterPoison\":0,\"negativeIdentities\":15,\"exceptionMessageCases\":4,\"unityRun\":false}\n";
+ std::cout << "{\"result\":\"Passed\",\"feature\":\"ON\",\"repeatReports\":20000,\"managedBodiesAfterPoison\":0,\"negativeIdentities\":18,\"exceptionMessageCases\":4,\"unityRun\":false}\n";
 #else
  assert(Runtime::Invoke(&m,nullptr,values,&exc)==&boxedFalse&&!exc&&managedBodies==2);
  std::cout << "{\"result\":\"Passed\",\"feature\":\"OFF\",\"unityRun\":false}\n";
@@ -143,9 +183,10 @@ def main():
     assert body.index('TryHandle') < body.index('RequireActiveMethod')
     cc=shutil.which('clang++') or shutil.which('g++');assert cc
     rows=[]
+    sanitizers=os.environ.get('R03_SANITIZERS')=='1'
     with tempfile.TemporaryDirectory() as td:
         root=Path(td);(root/'stub.h').write_text(STUB)
-        for name in ('il2cpp-config.h','il2cpp-class-internals.h','il2cpp-object-internals.h','il2cpp-tabledefs.h','vm/AssemblyShadow.h','vm/Image.h','vm/MetadataCache.h','vm/Object.h'):
+        for name in ('il2cpp-config.h','il2cpp-class-internals.h','il2cpp-object-internals.h','il2cpp-tabledefs.h','vm/AssemblyShadow.h','vm/Image.h','vm/MetadataCache.h','vm/Object.h','vm/Class.h'):
             p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('#include "stub.h"\n')
         header=ROOT/'libil2cpp/vm/AssemblyShadowTerminalReporting.h'
         program='#include "stub.h"\n#include "'+str(header)+'"\nnamespace il2cpp { namespace vm {\n'+body+'\n}}\n'+MAIN
@@ -153,6 +194,7 @@ def main():
         for enabled in (1,0):
             exe=root/('test-'+str(enabled))
             cmd=[cc,'-std=c++17','-Wall','-Wextra','-Werror','-pedantic','-DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW='+str(enabled),'-I'+str(root),str(root/'invoke.cpp'),'-o',str(exe)]
+            if sanitizers:cmd[1:1]=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
             subprocess.run(cmd,check=True)
             run=subprocess.run([str(exe)],capture_output=True,text=True,check=True,timeout=30)
             data=json.loads(run.stdout);assert data['result']=='Passed'
@@ -160,7 +202,14 @@ def main():
                 assert run.stderr.count('[AssemblyShadowTerminalReport]')==32
                 assert 'A\\u0022\\u000a\\u4e2d' in run.stderr
                 assert '[truncated]' in run.stderr and 'NonExceptionArgument' in run.stderr
+                fatal=[]
+                for mode in ('throw','null','references','foreign','cctor','small','metadata-error'):
+                    death=subprocess.run([str(exe),mode],capture_output=True,text=True,timeout=10)
+                    assert death.returncode == -signal.SIGABRT,(mode,death.returncode,death.stderr)
+                    assert 'fatal=FixedBooleanAllocationFailed' in death.stderr
+                    fatal.append(mode)
+                data['controlledNativeFatalCases']=fatal
             print(run.stdout.strip());rows.append(data)
-    print(json.dumps({'result':'Passed','productionRuntimeSha256':hashlib.sha256(source.encode()).hexdigest(),'configurations':rows,'dependencyModel':'VM mocks; actual Runtime::Invoke and reporting header, not a Unity execution','unityRun':False},sort_keys=True))
+    print(json.dumps({'result':'Passed','productionRuntimeSha256':hashlib.sha256(source.encode()).hexdigest(),'configurations':rows,'dependencyModel':'VM mocks; actual Runtime::Invoke and reporting header, not a Unity execution','unityRun':False,'sanitizers':sanitizers},sort_keys=True))
 
 if __name__=='__main__':main()
