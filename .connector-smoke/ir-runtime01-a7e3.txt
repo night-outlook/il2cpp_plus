@@ -1,0 +1,3 @@
+Disposable Connector write verification for IR-LOCAL-RUNTIME-01.
+Base: night-outlook/il2cpp_plus codex/assembly-shadow-r01b-h1 @ 9ce1c1bfec9a21b92ea300acda5f27a3815b2c37.
+Transport evidence only; not runtime evidence or feature acceptance.
