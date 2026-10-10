@@ -25,6 +25,37 @@ inline std::atomic<uint64_t>& HandledCounter()
     return count;
 }
 
+// Completion is published only after the fixed response is ready. Test-only
+// native observers may read this counter; it grants no managed execution.
+inline std::atomic<uint64_t>& CompletedCounter()
+{
+    static std::atomic<uint64_t> count{0};
+    return count;
+}
+
+inline bool& TransportActive()
+{
+    static thread_local bool active = false;
+    return active;
+}
+
+struct NativeTransportScope
+{
+    NativeTransportScope() noexcept
+    {
+        if (TransportActive())
+        {
+            std::fputs("[AssemblyShadowTerminalReport] fatal=NativeReportingReentry\n", stderr);
+            std::fflush(stderr);
+            std::abort();
+        }
+        TransportActive() = true;
+    }
+    ~NativeTransportScope() { TransportActive() = false; }
+    NativeTransportScope(const NativeTransportScope&) = delete;
+    NativeTransportScope& operator=(const NativeTransportScope&) = delete;
+};
+
 inline bool PhysicalClassType(const Il2CppType* type, const Il2CppImage* image,
     const char* namespaze, const char* name)
 {
@@ -113,7 +144,8 @@ inline Il2CppObject* FixedHandledResult() noexcept
             klass->byval_arg.type != IL2CPP_TYPE_BOOLEAN ||
             klass->has_references || klass->has_finalize ||
             !klass->cctor_finished_or_no_cctor ||
-            klass->instance_size < sizeof(Il2CppObject) + sizeof(bool))
+            klass->instance_size < sizeof(Il2CppObject) + sizeof(bool) ||
+            klass->instance_size > sizeof(Il2CppObject) + 16)
             throw 0;
         Il2CppObject* boxed = Object::NewPtrFree(klass);
         if (!boxed || boxed->klass != klass) throw 0;
@@ -145,6 +177,7 @@ inline bool TryHandle(const MethodInfo* method, void* instance, void** arguments
     // Reuse the actual durable-failure-aware policy, including the publication
     // race. Healthy and OFF invocations continue through the ordinary path.
     if (AssemblyShadow::AssertMethodIsActive(method, "TerminalReporting.classify")) return false;
+    NativeTransportScope transport;
     const uint64_t count = HandledCounter().fetch_add(1, std::memory_order_relaxed) + 1;
     if (count <= 32)
     {
@@ -161,6 +194,7 @@ inline bool TryHandle(const MethodInfo* method, void* instance, void** arguments
     // avoids the default managed reporting cascade; returning a failure/throw
     // recursively re-enters ScriptingInvocation (the E stack-overflow defect).
     result = FixedHandledResult();
+    CompletedCounter().fetch_add(1, std::memory_order_release);
     return true;
 }
 
