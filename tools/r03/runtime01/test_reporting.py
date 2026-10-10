@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run the actual Runtime::Invoke body and production reporting header.
+"""Actual Runtime::Invoke body/header with mocked VM dependencies; not Unity.
 
-Only VM dependencies are mocked. These are host regressions, not Unity tests.
-No production conditional test switch is used. Also test feature-OFF unchanged.
+Covers healthy/OFF, terminal reporting, exact-identity negatives, actual header
+message reading from an Il2CppObject base and repeated bounded native logging.
 """
 import hashlib
 import json
@@ -26,8 +26,9 @@ struct Il2CppImage { const Il2CppAssembly* assembly=nullptr; uint32_t typeCount=
 struct Il2CppAssembly { Il2CppImage* image=nullptr; };
 struct Il2CppClass { Il2CppImage* image=nullptr; const char* name=nullptr; const char* namespaze=nullptr; void* generic_class=nullptr; Il2CppType byval_arg; Il2CppClass* parent=nullptr; bool cctor_finished_or_no_cctor=true; };
 struct Il2CppObject { Il2CppClass* klass=nullptr; };
-struct Il2CppString { int32_t length=0; uint16_t chars[4]={}; };
-struct Il2CppException { Il2CppObject object; Il2CppString* message=nullptr; };
+struct Il2CppString { int32_t length=0; uint16_t chars[2052]={}; };
+// Mirror the SDK base-class relationship, not the old incorrect named member.
+struct Il2CppException : Il2CppObject { Il2CppString* message=nullptr; };
 struct MethodInfo { const char* name=nullptr; Il2CppClass* klass=nullptr; bool is_inflated=false,is_generic=false; int flags=16; int parameters_count=2; const Il2CppType** parameters=nullptr; const Il2CppType* return_type=nullptr; };
 struct Il2CppExceptionWrapper { Il2CppException* ex; };
 struct Defaults { Il2CppClass* exception_class=nullptr; Il2CppClass* boolean_class=nullptr; };
@@ -87,11 +88,24 @@ int main() {
  assert(Runtime::Invoke(&m,nullptr,values,&exc)==&boxedFalse && !exc && managedBodies==1);
  denied=true;
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+ Il2CppClass exceptionClass,derivedClass;derivedClass.parent=&exceptionClass;
+ il2cpp_defaults.exception_class=&exceptionClass;
+ Il2CppString message;message.length=4;
+ message.chars[0]='A';message.chars[1]='"';message.chars[2]='\n';message.chars[3]=0x4e2d;
+ Il2CppException original;original.klass=&derivedClass;original.message=&message;
+ values[0]=&original;
  auto rejected=[&](){exc=nullptr;int before=managedBodies;assert(!Runtime::Invoke(&m,nullptr,values,&exc));assert(exc==&rejection && managedBodies==before);};
  int before=managedBodies;
  for(int i=0;i<20000;++i) {exc=&rejection;assert(Runtime::Invoke(&m,nullptr,values,&exc)==&boxedTrue && !exc);}
  assert(managedBodies==before && firstFailure==73);
- // No permission is granted to a same-named callback with different identity/signature.
+ // Directly exercise message bounds and invalid/null exception arguments.
+ message.length=2050;
+ for(int i=0;i<2050;++i)message.chars[i]='x';
+ il2cpp::vm::assembly_shadow_reporting::WriteMessage(&original);
+ original.klass=&cls;
+ il2cpp::vm::assembly_shadow_reporting::WriteMessage(&original);
+ il2cpp::vm::assembly_shadow_reporting::WriteMessage(nullptr);
+ // No same-named callback with different identity/signature is admitted.
  m.name="Business";rejected();m.name="CallOverridenDebugHandler";
  cls.image=&impostorImage;rejected();cls.image=&coreImage;
  cls.name="Other";rejected();cls.name="Debug";
@@ -111,7 +125,7 @@ int main() {
  assert(Runtime::Invoke(&m,nullptr,values,nullptr)==&boxedTrue);
  m.name="Business";assert(!Runtime::Invoke(&m,nullptr,values,nullptr));
  assert(firstFailure==73 && managedBodies==1);
- std::cout << "{\"result\":\"Passed\",\"feature\":\"ON\",\"repeatReports\":20000,\"managedBodiesAfterPoison\":0,\"negativeIdentities\":15,\"unityRun\":false}\n";
+ std::cout << "{\"result\":\"Passed\",\"feature\":\"ON\",\"repeatReports\":20000,\"managedBodiesAfterPoison\":0,\"negativeIdentities\":15,\"exceptionMessageCases\":4,\"unityRun\":false}\n";
 #else
  assert(Runtime::Invoke(&m,nullptr,values,&exc)==&boxedFalse&&!exc&&managedBodies==2);
  std::cout << "{\"result\":\"Passed\",\"feature\":\"OFF\",\"unityRun\":false}\n";
@@ -127,13 +141,11 @@ def main():
     assert 'assembly_shadow_reporting::TryHandle' in body
     assert 'RequireActiveMethod(method, "Runtime::Invoke")' in body
     assert body.index('TryHandle') < body.index('RequireActiveMethod')
-    cc=shutil.which('clang++') or shutil.which('g++')
-    assert cc
+    cc=shutil.which('clang++') or shutil.which('g++');assert cc
     rows=[]
     with tempfile.TemporaryDirectory() as td:
-        root=Path(td)
-        (root/'stub.h').write_text(STUB)
-        for name in ('il2cpp-config.h','il2cpp-class-internals.h','il2cpp-object-internals.h','vm/AssemblyShadow.h','vm/Image.h','vm/MetadataCache.h','vm/Object.h'):
+        root=Path(td);(root/'stub.h').write_text(STUB)
+        for name in ('il2cpp-config.h','il2cpp-class-internals.h','il2cpp-object-internals.h','il2cpp-tabledefs.h','vm/AssemblyShadow.h','vm/Image.h','vm/MetadataCache.h','vm/Object.h'):
             p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('#include "stub.h"\n')
         header=ROOT/'libil2cpp/vm/AssemblyShadowTerminalReporting.h'
         program='#include "stub.h"\n#include "'+str(header)+'"\nnamespace il2cpp { namespace vm {\n'+body+'\n}}\n'+MAIN
@@ -143,10 +155,12 @@ def main():
             cmd=[cc,'-std=c++17','-Wall','-Wextra','-Werror','-pedantic','-DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW='+str(enabled),'-I'+str(root),str(root/'invoke.cpp'),'-o',str(exe)]
             subprocess.run(cmd,check=True)
             run=subprocess.run([str(exe)],capture_output=True,text=True,check=True,timeout=30)
-            data=json.loads(run.stdout)
-            assert data['result']=='Passed'
-            if enabled: assert run.stderr.count('[AssemblyShadowTerminalReport]')==32
+            data=json.loads(run.stdout);assert data['result']=='Passed'
+            if enabled:
+                assert run.stderr.count('[AssemblyShadowTerminalReport]')==32
+                assert 'A\\u0022\\u000a\\u4e2d' in run.stderr
+                assert '[truncated]' in run.stderr and 'NonExceptionArgument' in run.stderr
             print(run.stdout.strip());rows.append(data)
-    print(json.dumps({'result':'Passed','productionRuntimeBlobSha256':hashlib.sha256(source.encode()).hexdigest(),'configurations':rows,'dependencyModel':'VM mocks; actual production Runtime::Invoke body and reporting header','unityRun':False},sort_keys=True))
+    print(json.dumps({'result':'Passed','productionRuntimeSha256':hashlib.sha256(source.encode()).hexdigest(),'configurations':rows,'dependencyModel':'VM mocks; actual Runtime::Invoke and reporting header, not a Unity execution','unityRun':False},sort_keys=True))
 
 if __name__=='__main__':main()
