@@ -1,0 +1,5 @@
+Disposable GitHub Connector contents-write probe.
+Repository: night-outlook/il2cpp_plus
+Base: 5df6a01bfee2fe63b28fa45d8720571858c0f589
+Branch: codex/connector-smoke-20261010-runtime01-9f53
+Not a runtime result, source candidate, or Local Validation handoff.
