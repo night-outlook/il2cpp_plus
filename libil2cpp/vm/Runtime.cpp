@@ -1,3 +1,4 @@
+#include "AssemblyShadowTerminalReporting.h"
 #include "il2cpp-config.h"
 #include "metadata/GenericMethod.h"
 #include "os/CrashHelpers.h"
@@ -601,6 +602,11 @@ namespace vm
         try
         {
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+            // A terminal native diagnostic transport is not managed business
+            // execution. No handler or subscriber body is allowed by this path.
+            Il2CppObject* terminalReport = nullptr;
+            if (assembly_shadow_reporting::TryHandle(method, obj, params, terminalReport))
+                return terminalReport;
             // Unity caches callback MethodInfo pointers (for example
             // ScriptableObject.OnEnable) before a shadow transaction commits.
             // Resolve that physical baseline method at the last common invoke

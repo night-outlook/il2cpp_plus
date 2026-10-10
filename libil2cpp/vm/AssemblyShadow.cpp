@@ -225,7 +225,16 @@ namespace {
         if (s_typeFailure.load(std::memory_order_acquire)) return;
         std::unique_ptr<TypeFailure> failure(new TypeFailure{error, detail});
         const TypeFailure* expected = nullptr;
-        if (s_typeFailure.compare_exchange_strong(expected, failure.get(), std::memory_order_acq_rel)) failure.release();
+        if (s_typeFailure.compare_exchange_strong(expected, failure.get(), std::memory_order_acq_rel))
+        {
+            failure.release();
+            // First-writer-only native evidence; no managed ToString/logger.
+            // Original recovery facts stay immutable. Never infer a Player PASS
+            // from this line; it is an originating failure diagnostic only.
+            std::fprintf(stderr, "[AssemblyShadowFirstFailure] code=%d detail=%.*s truncated=%d\n",
+                static_cast<int32_t>(error), 4096, detail.c_str(), detail.size() > 4096 ? 1 : 0);
+            std::fflush(stderr);
+        }
     }
 
     // A diagnostic throw constructs fixed corelib exception objects by invoking
