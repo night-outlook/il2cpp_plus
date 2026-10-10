@@ -1,0 +1,58 @@
+name: IR runtime01 native candidate a7e3
+on:
+  push:
+    branches: [codex/ir-runtime01-native-20261010-a7e3]
+    paths: ['.github/workflows/ir-runtime01-native-a7e3.yml', 'tools/r03/runtime01/**', 'libil2cpp/vm/AssemblyShadowTerminalReporting.h']
+permissions:
+  contents: write
+jobs:
+  native-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Apply exact Primary source transformation
+        run: |
+          mkdir -p "$RUNNER_TEMP/ir-runtime01"
+          python3 -B tools/r03/runtime01/apply_exact_patch.py | tee "$RUNNER_TEMP/ir-runtime01/transform.log"
+          git diff --check
+          git diff -- libil2cpp/vm/Runtime.cpp libil2cpp/vm/AssemblyShadow.cpp > "$RUNNER_TEMP/ir-runtime01/diff.patch"
+      - name: Exercise actual Invoke boundary and unchanged terminal policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B tools/r03/runtime01/test_reporting.py 2>&1 | tee "$RUNNER_TEMP/ir-runtime01/host.log"
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread -Ilibil2cpp tools/r03/terminal_execution_tests.cpp -o "$RUNNER_TEMP/ir-runtime01/terminal-policy"
+          "$RUNNER_TEMP/ir-runtime01/terminal-policy" | tee "$RUNNER_TEMP/ir-runtime01/policy.log"
+      - name: Stage tested Git blobs only; Connector owns ref publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import hashlib,json,os,shutil,subprocess,urllib.request
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'ir-runtime01'
+          paths=['libil2cpp/vm/Runtime.cpp','libil2cpp/vm/AssemblyShadow.cpp','libil2cpp/vm/AssemblyShadowTerminalReporting.h','tools/r03/runtime01/apply_exact_patch.py','tools/r03/runtime01/test_reporting.py']
+          rows=[]
+          for path in paths:
+              data=Path(path).read_bytes()
+              blob=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+              req=urllib.request.Request('https://api.github.com/repos/night-outlook/il2cpp_plus/git/blobs',data=json.dumps({'content':data.decode(),'encoding':'utf-8'}).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'},method='POST')
+              with urllib.request.urlopen(req,timeout=60) as r: actual=json.load(r)['sha']
+              assert actual==blob
+              dest=out/'sources'/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(data)
+              rows.append({'path':path,'gitBlob':blob,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
+          changed=subprocess.check_output(['git','diff','--name-only'],text=True).splitlines()
+          assert sorted(changed)==['libil2cpp/vm/AssemblyShadow.cpp','libil2cpp/vm/Runtime.cpp']
+          receipt={'kind':'IRRuntime01NativeCandidate','result':'HostPassed','sourceCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'baseRuntime':'9ce1c1bfec9a21b92ea300acda5f27a3815b2c37','files':rows,'gitRefsModifiedByJob':False,'unityRun':False,'runtimeAcceptance':False}
+          (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt,sort_keys=True))
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: ir-runtime01-native-${{ github.sha }}
+          path: ${{ runner.temp }}/ir-runtime01
+          retention-days: 14
+          if-no-files-found: error
