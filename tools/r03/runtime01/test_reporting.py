@@ -26,7 +26,7 @@ struct Il2CppType { struct { const void* typeHandle=nullptr; } data; int type=18
 struct Il2CppAssembly;
 struct Il2CppImage { const Il2CppAssembly* assembly=nullptr; uint32_t typeCount=1; const void* handle=nullptr; const char* ns=nullptr; const char* name=nullptr; };
 struct Il2CppAssembly { Il2CppImage* image=nullptr; };
-struct Il2CppClass { Il2CppImage* image=nullptr; const char* name=nullptr; const char* namespaze=nullptr; void* generic_class=nullptr; Il2CppType byval_arg; Il2CppClass* parent=nullptr; bool cctor_finished_or_no_cctor=true,initialized_and_no_error=true,has_references=false,has_finalize=false; uint32_t instance_size=32; };
+struct Il2CppClass { Il2CppImage* image=nullptr; const char* name=nullptr; const char* namespaze=nullptr; void* generic_class=nullptr; Il2CppType byval_arg; Il2CppClass* parent=nullptr; bool cctor_finished_or_no_cctor=true,initialized_and_no_error=true,has_references=false,has_finalize=false; uint32_t instance_size=16; };
 struct Il2CppObject { Il2CppClass* klass=nullptr; };
 struct Il2CppString { int32_t length=0; uint16_t chars[2052]={}; };
 // Mirror the SDK base-class relationship, not the old incorrect named member.
@@ -75,14 +75,18 @@ struct MetadataCache {
 struct Image { static const Il2CppImage* GetCorlib(){return &corlibImage;} };
 struct Class { static void Init(Il2CppClass*) {} };
 // Intentionally no Object::Box or Object::New API exists in this dependency model.
+namespace assembly_shadow_reporting { inline Il2CppObject* FixedHandledResult() noexcept; }
 struct Object {
+public:
+ static void* Unbox(Il2CppObject*) { return &boxStorage.value; }
+private:
+ friend Il2CppObject* assembly_shadow_reporting::FixedHandledResult() noexcept;
  static Il2CppObject* NewPtrFree(Il2CppClass* c) {
   ++boxes;
   if(allocationMode==1) throw Il2CppExceptionWrapper{&rejection};
   if(allocationMode==2) return nullptr;
   boxedTrue.klass=c;return &boxedTrue;
  }
- static void* Unbox(Il2CppObject*) { return &boxStorage.value; }
 };
 struct Runtime {
  static Il2CppObject* Invoke(const MethodInfo*,void*,void**,Il2CppException**);
@@ -121,6 +125,8 @@ int main(int argc,char** argv) {
   else if(!std::strcmp(argv[1],"foreign")) boolean.image=&impostorImage;
   else if(!std::strcmp(argv[1],"cctor")) boolean.cctor_finished_or_no_cctor=false;
   else if(!std::strcmp(argv[1],"small")) boolean.instance_size=0;
+  else if(!std::strcmp(argv[1],"large")) boolean.instance_size=65536;
+  else if(!std::strcmp(argv[1],"reentry")) il2cpp::vm::assembly_shadow_reporting::TransportActive()=true;
   else if(!std::strcmp(argv[1],"metadata-error")) boolean.initialized_and_no_error=false;
   else return 99;
   Runtime::Invoke(&m,nullptr,values,&exc);return 100; // Must terminate, never recurse.
@@ -135,6 +141,8 @@ int main(int argc,char** argv) {
  int before=managedBodies;
  for(int i=0;i<20000;++i) {exc=&rejection;assert(Runtime::Invoke(&m,nullptr,values,&exc)==&boxedTrue && !exc);}
  assert(managedBodies==before && firstFailure==73 && boxStorage.value);
+ assert(il2cpp::vm::assembly_shadow_reporting::CompletedCounter().load()==20000);
+ assert(!il2cpp::vm::assembly_shadow_reporting::TransportActive());
  // Directly exercise message bounds and invalid/null exception arguments.
  message.length=2050;
  for(int i=0;i<2050;++i)message.chars[i]='x';
@@ -203,10 +211,10 @@ def main():
                 assert 'A\\u0022\\u000a\\u4e2d' in run.stderr
                 assert '[truncated]' in run.stderr and 'NonExceptionArgument' in run.stderr
                 fatal=[]
-                for mode in ('throw','null','references','foreign','cctor','small','metadata-error'):
+                for mode in ('throw','null','references','foreign','cctor','small','metadata-error','large','reentry'):
                     death=subprocess.run([str(exe),mode],capture_output=True,text=True,timeout=10)
                     assert death.returncode == -signal.SIGABRT,(mode,death.returncode,death.stderr)
-                    assert 'fatal=FixedBooleanAllocationFailed' in death.stderr
+                    assert ('fatal=NativeReportingReentry' if mode == 'reentry' else 'fatal=FixedBooleanAllocationFailed') in death.stderr
                     fatal.append(mode)
                 data['controlledNativeFatalCases']=fatal
             print(run.stdout.strip());rows.append(data)
