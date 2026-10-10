@@ -1,0 +1,4 @@
+Disposable Connector contents-API write/readback test.
+Repository: night-outlook/il2cpp_plus
+Base: d8390054ba6ff4d9ade730a685bd71c81c4d583d
+No production source, runtime result, or acceptance changed.
