@@ -1,0 +1,5 @@
+Disposable connector write/readback verification.
+Repository: night-outlook/il2cpp_plus
+Feature branch: codex/assembly-shadow-r01b-h1
+Task: R03 IR-LOCAL-RUNTIME-01 continuation.
+Not product/runtime evidence.
