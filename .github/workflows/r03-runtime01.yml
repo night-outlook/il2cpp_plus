@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/r03-runtime01.yml'
       - 'libil2cpp/vm/AssemblyShadowTerminalReporting.h'
+      - 'libil2cpp/vm/Object.h'
+      - 'libil2cpp/vm/AssemblyShadowEngineReportingProbe.cpp'
       - 'libil2cpp/vm/AssemblyShadow.cpp'
       - 'libil2cpp/vm/Runtime.cpp'
       - 'tools/r03/runtime01/**'
@@ -31,6 +33,9 @@ jobs:
           mkdir "$OUT"
           python3 -B tools/r03/runtime01/test_reporting.py 2>&1 | tee "$OUT/reporting.log"
           R03_SANITIZERS=1 python3 -B tools/r03/runtime01/test_reporting.py 2>&1 | tee "$OUT/sanitized.log"
+          python3 -B tools/r03/runtime01/test_object_access.py 2>&1 | tee "$OUT/object-access.log"
+          python3 -B tools/r03/runtime01/test_engine_observer.py 2>&1 | tee "$OUT/engine-observer.log"
+          R03_SANITIZERS=1 python3 -B tools/r03/runtime01/test_engine_observer.py 2>&1 | tee "$OUT/engine-observer-sanitized.log"
           c++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread -Ilibil2cpp tools/r03/terminal_execution_tests.cpp -o "$OUT/policy"
           "$OUT/policy" | tee "$OUT/policy.log"
           git diff --check
@@ -42,10 +47,10 @@ jobs:
           import hashlib,json,os,subprocess
           from pathlib import Path
           out=Path(os.environ['RUNNER_TEMP'])/'runtime01';out.mkdir(exist_ok=True)
-          source=['libil2cpp/vm/AssemblyShadowTerminalReporting.h','libil2cpp/vm/Runtime.cpp','libil2cpp/vm/AssemblyShadow.cpp','libil2cpp/vm/AssemblyShadowTerminalExecution.h','tools/r03/runtime01/test_reporting.py']
+          source=['libil2cpp/vm/AssemblyShadowTerminalReporting.h','libil2cpp/vm/Object.h','libil2cpp/vm/AssemblyShadowEngineReportingProbe.cpp','libil2cpp/vm/Runtime.cpp','libil2cpp/vm/AssemblyShadow.cpp','libil2cpp/vm/AssemblyShadowTerminalExecution.h','tools/r03/runtime01/test_reporting.py','tools/r03/runtime01/test_object_access.py','tools/r03/runtime01/test_engine_observer.py']
           rows=[{'path':p,'sha256':hashlib.sha256(Path(p).read_bytes()).hexdigest(),'gitBlob':subprocess.check_output(['git','rev-parse','HEAD:'+p],text=True).strip()} for p in source]
           files=[{'path':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(out.iterdir()) if p.is_file()]
-          (out/'provenance.json').write_text(json.dumps({'head':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'sources':rows,'files':files,'coverage':'Actual adapter and Runtime::Invoke with VM mocks; standalone real policy header','unityRun':False,'runtimeAcceptance':False},indent=2)+'\n')
+          (out/'provenance.json').write_text(json.dumps({'head':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'sources':rows,'files':files,'coverage':'Actual Runtime::Invoke adapter, real Object.h declaration, engine probe with mocked VM state, and standalone policy; NOT Unity execution','unityRun':False,'runtimeAcceptance':False},indent=2)+'\n')
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
