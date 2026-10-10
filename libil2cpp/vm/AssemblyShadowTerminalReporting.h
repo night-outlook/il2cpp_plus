@@ -6,6 +6,7 @@
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "il2cpp-class-internals.h"
 #include "il2cpp-object-internals.h"
+#include "il2cpp-tabledefs.h"
 #include "vm/AssemblyShadow.h"
 #include "vm/Image.h"
 #include "vm/MetadataCache.h"
@@ -61,10 +62,10 @@ inline bool IsExactEngineReport(const MethodInfo* method, const void* instance)
 
 inline void WriteMessage(const Il2CppException* error) noexcept
 {
-    // Inspect only object header and the native Exception message field, never
-    // Exception.ToString/Message virtual dispatch or Unity logging callbacks.
+    // The official Il2CppException starts with the Il2CppObject base header;
+    // it does not have a named `object` member. Never dispatch managed methods.
     if (!error) { std::fputs("null", stderr); return; }
-    const Il2CppClass* klass = error->object.klass;
+    const Il2CppClass* klass = reinterpret_cast<const Il2CppObject*>(error)->klass;
     const Il2CppClass* ancestor = klass;
     unsigned depth = 0;
     while (ancestor && ancestor != il2cpp_defaults.exception_class && depth++ < 64)
