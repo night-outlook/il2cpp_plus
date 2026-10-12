@@ -723,6 +723,13 @@ namespace vm
 
     void Runtime::UnhandledException(Il2CppException* exc)
     {
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        // A finalizer can be denied by the same terminal business-entry guard.
+        // Report that exact rejection natively; re-invoking managed AppDomain
+        // handlers would be another forbidden call and abort recursively.
+        // Real non-rejection exceptions retain the original unhandled policy.
+        if (assembly_shadow_reporting::TryReportRejectedUnhandled(exc)) return;
+#endif
         Il2CppDomain *currentDomain = Domain::GetCurrent();
         Il2CppDomain *rootDomain = Domain::GetRoot();
         FieldInfo *field;

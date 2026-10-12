@@ -1,3 +1,4 @@
+#include "AssemblyShadowTerminalRejection.h"
 #include "AssemblyShadow.h"
 #include "AssemblyShadowDiagnostics.h"
 #include "AssemblyShadowRecovery.h"
@@ -290,11 +291,9 @@ namespace {
     // absent; the original first error remains in GetRecoveryInfoJson.
     void RaiseTerminalExecutionRejected()
     {
-        const TypeFailure* first = s_typeFailure.load(std::memory_order_acquire);
-        const char* detail = first ? first->detail.c_str() :
-            "Assembly Shadow terminal failure: business execution rejected; use GetRecoveryInfoJson for the original cause.";
-        FixedDiagnosticExceptionScope diagnostic;
-        Exception::Raise(Exception::GetInvalidOperationException(detail));
+        // First error/recovery is already sealed. The precreated transport
+        // exception must not allocate, invoke a .ctor or prepare stack frames.
+        assembly_shadow_reporting::RethrowTerminalRejection();
     }
 
     Transaction& Current()
@@ -1809,8 +1808,7 @@ void AssemblyShadow::FailTypeResolution(AssemblyShadowError error, const std::st
     // Allocating a managed exception inside the physical metadata scope would
     // itself be an allocation exposure. Unwind that scope natively first.
     if (IsResolvingTypeMetadata() || StagingBridge::IsStaging()) throw ShadowTypeResolutionFailure(error, detail);
-    FixedDiagnosticExceptionScope diagnostic;
-    Exception::Raise(Exception::GetInvalidOperationException(detail.c_str()));
+    assembly_shadow_reporting::RethrowTerminalRejection();
 }
 
 Il2CppClass* AssemblyShadow::ResolveClassDefinition(Il2CppClass* klass)

@@ -25,7 +25,7 @@ def main():
         (root / 'stub.h').write_text(stub)
         for name in ('il2cpp-config.h','il2cpp-class-internals.h','il2cpp-object-internals.h',
                      'il2cpp-tabledefs.h','vm/AssemblyShadow.h','vm/Image.h',
-                     'vm/MetadataCache.h','vm/Object.h','vm/Class.h','gc/GCHandle.h'):
+                     'vm/MetadataCache.h','vm/Object.h','vm/Class.h','vm/Exception.h','gc/GCHandle.h'):
             p = root / name; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('#include "stub.h"\n')
         header = ROOT / 'libil2cpp/vm/AssemblyShadowTerminalReporting.h'
         (root / 'vm/AssemblyShadowTerminalReporting.h').write_text('#include "' + str(header) + '"\n')

@@ -47,7 +47,9 @@ struct MockBox { Il2CppObject header; bool value=false; };
 inline MockBox boxStorage;
 inline Il2CppObject& boxedTrue=boxStorage.header;
 inline Il2CppObject boxedFalse;
-inline Il2CppException rejection;
+inline Il2CppException rejection, reservedRejection;
+inline Il2CppClass rejectionClass;
+inline int rejectionConstructors=0;
 #include <cassert>
 struct RuntimeStats { int new_object_count=0; }; inline RuntimeStats il2cpp_runtime_stats;
 #define IL2CPP_ASSERT(x) assert(x)
@@ -55,15 +57,15 @@ struct RuntimeStats { int new_object_count=0; }; inline RuntimeStats il2cpp_runt
 #define ALLOC_PTRFREE(obj,c,size) do { ++boxes; boxedTrue.klass=(c); (obj)=&boxedTrue; } while(0)
 namespace il2cpp { namespace gc {
 struct GCHandle {
- static uint32_t New(Il2CppObject* obj,bool pinned) { assert(!denied && pinned && obj==&boxedTrue);++handleCreates;return handleNull?0:4; }
- static Il2CppObject* GetTarget(uint32_t h) { assert(!denied && h==4);++handleReads;return handleWrong?&boxedFalse:&boxedTrue; }
- static void Free(uint32_t h) { assert(h==4);++handleFrees; }
+ static uint32_t New(Il2CppObject* obj,bool pinned) { assert(!denied && pinned && (obj==&boxedTrue || obj==&reservedRejection));++handleCreates;return handleNull?0:(obj==&boxedTrue?4:12); }
+ static Il2CppObject* GetTarget(uint32_t h) { assert(!denied && (h==4||h==12));++handleReads;return handleWrong?&boxedFalse:(h==4?&boxedTrue:&reservedRejection); }
+ static void Free(uint32_t h) { assert(h==4||h==12);++handleFrees; }
 };
 struct WriteBarrier {
  template<typename T> static void GenericStoreNull(T** p) { *p=nullptr; }
  template<typename T> static void GenericStore(T** p,T* v) { *p=v; }
 }; } namespace vm {
-enum class AssemblyShadowState { Disabled=0, Committed=6, FailedAfterCommit=9 };
+enum class AssemblyShadowState { Disabled=0, Committed=6, Failed=8, FailedAfterCommit=9 };
 enum class BaselineUseKind { ClassInit, ObjectAllocation };
 struct AssemblyShadow {
  static bool AssertMethodIsActive(const MethodInfo*,const char*) noexcept { return !denied; }
@@ -87,6 +89,16 @@ struct MetadataCache {
  }
 };
 struct Image { static const Il2CppImage* GetCorlib(){return &corlibImage;} };
+struct Exception {
+ static Il2CppException* GetInvalidOperationException(const char*) {
+  assert(!denied);++rejectionConstructors;
+  rejectionClass.image=&corlibImage;rejectionClass.name="InvalidOperationException";
+  rejectionClass.namespaze="System";rejectionClass.initialized_and_no_error=true;
+  rejectionClass.cctor_finished_or_no_cctor=true;reservedRejection.klass=&rejectionClass;
+  return &reservedRejection;
+ }
+ [[noreturn]] static void Rethrow(Il2CppException* e) { throw Il2CppExceptionWrapper{e}; }
+};
 struct Class { static void Init(Il2CppClass* c) { assert(!denied);++metadataCalls;c->initialized=true;c->initialized_and_no_error=!metadataError; } };
 struct Object {
 public:
@@ -160,7 +172,7 @@ int main(int argc,char** argv) {
   Runtime::Invoke(&m,nullptr,values,&exc);return 100;
  }
  InitializeFixedHandledResult();
- assert(boxes==1 && metadataCalls==1 && cctorCalls==1 && handleCreates==1 && handleReads==1);
+ assert(boxes==1 && metadataCalls==1 && cctorCalls==1 && handleCreates==2 && handleReads==2);
  started=true;denied=true;
  // The ACTUAL Object::NewPtrFree body still throws under terminal denial.
  bool ordinaryAllocationRejected=false;
@@ -182,7 +194,7 @@ int main(int argc,char** argv) {
   for(int i=0;i<2500;++i) {Il2CppException* caught=&rejection;assert(Runtime::Invoke(&m,nullptr,values,&caught)==&boxedTrue && !caught);}
  });
  for(auto& t:readers)t.join();
- assert(boxes==1 && metadataCalls==1 && cctorCalls==1 && handleCreates==1 && handleReads==1);
+ assert(boxes==1 && metadataCalls==1 && cctorCalls==1 && handleCreates==2 && handleReads==2);
  assert(managedBodies==before && firstFailure==73 && boxStorage.value);
  assert(il2cpp::vm::assembly_shadow_reporting::CompletedCounter().load()==20000);
  assert(!il2cpp::vm::assembly_shadow_reporting::TransportActive());
@@ -216,10 +228,10 @@ int main(int argc,char** argv) {
  assert(Runtime::Invoke(&m,nullptr,values,nullptr)==&boxedTrue);
  m.name="Business";assert(!Runtime::Invoke(&m,nullptr,values,nullptr));
  assert(firstFailure==73 && managedBodies==1);
- ShutdownFixedHandledResult();assert(handleFrees==1 && !BooleanReserve().object.load());
+ ShutdownFixedHandledResult();assert(handleFrees==2 && !BooleanReserve().object.load());
  started=false;denied=false;
- InitializeFixedHandledResult();assert(boxes==2 && handleCreates==2);
- ShutdownFixedHandledResult();assert(handleFrees==2);
+ InitializeFixedHandledResult();assert(boxes==2 && handleCreates==4);
+ ShutdownFixedHandledResult();assert(handleFrees==4);
  std::cout << "{\"result\":\"Passed\",\"feature\":\"ON\",\"repeatReports\":20000,\"managedBodiesAfterPoison\":0,\"negativeIdentities\":18,\"exceptionMessageCases\":4,\"unityRun\":false}\n";
 #else
  assert(Runtime::Invoke(&m,nullptr,values,&exc)==&boxedFalse&&!exc&&managedBodies==2);
@@ -243,7 +255,7 @@ def main():
     sanitizers=os.environ.get('R03_SANITIZERS')=='1'
     with tempfile.TemporaryDirectory() as td:
         root=Path(td);(root/'stub.h').write_text(STUB)
-        for name in ('il2cpp-config.h','il2cpp-class-internals.h','il2cpp-object-internals.h','il2cpp-tabledefs.h','vm/AssemblyShadow.h','vm/Image.h','vm/MetadataCache.h','vm/Object.h','vm/Class.h','gc/GCHandle.h'):
+        for name in ('il2cpp-config.h','il2cpp-class-internals.h','il2cpp-object-internals.h','il2cpp-tabledefs.h','vm/AssemblyShadow.h','vm/Image.h','vm/MetadataCache.h','vm/Object.h','vm/Class.h','vm/Exception.h','gc/GCHandle.h'):
             p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('#include "stub.h"\n')
         header=ROOT/'libil2cpp/vm/AssemblyShadowTerminalReporting.h'
         allocation=(ROOT/'libil2cpp/vm/Object.cpp').read_text()

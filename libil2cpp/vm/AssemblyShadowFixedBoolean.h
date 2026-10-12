@@ -10,6 +10,7 @@
 #include "vm/AssemblyShadow.h"
 #include "vm/Image.h"
 #include "vm/Object.h"
+#include "vm/AssemblyShadowTerminalRejection.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -101,6 +102,7 @@ inline void InitializeFixedHandledResult() noexcept
         reserve.physicalClass = klass;
         reserve.pinnedHandle = handle;
         reserve.object.store(object, std::memory_order_release);
+        InitializeTerminalRejection();
         std::fprintf(stderr,
             "[AssemblyShadowBooleanReserve] prepared=true pinned=true size=%u cctorComplete=%d\n",
             static_cast<unsigned>(klass->instance_size),
@@ -133,6 +135,7 @@ inline void ShutdownFixedHandledResult() noexcept
     if (reserve.pinnedHandle) gc::GCHandle::Free(reserve.pinnedHandle);
     reserve.pinnedHandle = 0;
     reserve.physicalClass = nullptr;
+    ShutdownTerminalRejection();
 }
 
 }}} // il2cpp::vm::assembly_shadow_reporting
