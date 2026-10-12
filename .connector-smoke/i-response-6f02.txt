@@ -1,0 +1,3 @@
+Primary transport verification only; no runtime acceptance.
+Repository: night-outlook/il2cpp_plus
+Base: c386cdd1e8942561f1d1e1fada52d21ca524f174
