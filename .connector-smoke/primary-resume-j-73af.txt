@@ -1,0 +1,4 @@
+Disposable read/write smoke test only.
+Repository: night-outlook/il2cpp_plus
+Source branch: codex/assembly-shadow-r01b-h1
+No production or historical evidence modification.
