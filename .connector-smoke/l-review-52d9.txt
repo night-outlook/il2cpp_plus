@@ -1,0 +1,4 @@
+Disposable Primary Connector transport check.
+Repository: night-outlook/il2cpp_plus
+Base: c1a6876a3801a8343123977a0e230558904fd94d
+This is not runtime evidence or a Local assignment.
