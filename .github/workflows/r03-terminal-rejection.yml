@@ -1,0 +1,56 @@
+name: R03 terminal rejection contracts
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - '.github/workflows/r03-terminal-rejection.yml'
+      - 'libil2cpp/vm/AssemblyShadowTerminalRejection.h'
+      - 'libil2cpp/vm/AssemblyShadowFixedBoolean.h'
+      - 'libil2cpp/vm/AssemblyShadow.cpp'
+      - 'libil2cpp/vm/Runtime.cpp'
+      - 'libil2cpp/vm/Exception.cpp'
+      - 'tools/r03/runtime01/**'
+permissions:
+  contents: read
+jobs:
+  rejection:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Compile actual source boundaries in both sanitizer profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          OUT="$RUNNER_TEMP/rejection"
+          mkdir "$OUT"
+          python3 -B tools/r03/runtime01/test_terminal_rejection.py > "$OUT/rejection.log" 2>&1
+          R03_SANITIZERS=1 python3 -B tools/r03/runtime01/test_terminal_rejection.py > "$OUT/sanitized.log" 2>&1
+          cat "$OUT/rejection.log"
+          git diff --check
+          git diff --exit-code
+      - name: Bind raw evidence and source
+        if: always()
+        shell: python
+        run: |
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'rejection';out.mkdir(exist_ok=True)
+          names=['libil2cpp/vm/AssemblyShadowTerminalRejection.h','libil2cpp/vm/AssemblyShadowFixedBoolean.h','libil2cpp/vm/AssemblyShadow.cpp','libil2cpp/vm/Runtime.cpp','libil2cpp/vm/Exception.cpp','tools/r03/runtime01/test_terminal_rejection.py','tools/r03/runtime01/test_reporting.py']
+          sources=[{'path':p,'sha256':hashlib.sha256(Path(p).read_bytes()).hexdigest(),'blob':subprocess.check_output(['git','rev-parse','HEAD:'+p],text=True).strip()} for p in names]
+          files=[{'path':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'bytes':p.stat().st_size} for p in out.iterdir() if p.is_file()]
+          (out/'provenance.json').write_text(json.dumps({'head':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'sources':sources,'files':files,'dependencies':'VM metadata/GC mocks; actual rejection, Rethrow and unhandled delegate source','unityRun':False,'runtimeAcceptance':False},indent=2)+'\n')
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: rejection-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/rejection
+          retention-days: 14
+          if-no-files-found: error
