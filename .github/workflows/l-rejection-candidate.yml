@@ -1,0 +1,75 @@
+name: L rejection candidate verification
+on:
+  push:
+    branches: [codex/primary-k-return-2e61]
+    paths:
+      - '.github/workflows/l-rejection-candidate.yml'
+      - 'tools/r03/runtime01/prepare_l_tree.py'
+      - 'tools/r03/runtime01/test_terminal_rejection.py'
+      - 'libil2cpp/vm/AssemblyShadowTerminalRejection.h'
+permissions:
+  contents: write
+jobs:
+  candidate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: controls
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 0fa7b4fef94062e54f186fda938dd8a3d2304b7e
+          path: source
+          persist-credentials: false
+      - name: Prepare precisely bound source in isolated checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B controls/tools/r03/runtime01/prepare_l_tree.py --source "$GITHUB_WORKSPACE/source" --controls "$GITHUB_WORKSPACE/controls" --output "$RUNNER_TEMP/l-rejection"
+      - name: Run actual source tests and unchanged policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          OUT="$RUNNER_TEMP/l-rejection"
+          cd source
+          python3 -B tools/r03/runtime01/test_reporting.py > "$OUT/reporting.log" 2>&1
+          R03_SANITIZERS=1 python3 -B tools/r03/runtime01/test_reporting.py > "$OUT/reporting-sanitized.log" 2>&1
+          python3 -B tools/r03/runtime01/test_terminal_rejection.py > "$OUT/rejection.log" 2>&1
+          R03_SANITIZERS=1 python3 -B tools/r03/runtime01/test_terminal_rejection.py > "$OUT/rejection-sanitized.log" 2>&1
+          python3 -B tools/r03/runtime01/test_object_access.py > "$OUT/object-access.log" 2>&1
+          python3 -B tools/r03/runtime01/test_engine_observer.py > "$OUT/observer.log" 2>&1
+          R03_SANITIZERS=1 python3 -B tools/r03/runtime01/test_engine_observer.py > "$OUT/observer-sanitized.log" 2>&1
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread -Ilibil2cpp tools/r03/terminal_execution_tests.cpp -o "$RUNNER_TEMP/l-policy"
+          "$RUNNER_TEMP/l-policy" > "$OUT/policy.log"
+          git diff --check
+          cat "$OUT/rejection.log"
+      - name: Assemble verified Git blob/tree objects without creating commits or refs
+        if: success() && matrix.os == 'ubuntu-24.04'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 -B controls/tools/r03/runtime01/prepare_l_tree.py --source "$GITHUB_WORKSPACE/source" --controls "$GITHUB_WORKSPACE/controls" --output "$RUNNER_TEMP/l-rejection" --objects-only
+      - name: Retain exact source and log manifest
+        if: always()
+        shell: python
+        run: |
+          import hashlib,json,os
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'l-rejection';out.mkdir(exist_ok=True)
+          rows=[{'path':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(out.iterdir()) if p.is_file()]
+          (out/'provenance.json').write_text(json.dumps({'workflowCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'files':rows,'sourceBase':'0fa7b4fef94062e54f186fda938dd8a3d2304b7e','unityRun':False,'branchUpdated':False,'commitCreated':False},indent=2)+'\n')
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: l-rejection-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/l-rejection
+          retention-days: 14
+          if-no-files-found: error
