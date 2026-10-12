@@ -1,0 +1,1 @@
+Disposable Connector write smoke for K return. Base: 0fa7b4fef94062e54f186fda938dd8a3d2304b7e. No product evidence change.
