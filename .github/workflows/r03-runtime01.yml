@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/r03-runtime01.yml'
       - 'libil2cpp/vm/AssemblyShadowTerminalReporting.h'
+      - 'libil2cpp/vm/AssemblyShadowFixedBoolean.h'
+      - 'libil2cpp/vm/Object.cpp'
       - 'libil2cpp/vm/Object.h'
       - 'libil2cpp/vm/AssemblyShadowEngineReportingProbe.cpp'
       - 'libil2cpp/vm/AssemblyShadow.cpp'
@@ -47,7 +49,7 @@ jobs:
           import hashlib,json,os,subprocess
           from pathlib import Path
           out=Path(os.environ['RUNNER_TEMP'])/'runtime01';out.mkdir(exist_ok=True)
-          source=['libil2cpp/vm/AssemblyShadowTerminalReporting.h','libil2cpp/vm/Object.h','libil2cpp/vm/AssemblyShadowEngineReportingProbe.cpp','libil2cpp/vm/Runtime.cpp','libil2cpp/vm/AssemblyShadow.cpp','libil2cpp/vm/AssemblyShadowTerminalExecution.h','tools/r03/runtime01/test_reporting.py','tools/r03/runtime01/test_object_access.py','tools/r03/runtime01/test_engine_observer.py']
+          source=['libil2cpp/vm/AssemblyShadowFixedBoolean.h','libil2cpp/vm/Object.cpp','libil2cpp/vm/AssemblyShadowTerminalReporting.h','libil2cpp/vm/Object.h','libil2cpp/vm/AssemblyShadowEngineReportingProbe.cpp','libil2cpp/vm/Runtime.cpp','libil2cpp/vm/AssemblyShadow.cpp','libil2cpp/vm/AssemblyShadowTerminalExecution.h','tools/r03/runtime01/test_reporting.py','tools/r03/runtime01/test_object_access.py','tools/r03/runtime01/test_engine_observer.py']
           rows=[{'path':p,'sha256':hashlib.sha256(Path(p).read_bytes()).hexdigest(),'gitBlob':subprocess.check_output(['git','rev-parse','HEAD:'+p],text=True).strip()} for p in source]
           files=[{'path':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(out.iterdir()) if p.is_file()]
           (out/'provenance.json').write_text(json.dumps({'head':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'sources':rows,'files':files,'coverage':'Actual Runtime::Invoke adapter, real Object.h declaration, engine probe with mocked VM state, and standalone policy; NOT Unity execution','unityRun':False,'runtimeAcceptance':False},indent=2)+'\n')

@@ -16,15 +16,16 @@ def main():
     assert cc
     stub = STUB.replace('#include <cstdint>', '#include <cstdint>\n#include <string>')
     stub = stub.replace('enum class AssemblyShadowState', 'enum class AssemblyShadowError { Success=0 };\nenum class AssemblyShadowState')
-    stub = stub.replace('static void GetState(AssemblyShadowState& s) { s=denied?AssemblyShadowState::FailedAfterCommit:AssemblyShadowState::Committed; }',
-        'static AssemblyShadowError GetState(AssemblyShadowState& s) { s=denied?AssemblyShadowState::FailedAfterCommit:AssemblyShadowState::Committed; return AssemblyShadowError::Success; }\n'
+    stub = stub.replace('static void GetState(AssemblyShadowState& s) { s=denied?AssemblyShadowState::FailedAfterCommit:(started?AssemblyShadowState::Committed:AssemblyShadowState::Disabled); }',
+        'static AssemblyShadowError GetState(AssemblyShadowState& s) { s=denied?AssemblyShadowState::FailedAfterCommit:(started?AssemblyShadowState::Committed:AssemblyShadowState::Disabled); return AssemblyShadowError::Success; }\n'
         'static AssemblyShadowError GetRecoveryInfoJson(std::string& json) { json=R"({"published":true,"stateCode":9,"terminalFailureCode":13,"disposition":"RestartRequired"})"; return AssemblyShadowError::Success; }')
+    assert 'static AssemblyShadowError GetState' in stub, 'Shared state stub must match exactly'
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         (root / 'stub.h').write_text(stub)
         for name in ('il2cpp-config.h','il2cpp-class-internals.h','il2cpp-object-internals.h',
                      'il2cpp-tabledefs.h','vm/AssemblyShadow.h','vm/Image.h',
-                     'vm/MetadataCache.h','vm/Object.h','vm/Class.h'):
+                     'vm/MetadataCache.h','vm/Object.h','vm/Class.h','gc/GCHandle.h'):
             p = root / name; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('#include "stub.h"\n')
         header = ROOT / 'libil2cpp/vm/AssemblyShadowTerminalReporting.h'
         (root / 'vm/AssemblyShadowTerminalReporting.h').write_text('#include "' + str(header) + '"\n')
@@ -36,6 +37,7 @@ def main():
 #include <cassert>
 int main(int argc, char** argv) {
  assert(argc == 3);
+ started=true; // Observer is armed only after the mock transaction commits.
  const char* run="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
  const char* sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
  R03_IR_EngineLoggerCalled();
@@ -56,7 +58,7 @@ int main(int argc, char** argv) {
         exe = root / 'observer'
         cmd = [cc, '-std=c++17', '-Wall', '-Wextra', '-Werror', '-pedantic', '-pthread',
                '-DHYBRIDCLR_R03_RUNTIME_PROBE=1','-DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW=1',
-               '-I' + str(root), str(root / 'main.cpp'), '-o', str(exe)]
+               '-I' + str(root), '-I' + str(ROOT / 'libil2cpp'), str(root / 'main.cpp'), '-o', str(exe)]
         if os.environ.get('R03_SANITIZERS') == '1':
             cmd[1:1] = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
         subprocess.run(cmd, check=True)

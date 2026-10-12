@@ -404,6 +404,9 @@ namespace vm
 
         // The earlier fully-initialized flag predates HybridCLR and module
         // initialization. Only this complete tail admits the startup gateway.
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        assembly_shadow_reporting::InitializeFixedHandledResult();
+#endif
         AssemblyShadowStartup::MarkCoreReady();
         return true;
     }
@@ -487,6 +490,10 @@ namespace vm
 #endif
 
         os::Thread::Shutdown();
+
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        assembly_shadow_reporting::ShutdownFixedHandledResult();
+#endif
 
 #if IL2CPP_ENABLE_RELOAD
         MetadataCache::Clear();

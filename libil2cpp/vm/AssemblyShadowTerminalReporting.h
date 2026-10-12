@@ -12,6 +12,7 @@
 #include "vm/MetadataCache.h"
 #include "vm/Object.h"
 #include "vm/Class.h"
+#include "vm/AssemblyShadowFixedBoolean.h"
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -123,41 +124,6 @@ inline void WriteMessage(const Il2CppException* error) noexcept
         if (message->length > length) std::fputs("[truncated]", stderr);
     }
     std::fputc('"', stderr);
-}
-
-// This allocation is deliberately NOT Object::Box/Object::New. Those generic
-// paths include Runtime::ClassInit, finalizer registration and profiler callbacks.
-// Only original physical Boolean metadata and reference-free native allocation
-// are needed for this fixed engine return. Any failure terminates natively: it
-// must not ask Unity to report another managed exception recursively.
-inline Il2CppObject* FixedHandledResult() noexcept
-{
-    try
-    {
-        Il2CppClass* klass = il2cpp_defaults.boolean_class;
-        if (!klass || klass->image != Image::GetCorlib() ||
-            klass->generic_class || !klass->name || !klass->namespaze ||
-            std::strcmp(klass->name, "Boolean") || std::strcmp(klass->namespaze, "System"))
-            throw 0;
-        Class::Init(klass); // Native metadata setup only, never Runtime::ClassInit.
-        if (!klass->initialized_and_no_error || !klass->byval_arg.valuetype ||
-            klass->byval_arg.type != IL2CPP_TYPE_BOOLEAN ||
-            klass->has_references || klass->has_finalize ||
-            !klass->cctor_finished_or_no_cctor ||
-            klass->instance_size < sizeof(Il2CppObject) + sizeof(bool) ||
-            klass->instance_size > sizeof(Il2CppObject) + 16)
-            throw 0;
-        Il2CppObject* boxed = Object::NewPtrFree(klass);
-        if (!boxed || boxed->klass != klass) throw 0;
-        *static_cast<bool*>(Object::Unbox(boxed)) = true;
-        return boxed;
-    }
-    catch (...)
-    {
-        std::fputs("[AssemblyShadowTerminalReport] fatal=FixedBooleanAllocationFailed\n", stderr);
-        std::fflush(stderr);
-        std::abort();
-    }
 }
 
 inline void TracePhase(int32_t phase) noexcept

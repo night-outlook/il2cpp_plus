@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Compile the real Object.h access surface; mock only dependent type declarations.
 
-This specifically detects the private NewPtrFree error missed by an all-public
-VM mock. Neither test case executes Unity or allocates a runtime object.
+This proves NewPtrFree remains private to ordinary and diagnostic callers.
+The reporting response is now reserved during healthy Runtime initialization. Neither test case executes Unity or allocates a runtime object.
 """
 import hashlib
 import json
@@ -42,7 +42,7 @@ def main():
         for name in ('il2cpp-config.h', 'Class.h', 'ClassInlines.h'):
             (root / name).write_text('#pragma once\n')
         (root / 'Object.h').write_bytes(source)
-        cases = [('on-exact-friend', 1, FRIEND, True),
+        cases = [('on-diagnostic-private-denied', 1, FRIEND, False),
                  ('on-unrelated-denied', 1, UNRELATED, False),
                  ('off-header', 0, '', True),
                  ('off-unrelated-denied', 0, UNRELATED, False)]
@@ -57,17 +57,8 @@ def main():
             if not should_pass:
                 assert 'private' in run.stderr and 'NewPtrFree' in run.stderr, run.stderr
             rows.append({'case': name, 'expectedCompilePass': should_pass, 'result': 'Passed'})
-        # Remove only the new friend declaration: the real pre-fix visibility
-        # must reject the exact diagnostic caller too, reproducing the SDK bug.
-        changed = source.decode().replace(
-            'friend Il2CppObject* assembly_shadow_reporting::FixedHandledResult() noexcept;', '')
-        assert changed != source.decode()
-        (root / 'Object.h').write_text(changed)
-        run = subprocess.run([compiler, '-std=c++17', '-fsyntax-only',
-            '-DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW=1', '-I' + str(root),
-            str(root / 'on-exact-friend.cpp')], capture_output=True, text=True, timeout=30)
-        assert run.returncode != 0 and 'private' in run.stderr, run.stderr
-        rows.append({'case': 'pre-fix-friend-removal-negative', 'result': 'Passed'})
+        assert 'friend Il2CppObject* assembly_shadow_reporting::FixedHandledResult' not in source.decode()
+        rows.append({'case':'diagnostic-private-allocator-access-removed','result':'Passed'})
     print(json.dumps({'kind': 'R03ObjectAccessRegression', 'result': 'Passed',
         'objectHeaderSha256': hashlib.sha256(source).hexdigest(), 'cases': rows,
         'dependencyModel': 'Actual Object.h; dependent type stubs only', 'unityRun': False}, sort_keys=True))

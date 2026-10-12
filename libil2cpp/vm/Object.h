@@ -14,12 +14,6 @@ namespace il2cpp
 {
 namespace vm
 {
-#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-    namespace assembly_shadow_reporting
-    {
-        inline Il2CppObject* FixedHandledResult() noexcept;
-    }
-#endif
     class LIBIL2CPP_CODEGEN_API Object
     {
     public:
@@ -62,11 +56,6 @@ namespace vm
         friend class Array;
         friend class RCW;
         friend class String;
-#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
-        // One fixed Boolean diagnostic transport, not public raw allocation.
-        // NewPtrFree and its class-ownership guard remain private and unchanged.
-        friend Il2CppObject* assembly_shadow_reporting::FixedHandledResult() noexcept;
-#endif
     };
 } /* namespace vm */
 } /* namespace il2cpp */
