@@ -34,6 +34,8 @@ jobs:
           python3 -B tools/r03/runtime01/test_terminal_rejection.py > "$OUT/rejection.log" 2>&1
           R03_SANITIZERS=1 python3 -B tools/r03/runtime01/test_terminal_rejection.py > "$OUT/sanitized.log" 2>&1
           cat "$OUT/rejection.log"
+          python3 -B tools/r03/runtime01/test_terminal_denied_trace.py > "$OUT/terminal-denial-sites.log" 2>&1
+          cat "$OUT/terminal-denial-sites.log"
           git diff --check
           git diff --exit-code
       - name: Bind raw evidence and source
