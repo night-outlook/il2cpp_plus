@@ -1763,7 +1763,29 @@ void AssemblyShadow::RequireActiveMethod(const MethodInfo* method, const char* s
 {
     if (!AssertMethodIsActive(method, site))
     {
-        if (TerminalMethodDenied(method)) RaiseTerminalExecutionRejected();
+        if (TerminalMethodDenied(method))
+        {
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+            // N diagnostic only: identify the real engine-side producer of
+            // repeated guard rejection. Never change rejection/disposition.
+            // First twelve plus powers of two remain bounded at high volumes.
+            static std::atomic<uint64_t> s_deniedOrdinal{0};
+            const uint64_t ordinal = s_deniedOrdinal.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (ordinal <= 12 || (ordinal & (ordinal - 1)) == 0)
+            {
+                const Il2CppClass* owner = method ? method->klass : nullptr;
+                std::fprintf(stderr,
+                    "[R03TerminalDenied] ordinal=%llu site=%s namespace=%s type=%s method=%s ptr=%p\n",
+                    static_cast<unsigned long long>(ordinal), site ? site : "null",
+                    owner && owner->namespaze ? owner->namespaze : "null",
+                    owner && owner->name ? owner->name : "null",
+                    method && method->name ? method->name : "null",
+                    static_cast<const void*>(method));
+                std::fflush(stderr);
+            }
+#endif
+            RaiseTerminalExecutionRejected();
+        }
         const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
         FailTypeResolution(failure ? failure->error : AssemblyShadowError::InternalError,
             failure ? failure->detail : "Assembly Shadow method execution rejected; diagnostic allocation failed.");
