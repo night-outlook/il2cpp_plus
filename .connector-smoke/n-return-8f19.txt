@@ -1,0 +1,1 @@
+Disposable Connector smoke test. Repository night-outlook/il2cpp_plus. Base 0f72078711d4786dac2666c9017d952d857dd041. Not runtime evidence.
