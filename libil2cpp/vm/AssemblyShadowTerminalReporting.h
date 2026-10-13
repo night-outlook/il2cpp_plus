@@ -34,6 +34,17 @@ inline std::atomic<uint64_t>& CompletedCounter()
     return count;
 }
 
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+// Test-only integration point for an authenticated engine scheduling
+// disposition. It never admits a managed callback or changes report counters.
+using EngineDisposition = void (*)(const Il2CppException*);
+inline std::atomic<EngineDisposition>& EngineDispositionObserver()
+{
+    static std::atomic<EngineDisposition> observer{nullptr};
+    return observer;
+}
+#endif
+
 inline bool& TransportActive()
 {
     static thread_local bool active = false;
@@ -160,6 +171,10 @@ inline bool TryHandle(const MethodInfo* method, void* instance, void** arguments
     // avoids the default managed reporting cascade; returning a failure/throw
     // recursively re-enters ScriptingInvocation (the E stack-overflow defect).
     result = FixedHandledResult();
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+    const auto observer = EngineDispositionObserver().load(std::memory_order_acquire);
+    if (observer) observer(arguments ? static_cast<const Il2CppException*>(arguments[0]) : nullptr);
+#endif
     CompletedCounter().fetch_add(1, std::memory_order_release);
     return true;
 }
