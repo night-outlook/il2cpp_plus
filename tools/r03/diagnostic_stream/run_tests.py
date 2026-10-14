@@ -140,7 +140,7 @@ def main():
   compiler=shutil.which(os.environ.get('CXX','clang++'));need(compiler,'CXX compiler required');run([compiler,'--version'],OUT/'compiler')
   for name,flags in [('strict',[]),('sanitized',['-fsanitize=address,undefined','-fno-omit-frame-pointer'])]:
    PROFILE=name;folder=OUT/name;folder.mkdir();DRIVER=folder/'serializer'
-   common=[compiler,'-std=c++17','-O1','-g','-Wall','-Wextra','-Werror','-pedantic',*flags,'-I'+str(NATIVE/'libil2cpp/vm'),'-I'+str(codec.parent),'-I'+str(OUT/'stubs')]
+   common=[compiler,'-std=c++17','-O1','-g','-Wall','-Wextra','-Werror','-pedantic',*flags,'-iquote',str(NATIVE/'libil2cpp/vm'),'-I'+str(codec.parent),'-I'+str(OUT/'stubs')]
    run([*common,'-DAssemblyShadowDiagnostics=OriginalDiagnostics','-c',HERE/'fixtures/LegacyAssemblyShadowDiagnostics.cpp','-o',folder/'original.o'],folder/'legacy-compile')
    run([*common,HERE/'serializer_driver.cpp',HERE/'allocation_probe.cpp',NATIVE/'libil2cpp/vm/AssemblyShadowDiagnostics.cpp',folder/'original.o','-o',DRIVER],folder/'current-compile')
    with (folder/'tests.log').open('w') as f:r=unittest.TextTestRunner(stream=f,verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(SerializerTests))
