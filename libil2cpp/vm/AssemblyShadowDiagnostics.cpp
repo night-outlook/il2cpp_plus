@@ -56,35 +56,36 @@ std::string AssemblyShadowDiagnostics::Quote(const std::string& text)
     return result + '"';
 }
 
-static void StringArray(std::ostringstream& output, const std::vector<std::string>& values)
+template<class Output>
+static void StringArray(Output& output, const std::vector<std::string>& values)
 {
     output << '[';
     for (size_t index = 0; index < values.size(); ++index)
     {
         if (index) output << ',';
-        output << AssemblyShadowDiagnostics::Quote(values[index]);
+        output << assembly_shadow_diagnostic::Quoted(values[index]);
     }
     output << ']';
 }
 
-std::string AssemblyShadowDiagnostics::Serialize(const ShadowDiagnosticSnapshot& value)
+template<class Output>
+static void SerializeFields(Output& output, const ShadowDiagnosticSnapshot& value)
 {
-    std::ostringstream output;
     output << std::boolalpha << "{\"schemaVersion\":1,\"enabled\":" << value.enabled
         << ",\"runtimeAbiVersion\":" << kAssemblyShadowRuntimeAbiVersion
         << ",\"metadataBudgetCapabilityVersion\":" << (value.enabled ? kAssemblyShadowMetadataBudgetCapabilityVersion : 0)
         << ",\"recoveryCapabilityVersion\":" << (value.enabled ? kAssemblyShadowRecoveryCapabilityVersion : 0)
         << ",\"startupCandidateSchemaVersion\":" << value.startupCandidateSchemaVersion
-        << ",\"startupObservationMode\":" << Quote(value.startupObservationMode)
+        << ",\"startupObservationMode\":" << assembly_shadow_diagnostic::Quoted(value.startupObservationMode)
         << ",\"startupCandidateNames\":";
     StringArray(output, value.startupCandidateNames);
     output
-        << ",\"state\":" << Quote(StateName(value.state))
+        << ",\"state\":" << assembly_shadow_diagnostic::Quoted(AssemblyShadowDiagnostics::StateName(value.state))
         << ",\"stateCode\":" << static_cast<int>(value.state)
         << ",\"lastError\":" << static_cast<int>(value.lastError)
-        << ",\"detail\":" << Quote(value.detail)
-        << ",\"baselineBuildId\":" << Quote(value.baselineBuildId)
-        << ",\"patchId\":" << Quote(value.patchId)
+        << ",\"detail\":" << assembly_shadow_diagnostic::Quoted(value.detail)
+        << ",\"baselineBuildId\":" << assembly_shadow_diagnostic::Quoted(value.baselineBuildId)
+        << ",\"patchId\":" << assembly_shadow_diagnostic::Quoted(value.patchId)
         << ",\"generation\":" << value.generation
         << ",\"expected\":" << value.expected << ",\"staged\":" << value.staged
         << ",\"retainedBytes\":" << value.retainedBytes << ",\"closureLoadOrder\":";
@@ -98,7 +99,7 @@ std::string AssemblyShadowDiagnostics::Serialize(const ShadowDiagnosticSnapshot&
     {
         if (index) output << ',';
         const auto& assembly = value.assemblies[index];
-        output << "{\"name\":" << Quote(assembly.name) << ",\"mvid\":" << Quote(assembly.mvid)
+        output << "{\"name\":" << assembly_shadow_diagnostic::Quoted(assembly.name) << ",\"mvid\":" << assembly_shadow_diagnostic::Quoted(assembly.mvid)
             << ",\"skeletonBuilt\":" << assembly.skeletonBuilt
             << ",\"runtimeMetadataInitialized\":" << assembly.runtimeMetadataInitialized
             << ",\"published\":" << assembly.published
@@ -110,8 +111,8 @@ std::string AssemblyShadowDiagnostics::Serialize(const ShadowDiagnosticSnapshot&
     {
         if (index) output << ',';
         const auto& event = value.events[index];
-        output << "{\"sequence\":" << event.sequence << ",\"kind\":" << Quote(event.kind)
-            << ",\"name\":" << Quote(event.name) << ",\"generation\":" << event.generation
+        output << "{\"sequence\":" << event.sequence << ",\"kind\":" << assembly_shadow_diagnostic::Quoted(event.kind)
+            << ",\"name\":" << assembly_shadow_diagnostic::Quoted(event.name) << ",\"generation\":" << event.generation
             << ",\"stagedCount\":" << event.stagedCount << '}';
     }
     output << "],\"baselineUses\":[";
@@ -119,8 +120,8 @@ std::string AssemblyShadowDiagnostics::Serialize(const ShadowDiagnosticSnapshot&
     {
         if (index) output << ',';
         const auto& use = value.baselineUses[index];
-        output << "{\"name\":" << Quote(use.name) << ",\"kind\":" << Quote(UseKindName(use.kind))
-            << ",\"detail\":" << Quote(use.detail) << ",\"type\":" << Quote(use.type)
+        output << "{\"name\":" << assembly_shadow_diagnostic::Quoted(use.name) << ",\"kind\":" << assembly_shadow_diagnostic::Quoted(AssemblyShadowDiagnostics::UseKindName(use.kind))
+            << ",\"detail\":" << assembly_shadow_diagnostic::Quoted(use.detail) << ",\"type\":" << assembly_shadow_diagnostic::Quoted(use.type)
             << ",\"thread\":" << use.thread << ",\"timestamp\":" << use.timestamp << '}';
     }
     output << "],\"enumerationGeneration\":" << value.enumerationGeneration << ",\"ordinaryAssemblies\":[";
@@ -128,19 +129,43 @@ std::string AssemblyShadowDiagnostics::Serialize(const ShadowDiagnosticSnapshot&
     {
         if (index) output << ',';
         const auto& assembly = value.ordinaryAssemblies[index];
-        output << "{\"name\":" << Quote(assembly.name) << ",\"isInterpreter\":" << assembly.isInterpreter << '}';
+        output << "{\"name\":" << assembly_shadow_diagnostic::Quoted(assembly.name) << ",\"isInterpreter\":" << assembly.isInterpreter << '}';
     }
     output << "],\"classEnumerationGeneration\":" << value.classEnumerationGeneration << ",\"ordinaryClasses\":[";
     for (size_t index = 0; index < value.ordinaryClasses.size(); ++index)
     {
         if (index) output << ',';
         const auto& klass = value.ordinaryClasses[index];
-        output << "{\"assemblyName\":" << Quote(klass.assemblyName) << ",\"typeName\":" << Quote(klass.typeName)
+        output << "{\"assemblyName\":" << assembly_shadow_diagnostic::Quoted(klass.assemblyName) << ",\"typeName\":" << assembly_shadow_diagnostic::Quoted(klass.typeName)
             << ",\"isInterpreter\":" << klass.isInterpreter << ",\"isConstructedGeneric\":" << klass.isConstructedGeneric
             << ",\"usesStagedMetadata\":" << klass.usesStagedMetadata << '}';
     }
     output << "]}";
+}
+
+std::string AssemblyShadowDiagnostics::Serialize(const ShadowDiagnosticSnapshot& value)
+{
+    std::ostringstream output;
+    SerializeFields(output, value);
     return output.str();
+}
+
+assembly_shadow_diagnostic::WriteResult AssemblyShadowDiagnostics::SerializeTo(
+    const ShadowDiagnosticSnapshot& value, assembly_shadow_diagnostic::Sink sink,
+    size_t maximumBytes) noexcept
+{
+    // Legacy ostream formatting inherits the process-global C++ locale.
+    // Do not produce a byte-different "equivalent" record when integer grouping
+    // has been customized. Reject before touching the sink; no partial fallback.
+    if (std::locale() != std::locale::classic())
+    {
+        assembly_shadow_diagnostic::WriteResult result;
+        result.error = assembly_shadow_diagnostic::WriteError::UnsupportedLocale;
+        return result;
+    }
+    assembly_shadow_diagnostic::Writer output(sink, maximumBytes);
+    SerializeFields(output, value);
+    return output.Finish();
 }
 
 }}

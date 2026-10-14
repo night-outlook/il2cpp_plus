@@ -1,0 +1,68 @@
+name: R03 general serializer exact V2 interop
+on:
+  push:
+    branches: [codex/diag-serializer-20261014-6e42, codex/assembly-shadow-r01b-h1]
+    paths:
+      - 'libil2cpp/vm/AssemblyShadowDiagnosticWriter.h'
+      - 'libil2cpp/vm/AssemblyShadowDiagnostics.*'
+      - 'tools/r03/diagnostic_stream/**'
+      - '.github/workflows/r03-general-serializer.yml'
+permissions:
+  contents: read
+jobs:
+  serializer:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, compiler: clang++, tag: linux-clang}
+          - {os: ubuntu-24.04, compiler: g++, tag: linux-gcc}
+          - {os: macos-14, compiler: clang++, tag: macos-clang}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: il2cpp_plus
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: night-outlook/hybridclr_demo
+          ref: 91c3dfe2b0d2661b2fb2c448ada480a8329e6851
+          path: hybridclr_demo
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /Tools/AssemblyShadow/R03IR/bounded_v2/
+            /Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/SNAP01_BOUNDED_DESIGN_f8a2/reference/
+            /Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/N_SNAPSHOT_PUBLICATION_91b7/checks/
+      - name: Real legacy/stream formatting, capture and independent reference
+        env:
+          CXX: ${{ matrix.compiler }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B il2cpp_plus/tools/r03/diagnostic_stream/run_tests.py \
+            --native "$GITHUB_WORKSPACE/il2cpp_plus" --demo "$GITHUB_WORKSPACE/hybridclr_demo" \
+            --output "$RUNNER_TEMP/serializer"
+          git -C il2cpp_plus diff --check
+          git -C il2cpp_plus diff --exit-code
+          git -C hybridclr_demo diff --exit-code
+      - name: Source and CI identity
+        if: always()
+        shell: python
+        run: |
+          from pathlib import Path
+          import os,json
+          out=Path(os.environ['RUNNER_TEMP'])/'serializer';out.mkdir(exist_ok=True)
+          (out/'CI_IDENTITY.json').write_text(json.dumps({'nativeCommit':os.environ['GITHUB_SHA'],'demoCommit':'91c3dfe2b0d2661b2fb2c448ada480a8329e6851','runId':os.environ['GITHUB_RUN_ID'],'runnerOs':os.environ['RUNNER_OS'],'actualUnity':False,'v2PlayerEnabled':False},indent=2)+'\n')
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: general-serializer-${{ matrix.tag }}-${{ github.sha }}
+          path: ${{ runner.temp }}/serializer
+          retention-days: 14
+          include-hidden-files: true
+          if-no-files-found: warn

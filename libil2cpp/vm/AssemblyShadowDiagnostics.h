@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssemblyShadowTypes.h"
+#include "AssemblyShadowDiagnosticWriter.h"
 #include <string>
 #include <vector>
 
@@ -80,6 +81,13 @@ public:
     static std::string Quote(const std::string& text);
     // The caller must release VM and transaction locks before serialization.
     static std::string Serialize(const ShadowDiagnosticSnapshot& snapshot);
+    // Formats the SAME immutable snapshot/schema as Serialize without an
+    // output-sized temporary string. Caller owns bounded, synchronous memory
+    // sink and captured metadata; this does not make VM capture allocation-free.
+    // Not yet exposed through the Player or V2 transport.
+    static assembly_shadow_diagnostic::WriteResult SerializeTo(
+        const ShadowDiagnosticSnapshot& snapshot,
+        assembly_shadow_diagnostic::Sink sink, size_t maximumBytes) noexcept;
 };
 
 }}
