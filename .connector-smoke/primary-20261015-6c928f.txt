@@ -1,0 +1,6 @@
+GitHub Connector smoke-test marker (disposable; never merge).
+Repository: night-outlook/il2cpp_plus
+Base branch: codex/assembly-shadow-r01b-h1
+Base HEAD: 87aedc1248141d7438d82d53521aadaac22c45ae
+Smoke branch: codex/connector-smoke-primary-20261015-6c928f
+Purpose: verify remote commit and exact branch HEAD readback only.
