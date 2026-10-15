@@ -316,8 +316,24 @@ public:
             result.error=WriteError::InvalidInput;
             return result;
         }
+        // Reject a short destination BEFORE any callback, to avoid emitting a
+        // prefix when the complete byte length is already known. A sink I/O
+        // failure may still leave a physical prefix; the receipt remains FAIL.
+        if (maximumBytes<used_)
+        {
+            WriteResult result;
+            result.error=WriteError::ByteLimit;
+            return result;
+        }
         Writer writer(sink,maximumBytes);
-        writer.write(bytes_,static_cast<std::streamsize>(used_));
+        static constexpr size_t kMaximumCallbackBytes=65536;
+        for (size_t offset=0;offset<used_;)
+        {
+            const size_t left=used_-offset;
+            const size_t step=left<kMaximumCallbackBytes?left:kMaximumCallbackBytes;
+            writer.write(bytes_+offset,static_cast<std::streamsize>(step));
+            offset+=step;
+        }
         return writer.Finish();
     }
 };
