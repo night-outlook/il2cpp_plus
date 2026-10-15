@@ -7,6 +7,8 @@ on:
       - 'libil2cpp/vm/AssemblyShadowExecutionSerializer.h'
       - 'libil2cpp/vm/AssemblyShadowDiagnosticWriter.h'
       - 'tools/r03/diagnostic_stream/frozen_execution_capture_tests.cpp'
+      - 'tools/r03/diagnostic_stream/frozen_execution_v2_driver.cpp'
+      - 'tools/r03/diagnostic_stream/run_frozen_v2.py'
       - '.github/workflows/r03-p1-frozen-execution.yml'
   workflow_dispatch:
 permissions:
@@ -42,6 +44,8 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/N_SNAPSHOT_PUBLICATION_91b7/checks
+            Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/SNAP01_BOUNDED_DESIGN_f8a2/reference
+            Tools/AssemblyShadow/R03IR/bounded_v2
           sparse-checkout-cone-mode: false
       - name: Check P1 source boundaries and compile and execute strict/sanitized unit contracts
         shell: bash
@@ -94,6 +98,28 @@ jobs:
             shasum -a 256 "$out"/*.fixture.json "$out/historical"/*.json
           fi
           echo "P1 frozen capture and immutable historical source byte parity: passed (host scope only)"
+      - name: Compose owned execution capture with native V2 encoder and strict original decoder
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          set -euo pipefail
+          src="$GITHUB_WORKSPACE/il2cpp_plus"
+          demo="$GITHUB_WORKSPACE/hybridclr_demo"
+          output="$RUNNER_TEMP/p1-frozen-v2"
+          python3 -B "$src/tools/r03/diagnostic_stream/run_frozen_v2.py" \
+            --native "$src" --demo "$demo" --output "$output"
+          python3 -B - "$output/RESULT.json" <<'PY'
+          import json,sys
+          j=json.load(open(sys.argv[1]))
+          assert j["result"]=="PassedWithinInactiveHostScope" and j["sourceUnchanged"]
+          assert len(j["profiles"])==2 and j["commandCount"]==8
+          assert all(p["strictWireReferenceByteParity"] and p["overflowRejected"] and
+                     p["partialSinkRejected"] and p["originalSemanticStatus"]=="Failed"
+                     for p in j["profiles"])
+          assert not j["realVmCaptureIntegrated"] and not j["runtimeAcceptance"]
+          print("Frozen execution + V2 exact wire parity/negative controls PASSED in inactive host scope")
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
