@@ -99,12 +99,13 @@ static bool Build(fg::Capture& c,const ShadowDiagnosticSnapshot& s)
 struct Buffer
 {
     std::vector<char> data;
-    size_t used=0,calls=0,failAt=0;
+    size_t used=0,calls=0,failAt=0,maxWrite=0;
     explicit Buffer(size_t size):data(size,'\0'){}
     static bool Write(void* p,const char* data,size_t length) noexcept
     {
         Buffer& b=*static_cast<Buffer*>(p);
         if(++b.calls==b.failAt || length>b.data.size()-b.used) return false;
+        if(length>b.maxWrite) b.maxWrite=length;
         if(length) std::memcpy(b.data.data()+b.used,data,length);
         b.used+=length;
         return true;
@@ -130,6 +131,7 @@ static void RoundTrip(size_t count,bool enabled)
     assert(allocatedDuringBuild==0 && allocatedDuringBoth==0);
     assert(receipt.complete && receipt.bytesAccepted==golden.size());
     assert(buffer.Str()==golden);
+    assert(buffer.maxWrite<=65536 && buffer.calls==(golden.size()+65535)/65536);
     assert(capture->Bytes()==golden.size());
     assert(std::memcmp(capture->Data(),golden.data(),golden.size())==0);
     assert(AssemblyShadowDiagnostics::SerializeTo(snapshot,{nullptr,nullptr},golden.size()).error==dg::WriteError::InvalidInput);
@@ -147,6 +149,15 @@ static void RoundTrip(size_t count,bool enabled)
     const auto failure=capture->EmitTo(failed.Sink(),golden.size());
     assert(!failure.complete && failure.error==dg::WriteError::SinkFailure);
     assert(failed.used==0);
+    if (golden.size()>65536)
+    {
+        Buffer interrupted(golden.size());
+        interrupted.failAt=2;
+        const auto interruptedResult=capture->EmitTo(interrupted.Sink(),golden.size());
+        assert(!interruptedResult.complete && interruptedResult.error==dg::WriteError::SinkFailure);
+        assert(interruptedResult.bytesAccepted==65536 && interrupted.used==65536);
+        assert(interrupted.maxWrite==65536); // incomplete prefix MUST be rejected
+    }
     if(count>=4096) assert(golden.size()>262144);
     std::cout << "general classes=" << count << " bytes=" << golden.size()
               << " exact owned byte parity and sink controls passed\n";
