@@ -16,6 +16,7 @@ struct MethodInfo;
 
 namespace il2cpp { namespace vm {
 namespace assembly_shadow_bounded_transaction { class Capture; }
+namespace assembly_shadow_bounded_inventory { class Capture; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -67,6 +68,10 @@ public:
     // Caller preconstructs and exclusively owns a healthy-time fixed Capture.
     static bool TryCaptureBoundedTransactionStatus(
         assembly_shadow_bounded_transaction::Capture& capture);
+    // P1 additive inventory and status snapshot under ONE transaction mutex.
+    // No metadata, first-use, class, R02 or Player validation is included.
+    static bool TryCaptureBoundedTransactionInventory(
+        assembly_shadow_bounded_inventory::Capture& capture);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();
