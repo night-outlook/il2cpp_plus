@@ -179,6 +179,10 @@ static void EpochAndLifetimeFailures()
     {
         Setup();mutationMode=mode;
         auto c=std::make_unique<B>();
+        std::cerr<<"mutating: mode="<<mode<<" capture="<<static_cast<void*>(c.get())
+                 <<" txDetail="<<static_cast<const void*>(transactionSource.detail.data())
+                 <<" txBuild="<<static_cast<const void*>(transactionSource.baselineBuildId.data())
+                 <<" txPatch="<<static_cast<const void*>(transactionSource.patchId.data())<<'\n';
         assert(!AssemblyShadow::TryCaptureBoundedTransactionStatus(*c));
         if (c->FirstError()!=E::SourceChanged || c->Complete())
             std::cerr<<"unexpected capture error, mutationMode="<<mode
