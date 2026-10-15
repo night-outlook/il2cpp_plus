@@ -58,7 +58,7 @@ jobs:
           src=tools/r03/diagnostic_stream/execution_serializer_tests.cpp
           for profile in strict sanitized; do
             exe="$RUNNER_TEMP/r03-execution-serializer/$profile"
-            options=(-std=c++17 -Wall -Wextra -Werror -pedantic -Ilibil2cpp/vm)
+            options=(-std=c++17 -Wall -Wextra -Werror -pedantic -iquote libil2cpp/vm)
             if [[ "$profile" == sanitized ]]; then
               options+=(-g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined)
               export ASAN_OPTIONS="abort_on_error=1:detect_leaks=0"
