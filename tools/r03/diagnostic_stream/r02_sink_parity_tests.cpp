@@ -2,6 +2,7 @@
 // backend. This tests a formatting primitive, not coherent metadata capture.
 #include "AssemblyShadowR02Diagnostics.h"
 #include "AssemblyShadowDiagnosticWriter.h"
+#include "AssemblyShadowFrozenR02Capture.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,19 @@ static fmt::WriteResult Bounded(BoundedBuffer& buffer, size_t bytes) {
     r02::AppendDiagnostics(writer);
     return writer.Finish();
 }
+static void FreezeAndCompare() {
+    const std::string expected=Legacy();
+    assembly_shadow_frozen_r02::Capture frozen;
+    assert(frozen.Freeze());
+    assert(frozen.Complete() && frozen.Bytes()==expected.size());
+    assert(std::string(frozen.Data(),frozen.Bytes())==expected);
+    if constexpr (r02::ObservationCounters::Level > 0)
+        r02::ObservationCounters::Add(r02::Metric::DefinitionRows,11);
+    // Captured bytes remain owned even after counters change.
+    assert(std::string(frozen.Data(),frozen.Bytes())==expected);
+    assert(!frozen.Freeze()); // No reuse/synthetic duplicate capture
+    assert(!frozen.Complete() && frozen.Data()==nullptr && frozen.Bytes()==0);
+}
 static void Compare() {
     auto legacy = Legacy();
     BoundedBuffer exactly;
@@ -55,12 +69,14 @@ static void Compare() {
 }
 int main() {
     Compare();
+    FreezeAndCompare();
     if constexpr (r02::ObservationCounters::Level > 0) {
         r02::ObservationCounters::Add(r02::Metric::DefinitionSearches,1);
         r02::ObservationCounters::Add(r02::Metric::AdmissionEntries,123);
         r02::ObservationCounters::Add(r02::Metric::DroppedClasses,1);
         r02::ObservationCounters::Add(r02::Metric::CounterpartRetainedBytes,UINT64_MAX);
         Compare();
+        FreezeAndCompare();
         const auto json=Legacy();
         assert(json.find("\"definitionSearches\":1") != std::string::npos);
         assert(json.find("\"admissionEntries\":123") != std::string::npos);
