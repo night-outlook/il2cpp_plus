@@ -7,7 +7,10 @@ namespace il2cpp { namespace vm { namespace assembly_shadow_r02 {
 
 // Additive diagnostics only; no type resolution, managed allocation or cache
 // construction. Byte accounting excludes allocator overhead and older caches.
-inline void AppendDiagnostics(std::ostream& output)
+// Shared legacy std::ostream and fixed-sink Writer body: no string materialization.
+// This does not freeze counter acquisition or establish a coherent VM epoch.
+template<class Output>
+inline void AppendDiagnostics(Output& output)
 {
     output << ",\"r02\":{\"schemaVersion\":1,\"diagnosticsLevel\":" << ObservationCounters::Level;
     const struct { const char* name; Metric metric; } fields[] = {
