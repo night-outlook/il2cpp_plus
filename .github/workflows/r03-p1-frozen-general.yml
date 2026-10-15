@@ -39,6 +39,7 @@ jobs:
             libil2cpp/vm/AssemblyShadowTypes.h
             tools/r03/diagnostic_stream/frozen_general_capture_tests.cpp
             tools/r03/diagnostic_stream/allocation_probe.cpp
+            tools/r03/diagnostic_stream/fixtures/LegacyAssemblyShadowDiagnostics.cpp
           sparse-checkout-cone-mode: false
       - name: Compile actual production general serializer plus staged owned capture
         shell: bash
@@ -62,10 +63,14 @@ jobs:
             else
               args+=(-O2)
             fi
+            test "$(git hash-object tools/r03/diagnostic_stream/fixtures/LegacyAssemblyShadowDiagnostics.cpp)" = "226b01273d3e30d190422c4c4c740c49a8d957f0"
+            "$CXX" "${args[@]}" -DAssemblyShadowDiagnostics=OriginalDiagnostics -c \
+              tools/r03/diagnostic_stream/fixtures/LegacyAssemblyShadowDiagnostics.cpp -o "$RUNNER_TEMP/r03-general/original-$profile.o"
             "$CXX" "${args[@]}" \
               tools/r03/diagnostic_stream/frozen_general_capture_tests.cpp \
               tools/r03/diagnostic_stream/allocation_probe.cpp \
               libil2cpp/vm/AssemblyShadowDiagnostics.cpp \
+              "$RUNNER_TEMP/r03-general/original-$profile.o" \
               -o "$exe"
             "$exe"
           done
