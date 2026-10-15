@@ -114,8 +114,8 @@ private:
     }
     bool Check(Stage stage) noexcept
     {
-        return stage_==stage && error_==CaptureError::None ||
-            Fail(CaptureError::WrongStage);
+        if (stage_==stage && error_==CaptureError::None) return true;
+        return Fail(CaptureError::WrongStage);
     }
     bool Valid(QuotedText text) noexcept
     {
