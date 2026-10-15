@@ -22,9 +22,12 @@ import time
 
 FROZEN_HASH = "051497faf816e4094b8f4e8f194c5b877812cee034c6901c755e8b6efdff9c40"
 CURRENT_HASH = "4829a3ae7b9b0df57d054738f99d940b4ad7644a364df0502c9976469819d372"
-# These Git blobs are exact source-identity checks, NOT a fallback to old code.
+# Pin the exact production formatter and native writer headers, plus the
+# COMPLETE extracted current execution function hash below. Do NOT pin the
+# entire AssemblyShadow.cpp file: unrelated, additive native P1 entry points
+# legitimately change its blob without changing the execution producer.
+# Record the complete file blob/hash for provenance, never silently ignore it.
 SOURCE_BLOBS = {
-    "libil2cpp/vm/AssemblyShadow.cpp": "2aaa351a365d6b4ff80d01264a4ba958bc649cac",
     "libil2cpp/vm/AssemblyShadowExecutionSerializer.h": "3a0e7b1cc25bdeb16d0f341b67715b3433f04689",
     "libil2cpp/vm/AssemblyShadowDiagnosticWriter.h": "9dee4c9ea6febe4a919d1c7eb8faf2ad00b8a8e5",
 }
@@ -144,7 +147,12 @@ def main() -> None:
             data = pinned(checks / p, sha)
             source_receipts[str(checks / p)] = {"gitBlob": sha, "sha256": digest(data)}
         path = native / "libil2cpp/vm/AssemblyShadow.cpp"
-        source = path.read_text()
+        full_data = path.read_bytes()
+        source_receipts[str(path)] = {"gitBlob": git_blob(full_data),
+                                      "sha256": digest(full_data),
+                                      "identityRule": "ExactExtractedExecutionFunctionSHA256",
+                                      "expectedFunctionSha256": CURRENT_HASH}
+        source = full_data.decode("utf-8")
         spec = importlib.util.spec_from_file_location("historical_body_parser", checks / "test_snapshot_integration.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
