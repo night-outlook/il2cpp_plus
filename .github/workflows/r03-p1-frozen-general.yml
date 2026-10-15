@@ -1,0 +1,71 @@
+name: R03 P1 staged owned general diagnostic JSON parity
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - libil2cpp/vm/AssemblyShadowFrozenGeneralCapture.h
+      - libil2cpp/vm/AssemblyShadowDiagnostics.cpp
+      - libil2cpp/vm/AssemblyShadowDiagnostics.h
+      - libil2cpp/vm/AssemblyShadowDiagnosticWriter.h
+      - libil2cpp/vm/AssemblyShadowTypes.h
+      - tools/r03/diagnostic_stream/frozen_general_capture_tests.cpp
+      - .github/workflows/r03-p1-frozen-general.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  staged-general-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: g++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadowFrozenGeneralCapture.h
+            libil2cpp/vm/AssemblyShadowDiagnostics.cpp
+            libil2cpp/vm/AssemblyShadowDiagnostics.h
+            libil2cpp/vm/AssemblyShadowDiagnosticWriter.h
+            libil2cpp/vm/AssemblyShadowTypes.h
+            tools/r03/diagnostic_stream/frozen_general_capture_tests.cpp
+            tools/r03/diagnostic_stream/allocation_probe.cpp
+          sparse-checkout-cone-mode: false
+      - name: Compile actual production general serializer plus staged owned capture
+        shell: bash
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/r03-general/stubs"
+          printf '%s\n' '#pragma once' '// Host-only source compatibility stub, not a Unity SDK.' > "$RUNNER_TEMP/r03-general/stubs/il2cpp-config.h"
+          for profile in strict sanitized; do
+            exe="$RUNNER_TEMP/r03-general/$profile"
+            args=(-std=c++17 -Wall -Wextra -Werror -pedantic -iquote libil2cpp/vm -iquote "$RUNNER_TEMP/r03-general/stubs")
+            if [[ "$profile" == sanitized ]]; then
+              args+=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)
+              if [[ "$RUNNER_OS" == macOS ]]; then
+                export ASAN_OPTIONS=detect_leaks=0:abort_on_error=1
+              else
+                export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1
+              fi
+              export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+            else
+              args+=(-O2)
+            fi
+            "$CXX" "${args[@]}" \
+              tools/r03/diagnostic_stream/frozen_general_capture_tests.cpp \
+              tools/r03/diagnostic_stream/allocation_probe.cpp \
+              libil2cpp/vm/AssemblyShadowDiagnostics.cpp \
+              -o "$exe"
+            "$exe"
+          done
