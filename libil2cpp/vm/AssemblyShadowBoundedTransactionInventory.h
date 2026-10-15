@@ -133,6 +133,8 @@ public:
     Capture& operator=(Capture&&)=delete;
 
     Error FirstError() const noexcept { return error_; }
+    // Source adapter fails closed when a transaction member is structurally invalid.
+    bool RejectInvalidSource() noexcept { return Fail(Error::MissingInput); }
     status::Error StatusFirstError() const noexcept { return status_.FirstError(); }
     bool Complete() const noexcept
     { return stage_==Stage::Sealed && error_==Error::None && status_.Complete(); }
