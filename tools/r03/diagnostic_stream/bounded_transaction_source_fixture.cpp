@@ -179,10 +179,6 @@ static void EpochAndLifetimeFailures()
     {
         Setup();mutationMode=mode;
         auto c=std::make_unique<B>();
-        std::cerr<<"mutating: mode="<<mode<<" capture="<<static_cast<void*>(c.get())
-                 <<" txDetail="<<static_cast<const void*>(transactionSource.detail.data())
-                 <<" txBuild="<<static_cast<const void*>(transactionSource.baselineBuildId.data())
-                 <<" txPatch="<<static_cast<const void*>(transactionSource.patchId.data())<<'\n';
         assert(!AssemblyShadow::TryCaptureBoundedTransactionStatus(*c));
         if (c->FirstError()!=E::SourceChanged || c->Complete())
             std::cerr<<"unexpected capture error, mutationMode="<<mode
@@ -223,6 +219,25 @@ static void EpochAndLifetimeFailures()
         assert(c->FirstError()==E::WrongPhase && !c->Complete());
     }
 }
+static void AdjacentValidInput()
+{
+    // A valid sibling buffer immediately after the Capture object MUST NOT
+    // be rejected as aliasing its internal owned char arrays. The previous
+    // guard incorrectly included kMaxObjectBytes bookkeeping headroom.
+    struct Adjacent { B capture; char source[64]; };
+    auto memory=std::make_unique<Adjacent>();
+    std::memcpy(memory->source,"separate-adjacent",17);
+    assembly_shadow_bounded_transaction::Input value;
+    value.detail={memory->source,17};
+    value.baselineBuildId=assembly_shadow_diagnostic::Quoted("b");
+    value.patchId=assembly_shadow_diagnostic::Quoted("p");
+    assert(memory->capture.Begin(value));
+    assert(memory->capture.ObserveFirstFailure(true,false,AssemblyShadowError::Success,
+            assembly_shadow_diagnostic::Quoted(""),false));
+    assert(memory->capture.Seal());
+    V got;assert(memory->capture.Get(got));
+    assert(ToString(got.detail)=="separate-adjacent");
+}
 static void DirectPhaseControl()
 {
     Setup();
@@ -245,6 +260,7 @@ int main()
     il2cpp::vm::Baseline();
     il2cpp::vm::Priority();
     il2cpp::vm::EpochAndLifetimeFailures();
+    il2cpp::vm::AdjacentValidInput();
     il2cpp::vm::DirectPhaseControl();
     std::cout<<"P1 actual VM status method under mocks: precedence/owned bytes/"
              <<"source flips/limits/one-shot/allocation controls passed\n";
