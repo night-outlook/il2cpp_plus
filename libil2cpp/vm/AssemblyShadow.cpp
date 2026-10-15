@@ -6,6 +6,7 @@
 #include "AssemblyShadowR02Diagnostics.h"
 #include "AssemblyShadowExecutionSerializer.h"
 #include "AssemblyShadowBoundedTransactionStatus.h"
+#include "AssemblyShadowBoundedTransactionInventory.h"
 #include "AssemblyShadowObservationMemo.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
@@ -1362,6 +1363,110 @@ bool AssemblyShadow::TryCaptureBoundedTransactionStatus(
             activeAfter!=nullptr))
         return false;
     return capture.Seal();
+}
+
+bool AssemblyShadow::TryCaptureBoundedTransactionInventory(
+    assembly_shadow_bounded_inventory::Capture& capture)
+{
+    // Capture one complete TRANSACTION-owned subset. Do not claim this is
+    // the separately sampled usage, class, physical assembly or R02 census.
+    // The caller must prewarm Current() and allocate Capture while healthy.
+    namespace inventory=assembly_shadow_bounded_inventory;
+    namespace bounded=assembly_shadow_bounded_transaction;
+    const TypeFailure* failureBefore=s_typeFailure.load(std::memory_order_acquire);
+    const AssemblyShadowState stateBefore=s_state.load(std::memory_order_acquire);
+    const ActiveSnapshot* activeBefore=s_active.load(std::memory_order_acquire);
+    const bool unexpectedBefore=s_unexpectedFailure.load(std::memory_order_acquire);
+    const bool lateBefore=s_lateBaselineUse.load(std::memory_order_acquire);
+    bool sampledStable=false;
+    AssemblyShadowState sampledState=AssemblyShadowState::Disabled;
+    uint64_t sampledGeneration=0;
+    bool unexpected=false,late=false;
+    auto& transaction=Current();
+    {
+        // Source text is synchronously copied into fixed owned storage under
+        // the existing transaction mutex. No metadata locks, managed code,
+        // arbitrary callbacks, heap arrays, or file sink inside this scope.
+        std::lock_guard<std::mutex> lock(transaction.mutex);
+        sampledState=s_state.load(std::memory_order_acquire);
+        unexpected=s_unexpectedFailure.load(std::memory_order_acquire);
+        late=s_lateBaselineUse.load(std::memory_order_acquire);
+        const char* effective=unexpected
+            ? "Unexpected native failure sealed the transaction; restart required."
+            : late ? "Physical baseline use after publication; restart required."
+                   : nullptr;
+        bounded::Input status;
+        status.state=sampledState;
+        status.lastError=unexpected ? AssemblyShadowError::InternalError
+            : late ? AssemblyShadowError::BaselineAlreadyUsed : transaction.lastError;
+        status.detail=effective ? assembly_shadow_diagnostic::Quoted(effective)
+                                : assembly_shadow_diagnostic::Quoted(transaction.detail);
+        status.baselineBuildId=assembly_shadow_diagnostic::Quoted(transaction.baselineBuildId);
+        status.patchId=assembly_shadow_diagnostic::Quoted(transaction.patchId);
+        sampledGeneration=ActiveGeneration();
+        status.generation=sampledGeneration;
+        status.expected=transaction.closure.size();
+        status.staged=StagedCount(transaction);
+        status.retainedBytes=transaction.retainedBytes;
+        if (!capture.Begin(status)) return false;
+        const StableAotConfiguration* configuration=s_configuration.load(std::memory_order_acquire);
+        if (configuration)
+            for (const std::string& name : configuration->stableNames)
+                if (!capture.AddStable(assembly_shadow_diagnostic::Quoted(name))) return false;
+        if (!capture.EndStable()) return false;
+        for (const auto& member : transaction.closure)
+        {
+            inventory::AssemblyInput row;
+            row.name=assembly_shadow_diagnostic::Quoted(member.candidate->name);
+            if (const StagedAssembly* staged=member.staged)
+            {
+                row.mvid=assembly_shadow_diagnostic::Quoted(staged->mvid);
+                row.skeletonBuilt=staged->skeletonBuilt;
+                row.runtimeMetadataInitialized=staged->runtimeMetadataInitialized;
+                row.published=staged->published;
+                row.moduleInitializerAttempted=staged->moduleInitializerAttempted.load();
+                row.moduleInitializerRan=staged->moduleInitializerRan.load();
+            }
+            else row.mvid=assembly_shadow_diagnostic::Quoted("");
+            if (!capture.AddClosure(row)) return false;
+        }
+        if (!capture.EndClosure()) return false;
+        for (const std::string& name : transaction.commitOrder)
+            if (!capture.AddCommit(assembly_shadow_diagnostic::Quoted(name))) return false;
+        if (!capture.EndCommit()) return false;
+        for (const auto& event : transaction.events)
+        {
+            inventory::EventInput row;
+            row.sequence=event.sequence;
+            row.kind=assembly_shadow_diagnostic::Quoted(event.kind);
+            row.name=assembly_shadow_diagnostic::Quoted(event.name);
+            row.generation=event.generation;
+            row.stagedCount=event.stagedCount;
+            if (!capture.AddEvent(row)) return false;
+        }
+        if (!capture.EndLocked()) return false;
+        // A flip of an independently published flag is a failure. This check
+        // is conservative; two equal reads are NOT an all-VM atomic epoch.
+        sampledStable=unexpected==s_unexpectedFailure.load(std::memory_order_acquire) &&
+            late==s_lateBaselineUse.load(std::memory_order_acquire) &&
+            sampledState==s_state.load(std::memory_order_acquire) &&
+            sampledGeneration==ActiveGeneration();
+    }
+    const TypeFailure* failureAfter=s_typeFailure.load(std::memory_order_acquire);
+    const ActiveSnapshot* activeAfter=s_active.load(std::memory_order_acquire);
+    const bool stable=sampledStable && failureBefore==failureAfter &&
+        stateBefore==sampledState &&
+        sampledState==s_state.load(std::memory_order_acquire) &&
+        activeBefore==activeAfter &&
+        sampledGeneration==ActiveGeneration() &&
+        unexpected==s_unexpectedFailure.load(std::memory_order_acquire) &&
+        late==s_lateBaselineUse.load(std::memory_order_acquire) &&
+        unexpectedBefore==unexpected && lateBefore==late;
+    return capture.Seal(stable,failureAfter!=nullptr,
+        failureAfter ? failureAfter->error : AssemblyShadowError::Success,
+        failureAfter ? assembly_shadow_diagnostic::Quoted(failureAfter->detail)
+                     : assembly_shadow_diagnostic::Quoted(""),
+        activeAfter!=nullptr);
 }
 
 AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
