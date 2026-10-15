@@ -195,7 +195,7 @@ def main():
   failure=repr(error)
   raise
  finally:
-  unchanged=all(Path(x).is_file() and
+  unchanged=bool(before) and all(Path(x).is_file() and
                 {'gitBlob':blob(Path(x).read_bytes()),'sha256':sha(Path(x).read_bytes())}==ident
                 for x,ident in before.items())
   status='PassedWithinHostScope' if verified and unchanged else 'FailedOrIncomplete'
