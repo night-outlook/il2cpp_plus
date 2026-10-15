@@ -70,6 +70,37 @@ jobs:
           assert all(x['exactByteParity'] for x in parity['cases'])
           print('original vs current full-function mock parity and 25 general tests/profile passed')
           PY
+      - name: Reject a modified historical source with complete failed-component receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          native="$GITHUB_WORKSPACE/il2cpp_plus"
+          demo="$GITHUB_WORKSPACE/hybridclr_demo"
+          negative="$RUNNER_TEMP/r03-source-gate-negative"
+          mkdir -p "$negative/demo"
+          cp -R "$demo/Docs" "$negative/demo/Docs"
+          cp -R "$demo/Tools" "$negative/demo/Tools"
+          printf '\n// Deliberately mutated TEST COPY, never the original historical fixture\n' >> \
+            "$negative/demo/Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/N_SNAPSHOT_PUBLICATION_91b7/checks/source-extracts/GetExecutionDiagnosticsJson.function.cpp"
+          set +e
+          python3 -B "$native/tools/r03/diagnostic_stream/run_tests.py" \
+            --native "$native" --demo "$negative/demo" --output "$negative/rejected" \
+            > "$negative/rejected.stdout" 2> "$negative/rejected.stderr"
+          code=$?
+          set -e
+          test "$code" -ne 0
+          python3 -B - "$negative/rejected" <<'PY'
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          r=json.loads((root/'RESULT.json').read_text())
+          m=json.loads((root/'MANIFEST.json').read_text())
+          assert r['result']=='FailedOrIncomplete' and r['sourceUnchanged'] is False
+          assert r['oldExecutionProducer']=='NotRun' and r['currentExecutionProducer']=='NotRun'
+          assert not r['profiles'] and 'Historical original execution source changed' in r['firstFailure']
+          assert any(x['path']=='RESULT.json' for x in m['files'])
+          print('immutable mutation rejected; explicit FailedOrIncomplete component receipts retained')
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
