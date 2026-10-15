@@ -71,10 +71,14 @@ private:
     {
         if (!value.data) return Fail(Error::MissingInput);
         const uintptr_t p=reinterpret_cast<uintptr_t>(value.data);
-        const uintptr_t a=reinterpret_cast<uintptr_t>(detail_);
-        if (value.bytes>UINTPTR_MAX-p || kMaxObjectBytes>UINTPTR_MAX-a)
+        const uintptr_t first=reinterpret_cast<uintptr_t>(detail_);
+        const uintptr_t last=reinterpret_cast<uintptr_t>(patch_+kMaxPatchId);
+        // Compare only the ACTUAL owned character arrays, not the larger
+        // kMaxObjectBytes budget (which includes adjacent bookkeeping and can
+        // spuriously overlap a separate allocation directly after Capture).
+        if (value.bytes>UINTPTR_MAX-p || last<first)
             return Fail(Error::MissingInput);
-        if (value.bytes && p<a+kMaxObjectBytes && a<p+value.bytes)
+        if (value.bytes && p<last && first<p+value.bytes)
             return Fail(Error::AliasedInput);
         if (value.bytes>max) return Fail(over);
         if (value.bytes) std::memcpy(dst,value.data,value.bytes);
