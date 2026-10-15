@@ -113,50 +113,112 @@ class SerializerTests(unittest.TestCase):
 
 def main():
  global OUT,DEMO,NATIVE,REF,DRIVER,PROFILE,EXECUTION
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,required=True);p.add_argument('--demo',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__)
+ p.add_argument('--native',type=Path,required=True)
+ p.add_argument('--demo',type=Path,required=True)
+ p.add_argument('--output',type=Path,required=True)
+ a=p.parse_args()
  need(__debug__,'Python assertions must remain enabled')
  NATIVE=a.native.resolve(strict=True);DEMO=a.demo.resolve(strict=True);OUT=a.output
  need(OUT.is_absolute() and OUT==OUT.resolve(strict=False) and OUT.parent.is_dir() and not OUT.exists(),'New canonical absolute output required')
  need(all(OUT!=q and q not in OUT.parents and OUT not in q.parents for q in (NATIVE,DEMO)),'Output outside source')
- codec=DEMO/'Tools/AssemblyShadow/R03IR/bounded_v2/BoundedDiagnosticsV2.h'
- reference=DEMO/'Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/SNAP01_BOUNDED_DESIGN_f8a2/reference/diagnostic_stream.py'
- need(blob(codec.read_bytes())==CODEC_BLOB and blob(reference.read_bytes())==REF_BLOB,'Unchanged native codec/reference')
- need(blob((HERE/'fixtures/LegacyAssemblyShadowDiagnostics.cpp').read_bytes())==OLD_BLOB,'Original legacy serializer binding')
- need(blob((HERE/'fixtures/AssemblyShadowDiagnostics.h').read_bytes())=='d76bb25a7e896d3c42af172ec3c80012ef2f2419','Original snapshot/header binding')
- paths=[NATIVE/'libil2cpp/vm'/n for n in ('AssemblyShadowDiagnostics.cpp','AssemblyShadowDiagnostics.h','AssemblyShadowDiagnosticWriter.h','AssemblyShadowTypes.h','AssemblyShadow.cpp')]
- paths += [codec,reference,Path(__file__).resolve(),HERE/'serializer_driver.cpp',HERE/'allocation_probe.cpp',HERE/'fixtures/LegacyAssemblyShadowDiagnostics.cpp',HERE/'fixtures/AssemblyShadowDiagnostics.h']
- before={str(f):{'gitBlob':blob(f.read_bytes()),'sha256':sha(f.read_bytes())} for f in paths}
- OUT.mkdir();(OUT/'stubs').mkdir();(OUT/'stubs/il2cpp-config.h').write_text('#pragma once\n// Explicit host-only empty configuration stub. Not Unity SDK.\n')
- spec=importlib.util.spec_from_file_location('wire_reference',reference);REF=importlib.util.module_from_spec(spec);spec.loader.exec_module(REF)
- checks=DEMO/'Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/N_SNAPSHOT_PUBLICATION_91b7/checks'
- # Bind the actual immutable execution function; the helper's VM metadata is synthetic.
- sys.path.insert(0,str(checks));from test_snapshot_integration import body
- actual=body((NATIVE/'libil2cpp/vm/AssemblyShadow.cpp').read_text(),'AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& json)')
- need(actual.strip()==(checks/'source-extracts/GetExecutionDiagnosticsJson.function.cpp').read_text().strip(),'Original execution producer changed; review needed')
- verified=False;profiles=[]
+ # Input paths/output identity are checked before creating this fresh root.
+ # Once created, every early source-binding failure gets a factual receipt.
+ OUT.mkdir()
+ verified=False;profiles=[];before={};failure=None;old_producer='NotRun';current_producer='NotRun'
  try:
+  codec=DEMO/'Tools/AssemblyShadow/R03IR/bounded_v2/BoundedDiagnosticsV2.h'
+  reference=DEMO/'Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/SNAP01_BOUNDED_DESIGN_f8a2/reference/diagnostic_stream.py'
+  need(blob(codec.read_bytes())==CODEC_BLOB and blob(reference.read_bytes())==REF_BLOB,'Unchanged native codec/reference')
+  need(blob((HERE/'fixtures/LegacyAssemblyShadowDiagnostics.cpp').read_bytes())==OLD_BLOB,'Original legacy serializer binding')
+  need(blob((HERE/'fixtures/AssemblyShadowDiagnostics.h').read_bytes())=='d76bb25a7e896d3c42af172ec3c80012ef2f2419','Original snapshot/header binding')
+  checks=DEMO/'Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/N_SNAPSHOT_PUBLICATION_91b7/checks'
+  # Immutable historical extracts stay frozen. A current producer must be
+  # identified independently, NEVER made to match old source text.
+  frozen=checks/'source-extracts/GetExecutionDiagnosticsJson.function.cpp'
+  need(sha(frozen.read_bytes())=='051497faf816e4094b8f4e8f194c5b877812cee034c6901c755e8b6efdff9c40',
+       'Historical original execution source changed')
+  sys.path.insert(0,str(checks))
+  from test_snapshot_integration import body
+  actual=body((NATIVE/'libil2cpp/vm/AssemblyShadow.cpp').read_text(),
+              'AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& json)')
+  need(sha(actual.encode())=='4829a3ae7b9b0df57d054738f99d940b4ad7644a364df0502c9976469819d372',
+       'Current execution producer source changed; review required')
+  paths=[NATIVE/'libil2cpp/vm'/n for n in ('AssemblyShadowDiagnostics.cpp','AssemblyShadowDiagnostics.h',
+         'AssemblyShadowDiagnosticWriter.h','AssemblyShadowExecutionSerializer.h','AssemblyShadowTypes.h','AssemblyShadow.cpp')]
+  paths += [codec,reference,Path(__file__).resolve(),HERE/'serializer_driver.cpp',
+            HERE/'allocation_probe.cpp',HERE/'current_execution_producer.py',
+            HERE/'fixtures/LegacyAssemblyShadowDiagnostics.cpp',
+            HERE/'fixtures/AssemblyShadowDiagnostics.h',checks/'test_diagnostic_size.py',
+            checks/'test_snapshot_integration.py',frozen]
+  before={str(x):{'gitBlob':blob(x.read_bytes()),'sha256':sha(x.read_bytes())} for x in paths}
+  (OUT/'stubs').mkdir()
+  (OUT/'stubs/il2cpp-config.h').write_text('#pragma once\n// Explicit host-only empty configuration stub. Not Unity SDK.\n')
+  spec=importlib.util.spec_from_file_location('wire_reference',reference)
+  REF=importlib.util.module_from_spec(spec);spec.loader.exec_module(REF)
   run([sys.executable,'-B',checks/'test_diagnostic_size.py','--output',OUT/'execution-producer'],OUT/'execution-producer-command')
-  EXECUTION=(OUT/'execution-producer/strict.json').read_bytes();need(len(EXECUTION)==331078 and len(json.loads(EXECUTION)['classes'])==1024,'Actual synthetic execution output')
-  compiler=shutil.which(os.environ.get('CXX','clang++'));need(compiler,'CXX compiler required');run([compiler,'--version'],OUT/'compiler')
+  old_producer='Passed'
+  # Run both actual historical and current function bodies against exactly the
+  # same pinned synthetic VM inputs, with strict and sanitized compiler profiles.
+  # This check must succeed BEFORE the general V2/serializer test matrix.
+  run([sys.executable,'-B',HERE/'current_execution_producer.py',
+       '--native',NATIVE,'--demo',DEMO,
+       '--historical-output',OUT/'execution-producer',
+       '--output',OUT/'current-execution-parity'],OUT/'current-execution-parity-command',timeout=240)
+  parity=json.loads((OUT/'current-execution-parity/RESULT.json').read_text())
+  need(parity['result']=='PassedHostOnly' and len(parity['cases'])==6 and
+       len(parity['commands'])==24,'Full immutable/current producer parity missing')
+  current_producer='Passed'
+  EXECUTION=(OUT/'execution-producer/strict.json').read_bytes()
+  need(len(EXECUTION)==331078 and len(json.loads(EXECUTION)['classes'])==1024,
+       'Actual immutable synthetic execution output')
+  compiler=shutil.which(os.environ.get('CXX','clang++'))
+  need(compiler,'CXX compiler required')
+  run([compiler,'--version'],OUT/'compiler')
   for name,flags in [('strict',[]),('sanitized',['-fsanitize=address,undefined','-fno-omit-frame-pointer'])]:
    PROFILE=name;folder=OUT/name;folder.mkdir();DRIVER=folder/'serializer'
-   common=[compiler,'-std=c++17','-O1','-g','-Wall','-Wextra','-Werror','-pedantic',*flags,'-iquote',str(NATIVE/'libil2cpp/vm'),'-I'+str(codec.parent),'-I'+str(OUT/'stubs')]
-   run([*common,'-DAssemblyShadowDiagnostics=OriginalDiagnostics','-c',HERE/'fixtures/LegacyAssemblyShadowDiagnostics.cpp','-o',folder/'original.o'],folder/'legacy-compile')
-   run([*common,HERE/'serializer_driver.cpp',HERE/'allocation_probe.cpp',NATIVE/'libil2cpp/vm/AssemblyShadowDiagnostics.cpp',folder/'original.o','-o',DRIVER],folder/'current-compile')
-   with (folder/'tests.log').open('w') as f:r=unittest.TextTestRunner(stream=f,verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(SerializerTests))
-   profiles.append({'name':name,'tests':r.testsRun,'failures':len(r.failures),'errors':len(r.errors),'skipped':len(r.skipped)})
-   need(r.wasSuccessful() and not r.skipped and r.testsRun==25,'Complete serializer matrix failed: '+str(folder/'tests.log'))
+   common=[compiler,'-std=c++17','-O1','-g','-Wall','-Wextra','-Werror','-pedantic',*flags,
+           '-iquote',str(NATIVE/'libil2cpp/vm'),'-I'+str(codec.parent),'-I'+str(OUT/'stubs')]
+   run([*common,'-DAssemblyShadowDiagnostics=OriginalDiagnostics','-c',
+        HERE/'fixtures/LegacyAssemblyShadowDiagnostics.cpp','-o',folder/'original.o'],folder/'legacy-compile')
+   run([*common,HERE/'serializer_driver.cpp',HERE/'allocation_probe.cpp',
+        NATIVE/'libil2cpp/vm/AssemblyShadowDiagnostics.cpp',folder/'original.o','-o',DRIVER],folder/'current-compile')
+   with (folder/'tests.log').open('w') as log:
+    result=unittest.TextTestRunner(stream=log,verbosity=2).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(SerializerTests))
+   profiles.append({'name':name,'tests':result.testsRun,'failures':len(result.failures),
+                    'errors':len(result.errors),'skipped':len(result.skipped)})
+   need(result.wasSuccessful() and not result.skipped and result.testsRun==25,
+        'Complete serializer matrix failed: '+str(folder/'tests.log'))
   verified=True
+ except Exception as error:
+  failure=repr(error)
+  raise
  finally:
-  unchanged=before=={str(f):{'gitBlob':blob(f.read_bytes()),'sha256':sha(f.read_bytes())} for f in paths}
-  result={'kind':'SharedGeneralSerializerV2HostInterop','result':'PassedWithinHostScope' if verified and unchanged else 'FailedOrIncomplete','profiles':profiles,'sources':before,'sourceUnchanged':unchanged,'commands':RECORDS,
-   'observedNewAllocationsDuringPreparedGeneralFormattingAndCaptureEncoding':0 if verified else None,
-   'generalSerializer':'Actual legacy and current native production source, synthetic immutable metadata snapshot',
-   'executionSerializer':'Unchanged actual function under VM mocks; complete legacy string supplied as host input, not a new bounded VM acquisition path',
-   'captureVmAllocationBoundProven':False,'liveCaptureCoherenceProven':False,'durableRuntimeFiles':False,'v2PlayerEnabled':False,'actualUnity':False,'runtimeAcceptance':False}
+  unchanged=all(Path(x).is_file() and
+                {'gitBlob':blob(Path(x).read_bytes()),'sha256':sha(Path(x).read_bytes())}==ident
+                for x,ident in before.items())
+  status='PassedWithinHostScope' if verified and unchanged else 'FailedOrIncomplete'
+  result={'kind':'SharedGeneralSerializerV2HostInterop','result':status,
+          'profiles':profiles,'oldExecutionProducer':old_producer,
+          'currentExecutionProducer':current_producer,
+          'currentExecutionFunctionSha256':'4829a3ae7b9b0df57d054738f99d940b4ad7644a364df0502c9976469819d372',
+          'originalExecutionFunctionSha256':'051497faf816e4094b8f4e8f194c5b877812cee034c6901c755e8b6efdff9c40',
+          'sources':before,'sourceUnchanged':unchanged,'commands':RECORDS,
+          'firstFailure':failure,
+          'observedNewAllocationsDuringPreparedGeneralFormattingAndCaptureEncoding':0 if verified else None,
+          'generalSerializer':'Actual legacy/current native product source; synthetic immutable VM snapshot',
+          'executionSerializer':'Actual pinned historical/current VM function bodies with byte parity over identical synthetic VM inputs; no live bounded acquisition',
+          'captureVmAllocationBoundProven':False,'liveCaptureCoherenceProven':False,
+          'durableRuntimeFiles':False,'v2PlayerEnabled':False,'actualUnity':False,
+          'runtimeAcceptance':False}
   (OUT/'RESULT.json').write_text(json.dumps(result,indent=2)+'\n')
-  rows=[{'path':str(f.relative_to(OUT)),'bytes':f.stat().st_size,'sha256':sha(f.read_bytes())} for f in sorted(OUT.rglob('*')) if f.is_file()]
+  rows=[{'path':str(x.relative_to(OUT)),'bytes':x.stat().st_size,'sha256':sha(x.read_bytes())}
+        for x in sorted(OUT.rglob('*')) if x.is_file()]
   (OUT/'MANIFEST.json').write_text(json.dumps({'files':rows},indent=2)+'\n')
  need(verified and unchanged,'Validation incomplete')
- print(json.dumps({'result':result['result'],'profiles':profiles,'commands':len(RECORDS)},indent=2))
+ print(json.dumps({'result':result['result'],'profiles':profiles,'commands':len(RECORDS),
+                   'executionProducerParity':'Passed'},indent=2))
+
+
 if __name__=='__main__':main()
