@@ -1,0 +1,69 @@
+name: R03 P1 actual native transaction status source contract
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - libil2cpp/vm/AssemblyShadow.cpp
+      - libil2cpp/vm/AssemblyShadow.h
+      - libil2cpp/vm/AssemblyShadowBoundedTransactionStatus.h
+      - tools/r03/diagnostic_stream/run_bounded_transaction_status.py
+      - tools/r03/diagnostic_stream/bounded_transaction_source_fixture.cpp
+      - .github/workflows/r03-p1-bounded-transaction-status.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-vm-source-mock:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: g++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadow.cpp
+            libil2cpp/vm/AssemblyShadow.h
+            libil2cpp/vm/AssemblyShadowBoundedTransactionStatus.h
+            libil2cpp/vm/AssemblyShadowTypes.h
+            libil2cpp/vm/AssemblyShadowDiagnosticWriter.h
+            tools/r03/diagnostic_stream/run_bounded_transaction_status.py
+            tools/r03/diagnostic_stream/bounded_transaction_source_fixture.cpp
+            tools/r03/diagnostic_stream/allocation_probe.cpp
+          sparse-checkout-cone-mode: false
+      - name: Run strict and sanitizer tests against exact production method body
+        shell: bash
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -euo pipefail
+          python3 -B tools/r03/diagnostic_stream/run_bounded_transaction_status.py \
+            --native "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/p1-bounded-transaction-${{ github.run_id }}-${{ github.run_attempt }}"
+          python3 -B - "$RUNNER_TEMP/p1-bounded-transaction-${{ github.run_id }}-${{ github.run_attempt }}/RESULT.json" <<'PY'
+          import json,sys
+          from pathlib import Path
+          result=json.loads(Path(sys.argv[1]).read_text())
+          assert result["result"] == "PassedWithinHostScope"
+          assert result["profilesCompleted"] == ["strict","sanitized"]
+          assert result["actualNativeMethodBodyCompiled"] and result["sourceUnchanged"]
+          assert result["liveVMSourceEpochProven"] is False
+          assert result["runtimeAcceptance"] is False
+          print("Real production source method and bounded owned status host contracts passed")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: p1-transaction-status-${{ matrix.os }}-${{ matrix.cxx }}-${{ github.sha }}
+          path: ${{ runner.temp }}/p1-bounded-transaction-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
