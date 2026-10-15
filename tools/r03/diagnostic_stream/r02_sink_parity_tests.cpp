@@ -65,7 +65,7 @@ int main() {
         assert(json.find("\"definitionSearches\":1") != std::string::npos);
         assert(json.find("\"admissionEntries\":123") != std::string::npos);
         assert(json.find("\"counterpartRetainedBytes\":18446744073709551615") != std::string::npos);
-        assert(json.find("\"classesCoverage\":\"Truncated\"") != std::string::npos);
+        assert(json.find(r02::ObservationCounters::Level < 2 ? "\"classesCoverage\":\"Disabled\"" : "\"classesCoverage\":\"Truncated\"") != std::string::npos);
     } else {
         const auto json=Legacy();
         assert(json.find("\"diagnosticsLevel\":0")!=std::string::npos);
