@@ -15,6 +15,7 @@ struct Il2CppType;
 struct MethodInfo;
 
 namespace il2cpp { namespace vm {
+namespace assembly_shadow_bounded_transaction { class Capture; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -60,6 +61,12 @@ public:
     static AssemblyShadowError ReportUnexpectedFailure();
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    // P1 limited native status source capture. Copies only transaction status
+    // fields under the existing lock and checks first-failure publication
+    // afterward; it does NOT capture other diagnostics or authorize Player use.
+    // Caller preconstructs and exclusively owns a healthy-time fixed Capture.
+    static bool TryCaptureBoundedTransactionStatus(
+        assembly_shadow_bounded_transaction::Capture& capture);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();
