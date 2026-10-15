@@ -1417,7 +1417,7 @@ bool AssemblyShadow::TryCaptureBoundedTransactionInventory(
         if (!capture.EndStable()) return false;
         for (const auto& member : transaction.closure)
         {
-            if (!member.candidate) return false; // Corrupt source: never dereference.
+            if (!member.candidate) return capture.RejectInvalidSource();
             inventory::AssemblyInput row;
             row.name=assembly_shadow_diagnostic::Quoted(member.candidate->name);
             if (const StagedAssembly* staged=member.staged)
