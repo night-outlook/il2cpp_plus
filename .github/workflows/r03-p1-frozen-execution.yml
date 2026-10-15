@@ -113,9 +113,10 @@ jobs:
           import json,sys
           j=json.load(open(sys.argv[1]))
           assert j["result"]=="PassedWithinInactiveHostScope" and j["sourceUnchanged"]
-          assert len(j["profiles"])==2 and j["commandCount"]==8
+          assert len(j["profiles"])==2 and j["commandCount"]==12
           assert all(p["strictWireReferenceByteParity"] and p["overflowRejected"] and
-                     p["partialSinkRejected"] and p["originalSemanticStatus"]=="Failed"
+                     p["partialSinkRejected"] and p["invalidUtf8Rejected"] and
+                     p["combinedArtifactOverflowRejected"] and p["originalSemanticStatus"]=="Failed"
                      for p in j["profiles"])
           assert not j["realVmCaptureIntegrated"] and not j["runtimeAcceptance"]
           print("Frozen execution + V2 exact wire parity/negative controls PASSED in inactive host scope")
