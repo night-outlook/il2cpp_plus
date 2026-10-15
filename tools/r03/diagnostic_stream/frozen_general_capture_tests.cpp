@@ -17,6 +17,7 @@ extern size_t newCalls;
 using namespace il2cpp::vm;
 namespace fg=assembly_shadow_frozen_general;
 namespace dg=assembly_shadow_diagnostic;
+namespace il2cpp { namespace vm { class OriginalDiagnostics { public: static std::string Serialize(const ShadowDiagnosticSnapshot&); }; }}
 
 static ShadowDiagnosticSnapshot MakeSnapshot(size_t count,bool enabled=true)
 {
@@ -114,7 +115,9 @@ struct Buffer
 static void RoundTrip(size_t count,bool enabled)
 {
     ShadowDiagnosticSnapshot snapshot=MakeSnapshot(count,enabled);
+    const std::string frozenOriginal=OriginalDiagnostics::Serialize(snapshot);
     const std::string golden=AssemblyShadowDiagnostics::Serialize(snapshot);
+    assert(frozenOriginal==golden); // Independently frozen V1 source.
     auto capture=std::make_unique<fg::Capture>();
     Buffer buffer(golden.size()+1);
     newCalls=0;watch=true;
