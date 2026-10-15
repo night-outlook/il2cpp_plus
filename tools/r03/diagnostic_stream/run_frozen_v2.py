@@ -91,10 +91,10 @@ def main():
                   native/"tools/r03/diagnostic_stream/allocation_probe.cpp",
                   "-o",binary]
             run(base,p,"compile",commands,env)
-            def invoke(mode):
+            def invoke(mode,general_size=300000):
                 folder=p/mode;folder.mkdir()
                 raw=run([binary,mode,folder,context,inline_hash,str(inline_len),
-                         "300000","1024"],folder,"driver",commands,env)
+                         str(general_size),"1024"],folder,"driver",commands,env)
                 result=json.loads(raw)
                 require(result["mode"]==mode and result["capturedClasses"]==1024,
                         "Unexpected source-bound fixture")
@@ -121,6 +121,14 @@ def main():
             require(not s["complete"] and not s["wireComplete"]
                     and s["wireBytes"]==0 and not (short/"wire.bin").exists(),
                     "Short capture was accepted")
+            invalid,invalidResult=invoke("invalid-utf8")
+            require(not invalidResult["complete"] and not invalidResult["wireComplete"]
+                    and invalidResult["wireBytes"]==0 and not (invalid/"wire.bin").exists(),
+                    "Invalid UTF-8 source accepted as complete native artifact")
+            oversize,oversizeResult=invoke("oversized-total",3800000)
+            require(not oversizeResult["complete"] and not oversizeResult["wireComplete"]
+                    and oversizeResult["wireBytes"]==0 and not (oversize/"wire.bin").exists(),
+                    "Combined diagnostic resource overflow was accepted")
             partial,z=invoke("sink-fail")
             corrupt=(partial/"partial.wire.bin").read_bytes()
             require(not z["complete"] and not z["wireComplete"] and z["wireBytes"]==0
@@ -137,7 +145,8 @@ def main():
                                  originalExecutionBytes=len(y),encodedBytes=len(data),
                                  sha256=sha(data),strictWireReferenceByteParity=True,
                                  originalSemanticStatus="Failed",completeCapturedClasses=1024,
-                                 overflowRejected=True,partialSinkRejected=True))
+                                 overflowRejected=True,partialSinkRejected=True,
+                                 invalidUtf8Rejected=True,combinedArtifactOverflowRejected=True))
     except Exception as exc:
         error=repr(exc)
         raise
