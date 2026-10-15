@@ -34,6 +34,8 @@ jobs:
           sparse-checkout: |
             libil2cpp/vm/AssemblyShadowR02Diagnostics.h
             libil2cpp/vm/AssemblyShadowFrozenR02Capture.h
+            libil2cpp/vm/AssemblyShadowFrozenExecutionCapture.h
+            libil2cpp/vm/AssemblyShadowExecutionSerializer.h
             libil2cpp/vm/AssemblyShadowDiagnosticWriter.h
             libil2cpp/vm/AssemblyShadowObservationCounters.h
             libil2cpp/vm/AssemblyShadowObservationMemo.h
