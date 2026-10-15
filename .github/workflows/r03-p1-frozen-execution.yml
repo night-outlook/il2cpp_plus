@@ -1,0 +1,103 @@
+name: R03 P1 owned execution snapshot host contract
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - 'libil2cpp/vm/AssemblyShadowFrozenExecutionCapture.h'
+      - 'libil2cpp/vm/AssemblyShadowExecutionSerializer.h'
+      - 'libil2cpp/vm/AssemblyShadowDiagnosticWriter.h'
+      - 'tools/r03/diagnostic_stream/frozen_execution_capture_tests.cpp'
+      - '.github/workflows/r03-p1-frozen-execution.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  frozen-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            compiler: clang++
+          - os: ubuntu-24.04
+            compiler: g++
+          - os: macos-15
+            compiler: clang++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: il2cpp_plus
+          persist-credentials: false
+          sparse-checkout: |
+            libil2cpp/vm
+            tools/r03/diagnostic_stream
+          sparse-checkout-cone-mode: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: night-outlook/hybridclr_demo
+          ref: 7b9d1d4e37d1731f9f00042eb04892a8afaf7e80
+          path: hybridclr_demo
+          persist-credentials: false
+          sparse-checkout: |
+            Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/N_SNAPSHOT_PUBLICATION_91b7/checks
+          sparse-checkout-cone-mode: false
+      - name: Check P1 source boundaries and compile and execute strict/sanitized unit contracts
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          set -euo pipefail
+          testpath="$GITHUB_WORKSPACE/il2cpp_plus/tools/r03/diagnostic_stream"
+          native="$GITHUB_WORKSPACE/il2cpp_plus/libil2cpp/vm"
+          out="$RUNNER_TEMP/p1-frozen"
+          mkdir -p "$out"
+          python3 -B - "$native" <<'PY'
+          from pathlib import Path
+          import sys
+          d=Path(sys.argv[1])
+          f=(d/'AssemblyShadow.cpp').read_text()
+          assert 'const size_t kMaximumExecutionClasses = 1024;' in f
+          a=f.index('AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& json)')
+          b=f.index('const Il2CppAssembly* AssemblyShadow::ResolveAssembly',a)
+          body=f[a:b]
+          assert 'AssemblyShadowTypeKey::MetadataTypeImages images;' in body
+          assert 'std::ostringstream output;' in body
+          assert 'assembly_shadow_execution_diagnostic::AppendClass(output, row, index != 0)' in body
+          print('P1 component remains inactive; original allocating VM producer unchanged')
+          PY
+          for profile in strict sanitized; do
+            options=(-std=c++17 -Wall -Wextra -Werror -pedantic -iquote "$native")
+            if [[ "$profile" == sanitized ]]; then
+              options+=(-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)
+              export ASAN_OPTIONS="abort_on_error=1:detect_leaks=0"
+              export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
+            else
+              options+=(-O2)
+            fi
+            "$CXX" "${options[@]}" \
+              "$testpath/frozen_execution_capture_tests.cpp" \
+              "$testpath/allocation_probe.cpp" \
+              -o "$out/$profile"
+            "$out/$profile" | tee "$out/$profile.log"
+            "$out/$profile" n-large > "$out/$profile.fixture.json"
+          done
+          old="$GITHUB_WORKSPACE/hybridclr_demo/Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/N_SNAPSHOT_PUBLICATION_91b7/checks"
+          python3 -B "$old/test_diagnostic_size.py" --output "$out/historical"
+          test "$(wc -c < "$out/historical/strict.json" | tr -d '[:space:]')" = 331078
+          cmp "$out/strict.fixture.json" "$out/historical/strict.json"
+          cmp "$out/sanitized.fixture.json" "$out/historical/sanitized.json"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$out"/*.fixture.json "$out/historical"/*.json
+          else
+            shasum -a 256 "$out"/*.fixture.json "$out/historical"/*.json
+          fi
+          echo "P1 frozen capture and immutable historical source byte parity: passed (host scope only)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: r03-p1-frozen-${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
+          path: ${{ runner.temp }}/p1-frozen
+          if-no-files-found: warn
+          retention-days: 14
