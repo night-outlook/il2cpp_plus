@@ -3,11 +3,13 @@
 #include "AssemblyShadowR02Diagnostics.h"
 #include "AssemblyShadowDiagnosticWriter.h"
 #include "AssemblyShadowFrozenR02Capture.h"
+#include "AssemblyShadowFrozenExecutionCapture.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <string>
 using namespace il2cpp::vm;
@@ -49,6 +51,34 @@ static void FreezeAndCompare() {
     assert(!frozen.Freeze()); // No reuse/synthetic duplicate capture
     assert(!frozen.Complete() && frozen.Data()==nullptr && frozen.Bytes()==0);
 }
+static void ComposeFrozenExecution() {
+    // Prepared host-only composition. Full live VM capture and lock epochs are
+    // NOT represented; the R02 suffix is frozen before execution serialization.
+    assembly_shadow_frozen_r02::Capture suffix;
+    assert(suffix.Freeze());
+    assembly_shadow_execution_diagnostic::Header header;
+    header.stateCode=9;
+    header.state="FailedAfterCommit";
+    std::ostringstream legacy;
+    assembly_shadow_execution_diagnostic::Begin(legacy,header);
+    assembly_shadow_execution_diagnostic::EndClasses(legacy);
+    legacy.write(suffix.Data(),static_cast<std::streamsize>(suffix.Bytes()));
+    legacy<<'}';
+    auto execution=std::make_unique<assembly_shadow_frozen_execution::Capture>();
+    assert(execution->Begin(header));
+    assert(execution->SetR02Suffix({suffix.Data(),suffix.Bytes()}));
+    assert(execution->Freeze()); // No synthetic missing-R02 exemption.
+    BoundedBuffer final;
+    const auto result=execution->SerializeTo(final.Sink(),legacy.str().size());
+    assert(result.complete && result.bytesAccepted==legacy.str().size());
+    assert(final.bytes==legacy.str());
+    const auto original=final.bytes;
+    if constexpr (r02::ObservationCounters::Level>0)
+        r02::ObservationCounters::Add(r02::Metric::DefinitionSearches,17);
+    BoundedBuffer repeated;
+    assert(execution->SerializeTo(repeated.Sink(),original.size()).complete);
+    assert(repeated.bytes==original);
+}
 static void Compare() {
     auto legacy = Legacy();
     BoundedBuffer exactly;
@@ -70,6 +100,7 @@ static void Compare() {
 int main() {
     Compare();
     FreezeAndCompare();
+    ComposeFrozenExecution();
     if constexpr (r02::ObservationCounters::Level > 0) {
         r02::ObservationCounters::Add(r02::Metric::DefinitionSearches,1);
         r02::ObservationCounters::Add(r02::Metric::AdmissionEntries,123);
