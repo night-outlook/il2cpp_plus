@@ -4,6 +4,7 @@
 #include "AssemblyShadowRecovery.h"
 #include "AssemblyShadowTerminalExecution.h"
 #include "AssemblyShadowR02Diagnostics.h"
+#include "AssemblyShadowExecutionSerializer.h"
 #include "AssemblyShadowObservationMemo.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
@@ -1485,18 +1486,22 @@ AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& jso
     const uint64_t methodChecks = s_methodChecks.load(std::memory_order_relaxed);
     const uint64_t shadowTransforms = s_shadowInterpreterTransformations.load(std::memory_order_acquire);
     const uint64_t transforms = s_interpreterTransformations.load(std::memory_order_relaxed);
+    // Both legacy JSON and a future bounded sink use the same field order,
+    // escaping and numeric formatting. This formatter does NOT freeze VM data.
+    assembly_shadow_execution_diagnostic::Header heading;
+    heading.stateCode = static_cast<int>(state);
+    heading.state = AssemblyShadowDiagnostics::StateName(state);
+    heading.generation = active ? active->generation : 0;
+    heading.methodChecks = methodChecks;
+    heading.shadowMethodChecks = shadowChecks;
+    heading.rejectedBaselineMethods = rejectedChecks;
+    heading.baselineClassCctorStarted = s_baselineClassCctorStarted.load(std::memory_order_relaxed);
+    heading.shadowClassCctorStarted = s_shadowClassCctorStarted.load(std::memory_order_relaxed);
+    heading.interpreterTransformations = transforms;
+    heading.shadowInterpreterTransformations = shadowTransforms;
+    heading.droppedClassObservations = s_droppedClassObservations.load(std::memory_order_relaxed);
     std::ostringstream output;
-    output << std::boolalpha << "{\"schemaVersion\":1,\"enabled\":true,\"stateCode\":" << static_cast<int>(state)
-        << ",\"state\":" << AssemblyShadowDiagnostics::Quote(AssemblyShadowDiagnostics::StateName(state))
-        << ",\"generation\":" << (active ? active->generation : 0)
-        << ",\"methodChecks\":" << methodChecks << ",\"shadowMethodChecks\":" << shadowChecks
-        << ",\"rejectedBaselineMethods\":" << rejectedChecks
-        << ",\"baselineClassCctorStarted\":" << s_baselineClassCctorStarted.load(std::memory_order_relaxed)
-        << ",\"shadowClassCctorStarted\":" << s_shadowClassCctorStarted.load(std::memory_order_relaxed)
-        << ",\"interpreterTransformations\":" << transforms
-        << ",\"shadowInterpreterTransformations\":" << shadowTransforms
-        << ",\"droppedClassObservations\":" << s_droppedClassObservations.load(std::memory_order_relaxed)
-        << ",\"classes\":[";
+    assembly_shadow_execution_diagnostic::Begin(output, heading);
     for (size_t index = 0; index < count; ++index)
     {
         Il2CppClass* klass = classes[index];
@@ -1526,19 +1531,22 @@ AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& jso
 #else
         const bool details = false;
 #endif
-        if (index) output << ',';
-        output << "{\"logicalAssembly\":" << AssemblyShadowDiagnostics::Quote(owner->aname.name)
-            << ",\"typeKey\":" << AssemblyShadowDiagnostics::Quote(typeKey)
-            << ",\"executionModeCode\":" << (baseline || shadow ? 1 : 0)
-            << ",\"executionMode\":" << AssemblyShadowDiagnostics::Quote(baseline || shadow ? "InterpreterShadow" : "AotBaseline")
-            << ",\"physicalImageKind\":" << AssemblyShadowDiagnostics::Quote(Interpreter(owner) ? "Interpreter" : "Aot")
-            << ",\"isActive\":" << !baseline
-            << ",\"cctorStarted\":" << started << ",\"cctorFinished\":" << finished
-            << ",\"hasInitializationException\":" << exception
-            << ",\"staticStoragePointer\":" << AssemblyShadowDiagnostics::Quote(pointer)
-            << ",\"pointerDetailsAvailable\":" << details << ",\"staticStorageAvailable\":" << (storage != nullptr) << '}';
+        assembly_shadow_execution_diagnostic::ClassRow row;
+        row.logicalAssembly = assembly_shadow_diagnostic::Quoted(owner->aname.name);
+        row.typeKey = assembly_shadow_diagnostic::Quoted(typeKey);
+        row.interpreterShadow = baseline || shadow;
+        row.physicalInterpreter = Interpreter(owner);
+        row.isActive = !baseline;
+        row.cctorStarted = started;
+        row.cctorFinished = finished;
+        row.hasInitializationException = exception;
+        row.staticStoragePointer = assembly_shadow_diagnostic::Quoted(pointer);
+        row.pointerDetailsAvailable = details;
+        row.staticStorageAvailable = storage != nullptr;
+        // typeKey/pointer are alive throughout this synchronous append.
+        assembly_shadow_execution_diagnostic::AppendClass(output, row, index != 0);
     }
-    output << "]";
+    assembly_shadow_execution_diagnostic::EndClasses(output);
     assembly_shadow_r02::AppendDiagnostics(output);
     output << "}";
     json = output.str();
