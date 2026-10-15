@@ -1,0 +1,80 @@
+name: R03 pinned current-versus-frozen general producer host
+on:
+  push:
+    branches: ['codex/assembly-shadow-r01b-h1']
+    paths:
+      - 'tools/r03/diagnostic_stream/run_tests.py'
+      - 'tools/r03/diagnostic_stream/current_execution_producer.py'
+      - 'tools/r03/diagnostic_stream/serializer_driver.cpp'
+      - 'libil2cpp/vm/AssemblyShadowExecutionSerializer.h'
+      - 'libil2cpp/vm/AssemblyShadow.cpp'
+      - '.github/workflows/r03-general-current-producer.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  producer-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            compiler: clang++
+          - os: ubuntu-24.04
+            compiler: g++
+          - os: macos-15
+            compiler: clang++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: il2cpp_plus
+          persist-credentials: false
+          sparse-checkout: |
+            libil2cpp/vm
+            tools/r03/diagnostic_stream
+          sparse-checkout-cone-mode: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: night-outlook/hybridclr_demo
+          ref: 8570a924a2c3c18826cbf505ceafed0f3c7bc549
+          path: hybridclr_demo
+          persist-credentials: false
+          sparse-checkout: |
+            Tools/AssemblyShadow/R03IR/bounded_v2
+            Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/SNAP01_BOUNDED_DESIGN_f8a2/reference
+            Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/N_SNAPSHOT_PUBLICATION_91b7/checks
+          sparse-checkout-cone-mode: false
+      - name: Execute source-bound current/immutable N parity and all 25 general cases per profile
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          set -euo pipefail
+          base="$GITHUB_WORKSPACE"
+          native="$base/il2cpp_plus"
+          demo="$base/hybridclr_demo"
+          output="$RUNNER_TEMP/r03-current-general-${{ github.run_id }}-${{ github.run_attempt }}"
+          python3 -B "$native/tools/r03/diagnostic_stream/run_tests.py" \
+            --native "$native" --demo "$demo" --output "$output"
+          python3 -B - "$output/RESULT.json" "$output/current-execution-parity/RESULT.json" <<'PY'
+          import json,sys
+          general=json.load(open(sys.argv[1]))
+          parity=json.load(open(sys.argv[2]))
+          assert general['result']=='PassedWithinHostScope' and general['sourceUnchanged']
+          assert general['oldExecutionProducer']=='Passed' and general['currentExecutionProducer']=='Passed'
+          assert len(general['profiles'])==2
+          assert all(p['tests']==25 and not p['failures'] and not p['errors'] and not p['skipped'] for p in general['profiles'])
+          assert parity['result']=='PassedHostOnly' and len(parity['cases'])==6
+          assert all(x['exactByteParity'] for x in parity['cases'])
+          print('original vs current full-function mock parity and 25 general tests/profile passed')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: r03-current-general-${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
+          path: ${{ runner.temp }}/r03-current-general-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
