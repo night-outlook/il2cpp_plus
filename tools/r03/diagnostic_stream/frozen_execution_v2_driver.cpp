@@ -88,8 +88,10 @@ int main(int argc,char**argv)
     const size_t inlineBytes=std::stoul(argv[5]);
     const size_t generalCount=std::stoul(argv[6]);
     const size_t rowCount=std::stoul(argv[7]);
-    if ((mode!="complete" && mode!="short" && mode!="sink-fail") ||
-        rowCount!=1024 || generalCount!=300000) return 41;
+    if ((mode!="complete" && mode!="short" && mode!="sink-fail" &&
+         mode!="invalid-utf8" && mode!="oversized-total") ||
+        rowCount!=1024 ||
+        generalCount!=(mode=="oversized-total"?3800000u:300000u)) return 41;
 
     auto frozen=std::make_unique<fx::Capture>();
     ex::Header header;
@@ -98,7 +100,9 @@ int main(int argc,char**argv)
     header.interpreterTransformations=2;header.shadowInterpreterTransformations=2;
     ex::ClassRow row;
     row.logicalAssembly=dg::Quoted("mscorlib");
-    row.typeKey=dg::Quoted("Synthetic.ShortType");
+    const std::string invalidTypeKey("À¯",2);
+    row.typeKey=mode=="invalid-utf8"?dg::Quoted(invalidTypeKey):
+                                         dg::Quoted("Synthetic.ShortType");
     row.isActive=true;row.cctorFinished=true;row.staticStoragePointer=dg::Quoted("");
     assert(frozen->Begin(header));
     for(size_t i=0;i<rowCount;++i)assert(frozen->Add(row));
@@ -162,6 +166,16 @@ int main(int argc,char**argv)
     {
         assert(!generalComplete && capture.error()!=v2::Error::None);
         assert(wire.used==0);
+    }
+    else if(mode=="invalid-utf8")
+    {
+        assert(generalComplete && !executionComplete);
+        assert(capture.error()==v2::Error::InvalidUtf8 && wire.used==0);
+    }
+    else if(mode=="oversized-total")
+    {
+        assert(generalComplete && !executionComplete);
+        assert(capture.error()==v2::Error::ResourceLimit && wire.used==0);
     }
     else
     {
