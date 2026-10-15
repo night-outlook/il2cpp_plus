@@ -154,7 +154,7 @@ int main(int argc,char**argv)
         Save(root+"/general.json",fields[0].data,fields[0].size);
         Save(root+"/execution.json",fields[1].data,fields[1].size);
         Save(root+"/wire.bin",wire.value.data(),wire.used);
-        PrintError(mode,capture,*frozen,true,receipt,wire.callCount);
+        PrintError(mode.c_str(),capture,*frozen,true,receipt,wire.callCount);
         return 0;
     }
     assert(!okay && !receipt.complete && receipt.bytes==0);
@@ -170,6 +170,6 @@ int main(int argc,char**argv)
         assert(wire.used>0); // deliberately incomplete wire MUST be rejected
         Save(root+"/partial.wire.bin",wire.value.data(),wire.used);
     }
-    PrintError(mode,capture,*frozen,false,receipt,wire.callCount);
+    PrintError(mode.c_str(),capture,*frozen,false,receipt,wire.callCount);
     return 0;
 }
