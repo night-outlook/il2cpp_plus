@@ -100,7 +100,7 @@ int main(int argc,char**argv)
     header.interpreterTransformations=2;header.shadowInterpreterTransformations=2;
     ex::ClassRow row;
     row.logicalAssembly=dg::Quoted("mscorlib");
-    const std::string invalidTypeKey("À¯",2);
+    const std::string invalidTypeKey("\xC0\xAF",2);
     row.typeKey=mode=="invalid-utf8"?dg::Quoted(invalidTypeKey):
                                          dg::Quoted("Synthetic.ShortType");
     row.isActive=true;row.cctorFinished=true;row.staticStoragePointer=dg::Quoted("");
