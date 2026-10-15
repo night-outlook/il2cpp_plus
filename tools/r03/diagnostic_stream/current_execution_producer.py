@@ -80,7 +80,7 @@ def fixture(stub: str, main: str, variant: str) -> tuple[str, str, int]:
         return stub, main, 1024
     if variant == "empty":
         return stub, main.replace(MOCK_LOOP,
-            "for(size_t i=0;i<0;++i){classes[i].image=&image;s_executionClasses[i]=&classes[i];}"), 0
+            "(void)classes;"), 0
     if variant == "debug-class-flags":
         stub = stub.replace("#define IL2CPP_DEBUG 0", "#define IL2CPP_DEBUG 1")
         rewritten = """for(size_t i=0;i<classes.size();++i){
