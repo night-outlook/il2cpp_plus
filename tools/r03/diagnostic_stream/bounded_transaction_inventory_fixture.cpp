@@ -132,7 +132,7 @@ static void Reset()
     stageC.moduleInitializerAttempted.store(true);
     stageC.moduleInitializerRan.store(false);
     source.lastError=AssemblyShadowError::MetadataCapacityExceeded;
-    source.detail=std::string("state\0with newline\n\xE4\xB8\xAD",20);
+    source.detail=std::string("state\0with newline\n\xE4\xB8\xAD",sizeof("state\0with newline\n\xE4\xB8\xAD")-1);
     source.baselineBuildId="baseline-identity";
     source.patchId="patch-identity";
     source.closure={{&a,&stageA},{&b,nullptr},{&c,&stageC}};
