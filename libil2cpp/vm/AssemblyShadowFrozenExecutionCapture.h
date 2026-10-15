@@ -106,8 +106,11 @@ public:
         if (failure_!=CaptureError::None) return false;
         if (started_ || frozen_) return Fail(CaptureError::WrongState);
         if (!header.state) return Fail(CaptureError::InvalidInput);
-        const size_t n=std::strlen(header.state);
-        if (n==0 || n>=128 || n==SIZE_MAX) return Fail(CaptureError::InvalidInput);
+        // StateName is a bounded static token in the real producer. Reject
+        // invalid test inputs without scanning an arbitrarily long string.
+        size_t n=0;
+        while (n<128 && header.state[n]!='\0') ++n;
+        if (n==0 || n==128) return Fail(CaptureError::InvalidInput);
         // Preserve a terminator for Header::state; Quoted() uses strlen().
         if (!Copy(header.state,n+1,state_)) return false;
         header_=header;
