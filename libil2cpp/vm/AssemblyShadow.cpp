@@ -1376,6 +1376,7 @@ bool AssemblyShadow::TryCaptureBoundedTransactionInventory(
     const TypeFailure* failureBefore=s_typeFailure.load(std::memory_order_acquire);
     const AssemblyShadowState stateBefore=s_state.load(std::memory_order_acquire);
     const ActiveSnapshot* activeBefore=s_active.load(std::memory_order_acquire);
+    const StableAotConfiguration* configurationBefore=s_configuration.load(std::memory_order_acquire);
     const bool unexpectedBefore=s_unexpectedFailure.load(std::memory_order_acquire);
     const bool lateBefore=s_lateBaselineUse.load(std::memory_order_acquire);
     bool sampledStable=false;
@@ -1416,6 +1417,7 @@ bool AssemblyShadow::TryCaptureBoundedTransactionInventory(
         if (!capture.EndStable()) return false;
         for (const auto& member : transaction.closure)
         {
+            if (!member.candidate) return false; // Corrupt source: never dereference.
             inventory::AssemblyInput row;
             row.name=assembly_shadow_diagnostic::Quoted(member.candidate->name);
             if (const StagedAssembly* staged=member.staged)
@@ -1458,6 +1460,7 @@ bool AssemblyShadow::TryCaptureBoundedTransactionInventory(
         stateBefore==sampledState &&
         sampledState==s_state.load(std::memory_order_acquire) &&
         activeBefore==activeAfter &&
+        configurationBefore==s_configuration.load(std::memory_order_acquire) &&
         sampledGeneration==ActiveGeneration() &&
         unexpected==s_unexpectedFailure.load(std::memory_order_acquire) &&
         late==s_lateBaselineUse.load(std::memory_order_acquire) &&
