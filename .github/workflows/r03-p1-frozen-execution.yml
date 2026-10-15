@@ -124,6 +124,8 @@ jobs:
         if: always()
         with:
           name: r03-p1-frozen-${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
-          path: ${{ runner.temp }}/p1-frozen
+          path: |
+            ${{ runner.temp }}/p1-frozen
+            ${{ runner.temp }}/p1-frozen-v2
           if-no-files-found: warn
           retention-days: 14
