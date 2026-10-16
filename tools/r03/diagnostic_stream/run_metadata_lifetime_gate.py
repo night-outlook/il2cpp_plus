@@ -58,9 +58,9 @@ def verify_source(repo:Path)->dict:
         symbol=("bool AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(" if name=="classes" else
                 "bool Assembly::TryCaptureBoundedPhysicalAssemblies(")
         start=exactly(text,symbol,name+" reader definition")
-        end=text.find("\n}",start)
-        if end==-1:
-            end=text.find("\n    }",start)
+        # Class method is unindented, Assembly method is four-space indented.
+        # Do not scan through later unrelated Assembly methods/source locks.
+        end=text.find("\n}" if name=="classes" else "\n    }",start)
         if end==-1:raise RuntimeError("Cannot find bounded reader closure")
         body=text[start:end]
         guard="assembly_shadow_metadata_lifetime::Gate::Reader reader("
