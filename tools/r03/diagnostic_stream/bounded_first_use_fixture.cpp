@@ -211,6 +211,53 @@ static void FailClosed()
         assert(c->FirstError()==u::Error::TooManyCandidates);
     }
 }
+static void ExactCapacityAndPhaseContracts()
+{
+    Reset();
+    for(size_t i=registry.entries.size();i<Cap::kMaximumCandidates;++i)
+        registry.entries.push_back(Make("unused",false,
+            BaselineUseKind::AssemblyReflection,"",nullptr,0,0,0));
+    {
+        auto cap=std::make_unique<Cap>();
+        assert(AssemblyShadow::TryCaptureBoundedFirstUses(*cap));
+        assert(cap->Complete() &&
+               cap->SourceCandidateCount()==Cap::kMaximumCandidates &&
+               cap->PresentCount()==3);
+        u::Row row;
+        assert(cap->Get(0,row) && !cap->Get(Cap::kMaximumCandidates-1,row));
+        std::cout<<"first-use exact 4096-candidate capacity and sparse output passed\n";
+    }
+    {
+        auto cap=std::make_unique<Cap>();
+        assert(cap->Begin(1));
+        assert(!cap->EndRaw(0));
+        assert(cap->FirstError()==u::Error::IndexMismatch && !cap->Complete());
+    }
+    {
+        auto cap=std::make_unique<Cap>();
+        assert(cap->Begin(1));
+        u::Raw value;value.present=true;
+        std::memcpy(value.detail,"a",2);
+        assert(cap->AddRaw(value) && cap->EndRaw(0));
+        assert(!cap->AddCandidateName(0,{reinterpret_cast<const char*>(cap.get()),8}));
+        assert(cap->FirstError()==u::Error::AliasedInput);
+    }
+    {
+        // Adjacent independent input after the exact Capture object must not
+        // be falsely rejected as aliasing its internal storage.
+        struct Adjacent { Cap cap; char text[32]{}; };
+        auto side=std::make_unique<Adjacent>();
+        std::memcpy(side->text,"adjacent",9);
+        assert(side->cap.Begin(1));
+        u::Raw value;value.present=true;value.detail[0]=0;
+        assert(side->cap.AddRaw(value) && side->cap.EndRaw(7));
+        assert(side->cap.AddCandidateName(0,{side->text,8}));
+        assert(side->cap.EndNames() && side->cap.Seal(7,true));
+        u::Row row;assert(side->cap.Get(0,row));
+        assert(ToString(row.name)=="adjacent");
+        assert(ToString(row.detail)==" FirstUseSequence=0");
+    }
+}
 static void ExplicitFutureMetadataGate()
 {
     int token=1,other=2;
@@ -300,6 +347,7 @@ int main()
 {
     il2cpp::vm::NoClassSourceAndOwnership();
     il2cpp::vm::FailClosed();
+    il2cpp::vm::ExactCapacityAndPhaseContracts();
     il2cpp::vm::ExplicitFutureMetadataGate();
     il2cpp::vm::ComposeCompleteGeneral();
     std::cout<<"P1 first-use actual source method: bounded under UsageLock,"
