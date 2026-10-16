@@ -20,6 +20,9 @@
 #include "vm/Assembly.h"
 #include "vm/AssemblyShadow.h"
 #include "vm/AssemblyShadowStartup.h"
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+#include "vm/AssemblyShadowMetadataLifetime.h"
+#endif
 #include "vm/ClassLibraryPAL.h"
 #include "vm/COMEntryPoints.h"
 #include "vm/Class.h"
@@ -85,6 +88,10 @@ namespace il2cpp
 namespace vm
 {
     baselib::ReentrantLock g_MetadataLock;
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    // The only gate instance: shared by Runtime lifecycle and bounded readers.
+    assembly_shadow_metadata_lifetime::Gate assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate;
+#endif
 
     static int32_t exitcode = 0;
     static std::string s_ConfigDir;
@@ -406,6 +413,12 @@ namespace vm
         // initialization. Only this complete tail admits the startup gateway.
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
         assembly_shadow_reporting::InitializeFixedHandledResult();
+        // Fail closed until all native initialization, finalizer and HybridCLR
+        // initialization has completed. s_InitLock serializes reinitialization.
+        const bool metadataGateOpened=
+            assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit();
+        IL2CPP_ASSERT(metadataGateOpened && "Assembly Shadow metadata admission did not reopen");
+        if (!metadataGateOpened) return false;
 #endif
         AssemblyShadowStartup::MarkCoreReady();
         return true;
@@ -459,6 +472,12 @@ namespace vm
 
         FireProcessExitEvent();
 
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+        // Stop NEW bounded readers and drain all admitted metadata operations
+        // BEFORE aborting threads, clearing caches or freeing metadata pools.
+        // This does not authorize an arbitrary post-terminal Unity callback.
+        assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.CloseAndDrain();
+#endif
         shutting_down = true;
 
 #if IL2CPP_ENABLE_PROFILER
