@@ -2,6 +2,7 @@
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadow.h"
+#include "AssemblyShadowBoundedOrdinaryClasses.h"
 #include "GlobalMetadataFileInternals.h"
 #include "MetadataLock.h"
 #include "il2cpp-api.h"
@@ -141,6 +142,31 @@ namespace
     {
         static_cast<std::vector<Il2CppClass*>*>(context)->push_back(klass);
     }
+
+    // Callback executes synchronously inside il2cpp_class_for_each while the
+    // new caller owns g_MetadataLock. Unlike CollectClass, this callback NEVER
+    // retains Il2CppClass* beyond its invocation. This is NOT authorization to
+    // run concurrently with Runtime::Shutdown/MetadataAllocCleanup.
+    void CaptureOwnedOrdinaryClass(Il2CppClass* klass, void* context)
+    {
+        auto& owned=*static_cast<assembly_shadow_bounded_classes::Capture*>(context);
+        if(owned.FirstError()!=assembly_shadow_bounded_classes::Error::None)
+            return;
+        if(!klass || !klass->image || !klass->image->assembly ||
+           !klass->image->assembly->aname.name || !klass->name)
+        {
+            owned.RejectInvalidSource();
+            return;
+        }
+        // Preserve the same physical-name, generic and staged-metadata
+        // predicates as GetDiagnosticsJson, but copy their entire byte result
+        // BEFORE releasing g_MetadataLock.
+        const bool interpreter=hybridclr::metadata::IsInterpreterImage(klass->image);
+        const bool constructed=klass->generic_class!=nullptr;
+        const bool staged=AssemblyShadowVisibility::ClassUsesStagedMetadata(klass);
+        owned.Add(klass->image->assembly->aname.name,klass->namespaze,klass->name,
+                  interpreter,constructed,staged);
+    }
 }
 
 bool AssemblyShadowVisibility::RegisterPrivateImage(const Il2CppImage* image, uint32_t index)
@@ -190,6 +216,25 @@ void AssemblyShadowVisibility::CollectOrdinaryClasses(std::vector<Il2CppClass*>&
     classes.clear();
     generation = AssemblyShadow::ActiveGeneration();
     il2cpp_class_for_each(CollectClass, &classes);
+}
+
+bool AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(
+    assembly_shadow_bounded_classes::Capture& capture)
+{
+    // P1 additive / INACTIVE: the ORIGINAL il2cpp_class_for_each iteration
+    // and class visibility rules are used; unlike the old CollectClass vector
+    // callback, copied type/class names own their bytes when the lock ends.
+    // Caller MUST provide independently proven metadata/shutdown lifetime
+    // and a preallocated single-owner Capture. g_MetadataLock alone does not
+    // synchronize with Runtime::Shutdown or MetadataAllocCleanup.
+    os::FastAutoLock lock(&g_MetadataLock);
+    const uint64_t before=AssemblyShadow::ActiveGeneration();
+    if(!capture.Begin())return false;
+    il2cpp_class_for_each(CaptureOwnedOrdinaryClass,&capture);
+    const uint64_t after=AssemblyShadow::ActiveGeneration();
+    // An observed generation change means the captured class inventory is
+    // incomplete. Equal reads are NOT an atomic global VM generation ticket.
+    return capture.Seal(after,before==after);
 }
 
 }}
