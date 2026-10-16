@@ -12,6 +12,7 @@ namespace il2cpp
 {
 namespace vm
 {
+    namespace assembly_shadow_bounded_physical { class Capture; }
     typedef std::vector<const Il2CppAssembly*> AssemblyVector;
     typedef std::vector<const Il2CppAssemblyName*> AssemblyNameVector;
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
@@ -47,6 +48,12 @@ namespace vm
         static bool PublishShadowBatch(const AssemblyVector& assemblies,
             bool (*tryBegin)(void*), bool (*publish)(void*), void* context);
         static uint64_t CaptureShadowEnumeration(AssemblyVector& assemblies);
+        // P1 additive, inactive: visit the original physical registry under
+        // s_assemblyLock and synchronously deep-copy owned name/physical-kind
+        // bytes. Caller must preallocate Capture while healthy. No VM type
+        // access, heap vector, metadata/finalizer or managed callbacks.
+        static bool TryCaptureBoundedPhysicalAssemblies(
+            assembly_shadow_bounded_physical::Capture& capture) noexcept;
 #endif
         static void InvalidateAssemblyList();
         static void ClearAllAssemblies();
