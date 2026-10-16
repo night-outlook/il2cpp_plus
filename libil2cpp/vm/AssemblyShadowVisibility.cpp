@@ -153,6 +153,7 @@ namespace
         if(owned.FirstError()!=assembly_shadow_bounded_classes::Error::None)
             return;
         if(!klass || !klass->image || !klass->image->assembly ||
+           !klass->image->assembly->image ||
            !klass->image->assembly->aname.name || !klass->name)
         {
             owned.RejectInvalidSource();
@@ -161,7 +162,11 @@ namespace
         // Preserve the same physical-name, generic and staged-metadata
         // predicates as GetDiagnosticsJson, but copy their entire byte result
         // BEFORE releasing g_MetadataLock.
-        const bool interpreter=hybridclr::metadata::IsInterpreterImage(klass->image);
+        // Preserve EXACT legacy Interpreter(klass->image->assembly): the
+        // authoritative physical kind is assembly->image, not necessarily
+        // klass->image when Shadow/placeholder identities are involved.
+        const bool interpreter=hybridclr::metadata::IsInterpreterImage(
+            klass->image->assembly->image);
         const bool constructed=klass->generic_class!=nullptr;
         const bool staged=AssemblyShadowVisibility::ClassUsesStagedMetadata(klass);
         owned.Add(klass->image->assembly->aname.name,klass->namespaze,klass->name,
