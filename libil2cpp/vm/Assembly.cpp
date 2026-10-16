@@ -13,6 +13,7 @@
 #include "os/Atomic.h"
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "vm/AssemblyShadowName.h"
+#include "vm/AssemblyShadowBoundedPhysicalAssemblies.h"
 #include "hybridclr/metadata/MetadataModule.h"
 #endif
 
@@ -279,6 +280,36 @@ namespace vm
         }
         ++s_assemblyVersion;
         return true;
+    }
+
+    bool Assembly::TryCaptureBoundedPhysicalAssemblies(
+        assembly_shadow_bounded_physical::Capture& capture) noexcept
+    {
+        // P1 additive, INACTIVE: no ordinary getter or Player calls this yet.
+        // Enumerate EXACT physical registry order/token policy while holding
+        // the same assembly lock as CaptureShadowEnumeration. Do not retain
+        // assemblies/images/names after the lock; only fixed owned bytes.
+        // Class metadata, GC and engine shutdown lifetime are not covered.
+        os::FastAutoLock lock(&s_assemblyLock);
+        const uint64_t beforeGeneration=AssemblyShadow::ActiveGeneration();
+        if(!capture.Begin())return false;
+        for(const Il2CppAssembly* assembly:s_Assemblies)
+        {
+            if(!assembly)return capture.RejectSource();
+            if(!assembly->token)continue; // Exact CopyValidAssemblies policy.
+            if(!assembly->image || !assembly->aname.name)
+                return capture.RejectSource();
+            // Existing GetLoadedAssemblyPhysical already checks this same
+            // physical interpreter-image predicate under s_assemblyLock.
+            const bool isInterpreter=hybridclr::metadata::IsInterpreterImage(assembly->image);
+            if(!capture.Add(assembly->aname.name,isInterpreter))
+                return false;
+        }
+        const uint64_t afterGeneration=AssemblyShadow::ActiveGeneration();
+        // Same generation field as the original assembly enumeration, with
+        // stricter fail-closed detection of an observed publication flip.
+        // Equal reads are not an all-VM atomic epoch/ABA proof.
+        return capture.Seal(afterGeneration,beforeGeneration==afterGeneration);
     }
 
     uint64_t Assembly::CaptureShadowEnumeration(AssemblyVector& assemblies)
