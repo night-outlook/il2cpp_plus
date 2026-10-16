@@ -3,6 +3,7 @@
 // mocks. Physical name and interpreter bit are copied while s_assemblyLock
 // is held. No Unity runtime shutdown/metadata-lifetime claim is made.
 #include "AssemblyShadowBoundedPhysicalAssemblies.h"
+#include "AssemblyShadowMetadataLifetime.h"
 #include "AssemblyShadowFrozenGeneralCapture.h"
 #include "AssemblyShadowDiagnostics.h"
 #include <cassert>
@@ -39,6 +40,9 @@ public:
 };
 }
 namespace vm {
+namespace assembly_shadow_metadata_lifetime {
+Gate g_MetadataLifetimeGate; // host mock of Runtime.cpp single global owner
+}
 namespace {
 std::mutex s_assemblyLock;
 std::vector<const Il2CppAssembly*> s_Assemblies;
@@ -267,9 +271,18 @@ static void OriginalV1Parity()
 
 int main()
 {
+    auto& admission=il2cpp::vm::assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate;
+    auto cold=std::make_unique<il2cpp::vm::assembly_shadow_bounded_physical::Capture>();
+    assert(!il2cpp::vm::Assembly::TryCaptureBoundedPhysicalAssemblies(*cold));
+    assert(cold->FirstError()==il2cpp::vm::assembly_shadow_bounded_physical::Error::OwnerUnavailable);
+    assert(admission.OpenAfterInit());
     il2cpp::vm::VerifyBasic();
     il2cpp::vm::ExactlyFullAndOverfull();
     il2cpp::vm::FailClosed();
     il2cpp::vm::OriginalV1Parity();
+    admission.CloseAndDrain();
+    auto late=std::make_unique<il2cpp::vm::assembly_shadow_bounded_physical::Capture>();
+    assert(!il2cpp::vm::Assembly::TryCaptureBoundedPhysicalAssemblies(*late));
+    assert(late->FirstError()==il2cpp::vm::assembly_shadow_bounded_physical::Error::OwnerUnavailable);
     std::cout<<"P1 physical assembly exact source method, fixed owned inventory and V1 parity PASS\n";
 }
