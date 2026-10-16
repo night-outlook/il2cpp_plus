@@ -229,12 +229,15 @@ bool AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(
     // synchronize with Runtime::Shutdown or MetadataAllocCleanup.
     os::FastAutoLock lock(&g_MetadataLock);
     const uint64_t before=AssemblyShadow::ActiveGeneration();
+    const PrivateImage* visibilityBefore=s_privateImages.load(std::memory_order_acquire);
     if(!capture.Begin())return false;
     il2cpp_class_for_each(CaptureOwnedOrdinaryClass,&capture);
     const uint64_t after=AssemblyShadow::ActiveGeneration();
-    // An observed generation change means the captured class inventory is
-    // incomplete. Equal reads are NOT an atomic global VM generation ticket.
-    return capture.Seal(after,before==after);
+    const PrivateImage* visibilityAfter=s_privateImages.load(std::memory_order_acquire);
+    // Both the logical active generation and private-image publication can
+    // change while the public class iterator runs. Reject either observed
+    // change; equal reads still are NOT an all-VM epoch or teardown ticket.
+    return capture.Seal(after,before==after && visibilityBefore==visibilityAfter);
 }
 
 }}
