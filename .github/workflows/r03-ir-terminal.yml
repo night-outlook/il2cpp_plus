@@ -41,7 +41,6 @@ jobs:
             '#include "AssemblyShadowTerminalExecution.h"',
             'if (TerminalMethodDenied(method)) return false;',
             'return !TerminalMethodDenied(method);',
-            'if (TerminalMethodDenied(method)) RaiseTerminalExecutionRejected();',
             'FixedDiagnosticExceptionScope diagnostic;',
             'IsFixedDiagnosticConstructor',
             'std::strcmp(method->name, ".ctor")',
@@ -50,6 +49,21 @@ jobs:
           for item in expected:
             assert item in s, item
           assert s.count('FixedDiagnosticExceptionScope diagnostic;') >= 3
+          # Current RequireActiveMethod contains bounded native producer logging
+          # between the terminal decision and rejection, under a probe macro.
+          # Require the same observed policy and reject dispatch ordering, not
+          # obsolete one-line formatting of this unchanged control-flow block.
+          begin=s.index('void AssemblyShadow::RequireActiveMethod(')
+          end=s.index('void AssemblyShadow::ObserveClassCctorStarted(',begin)
+          method=s[begin:end]
+          events=('if (!AssertMethodIsActive(method, site))',
+                  'if (TerminalMethodDenied(method))',
+                  'RaiseTerminalExecutionRejected();',
+                  'RequireUserCodeAllowed();')
+          assert all(method.count(item)==1 for item in events), events
+          assert all(method.index(events[i]) < method.index(events[i+1])
+                     for i in range(len(events)-1))
+          assert '#if HYBRIDCLR_R03_RUNTIME_PROBE' in method
           print('Native integration source contract: Passed')
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
