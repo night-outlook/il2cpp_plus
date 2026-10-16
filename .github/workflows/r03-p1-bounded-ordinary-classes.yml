@@ -6,6 +6,7 @@ on:
       - 'libil2cpp/vm/AssemblyShadowVisibility.cpp'
       - 'libil2cpp/vm/AssemblyShadowVisibility.h'
       - 'libil2cpp/vm/AssemblyShadowBoundedOrdinaryClasses.h'
+      - 'libil2cpp/vm/AssemblyShadowMetadataLifetime.h'
       - 'tools/r03/diagnostic_stream/bounded_ordinary_classes_fixture.cpp'
       - 'tools/r03/diagnostic_stream/run_bounded_ordinary_classes.py'
       - '.github/workflows/r03-p1-bounded-ordinary-classes.yml'
@@ -34,6 +35,7 @@ jobs:
             libil2cpp/vm/AssemblyShadowVisibility.cpp
             libil2cpp/vm/AssemblyShadowVisibility.h
             libil2cpp/vm/AssemblyShadowBoundedOrdinaryClasses.h
+            libil2cpp/vm/AssemblyShadowMetadataLifetime.h
             libil2cpp/vm/AssemblyShadowFrozenGeneralCapture.h
             libil2cpp/vm/AssemblyShadowDiagnostics.cpp
             libil2cpp/vm/AssemblyShadowDiagnostics.h
