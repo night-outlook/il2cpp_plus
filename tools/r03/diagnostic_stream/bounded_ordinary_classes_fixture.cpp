@@ -5,6 +5,7 @@
 #include "AssemblyShadowBoundedOrdinaryClasses.h"
 #include "AssemblyShadowFrozenGeneralCapture.h"
 #include "AssemblyShadowDiagnostics.h"
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -52,6 +53,10 @@ public:
 namespace il2cpp { namespace vm {
 namespace {
 std::mutex g_MetadataLock;
+struct PrivateImage {unsigned token=0;};
+PrivateImage privateA{1},privateB{2};
+std::atomic<const PrivateImage*> s_privateImages{&privateA};
+bool flipPrivateVisibility=false;
 uint64_t currentGeneration=7;
 size_t generationCalls=0, visibilityCalls=0;
 bool flipGeneration=false;
@@ -83,8 +88,17 @@ public:
 // other image/array/generic/pointer registries and may allocate internally.
 void il2cpp_class_for_each(void (*callback)(Il2CppClass*,void*),void* ctx)
 {
+    size_t seen=0;
     for(auto* klass:sourceClassPointers)
-        if(!klass || (klass->initialized && klass->visible))callback(klass,ctx);
+    {
+        if(!klass || (klass->initialized && klass->visible))
+        {
+            callback(klass,ctx);
+            ++seen;
+            if(flipPrivateVisibility && seen==1)
+                s_privateImages.store(&privateB,std::memory_order_release);
+        }
+    }
 }
 
 // __EXACT_CALLBACK_SOURCE__
@@ -129,6 +143,8 @@ struct Source
         }
         generationCalls=0;visibilityCalls=0;
         currentGeneration=7;flipGeneration=false;
+        flipPrivateVisibility=false;
+        s_privateImages.store(&privateA,std::memory_order_release);
     }
 };
 static std::string Text(const char* text,size_t count)
@@ -199,6 +215,12 @@ static void Negative()
     auto changed=std::make_unique<cl::Capture>();
     assert(!AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(*changed));
     assert(changed->FirstError()==cl::Error::SourceChanged);
+    source.Prepare(3);
+    flipPrivateVisibility=true;
+    auto privateChanged=std::make_unique<cl::Capture>();
+    assert(!AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(*privateChanged));
+    assert(privateChanged->FirstError()==cl::Error::SourceChanged);
+    assert(!privateChanged->Complete()); // no earlier rows leak as valid
     source.Prepare(3);
     source.classes[0].name=nullptr;
     auto nullname=std::make_unique<cl::Capture>();
