@@ -18,7 +18,7 @@ namespace il2cpp { namespace vm { namespace assembly_shadow_bounded_physical {
 enum class Error : uint8_t
 {
     None, WrongPhase, SourceInvalid, TooMany, TextLimit,
-    AliasedSource, SourceChanged
+    AliasedSource, SourceChanged, OwnerUnavailable
 };
 struct Row
 {
@@ -64,6 +64,7 @@ public:
     uint64_t EnumerationGeneration() const noexcept
     {return Complete()?generation_:0;}
     bool RejectSource() noexcept {return Fail(Error::SourceInvalid);}
+    bool RejectOwnerUnavailable() noexcept {return Fail(Error::OwnerUnavailable);}
 
     bool Begin() noexcept
     {
