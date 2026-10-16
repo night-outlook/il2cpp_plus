@@ -4,12 +4,12 @@
 // CandidateRegistry names and composes the exact legacy FirstUseSequence text
 // WITHOUT the spin lock. No Il2CppClass is ever dereferenced here.
 //
-// A non-null class handle is captured as OPAQUE IDENTITY ONLY. Unless a
-// separately source/lifetime-reviewed metadata resolver supplies the exact
-// physical namespace/name, Seal MUST FAIL CLOSED. The live source adapter does
-// not invoke such a resolver, so class-bearing records are NOT falsely
-// presented as complete diagnostic rows. This does NOT prove an all-VM epoch,
-// a safe terminal scheduler owner, or real Player/semantic acceptance.
+// A non-null class handle is captured as OPAQUE IDENTITY ONLY. The native
+// reader resolves physical namespace/name while holding metadata admission
+// and g_MetadataLock, after releasing UsageLock. This storage never reads an
+// Il2CppClass. Unresolved rows still fail Seal; no partial snapshot is valid.
+// A sealed/failed capture retains no opaque class token. The metadata ticket
+// is NOT a global VM epoch or Unity engine-owner/terminal safety proof.
 //
 // All mutable storage must be preallocated while healthy, and Capture must be
 // owned by a single thread. No partial record/row can be accepted as complete.
@@ -27,7 +27,7 @@ using assembly_shadow_diagnostic::QuotedText;
 enum class Error : uint8_t {
     None, WrongPhase, TooManyCandidates, InvalidDetail, InvalidInput,
     TextCapacity, AliasedInput, IndexMismatch, UnverifiedClassMetadata,
-    ClassTokenMismatch, SourceChanged
+    ClassTokenMismatch, SourceChanged, OwnerUnavailable
 };
 
 struct Raw
@@ -35,8 +35,8 @@ struct Raw
     bool present=false;
     BaselineUseKind kind=BaselineUseKind::AssemblyReflection;
     char detail[160]{};
-    // Never dereference a class pointer under UsageLock, or after it, in
-    // this component. A future resolver needs separate metadata-lifetime proof.
+    // Identity only: the native source reader owns metadata admission before
+    // copying this pointer. This storage component never dereferences it.
     const void* opaqueClass=nullptr;
     uint64_t thread=0,timestamp=0,sequence=0;
 };
@@ -72,7 +72,12 @@ private:
 
     bool Fail(Error error) noexcept
     {
-        if(failure_==Error::None)failure_=error;
+        if(failure_==Error::None)
+        {
+            failure_=error;
+            // No borrowed class identity survives an unsuccessful capture.
+            for(size_t i=0;i<rawCount_;++i)slots_[i].raw.opaqueClass=nullptr;
+        }
         phase_=Phase::Failed;
         return false;
     }
@@ -91,6 +96,29 @@ private:
         if(source.bytes && p<start+sizeof(*this) && start<p+source.bytes)
             return Fail(Error::AliasedInput);
         return true;
+    }
+    // Bound the scan by the SAME remaining arena budget used for the copy.
+    // Caller guarantees a lifetime-valid physical C string/readable bytes
+    // through either the terminator or maximum+1. This is not pointer probing.
+    // Reject aliasing before reading, including a range crossing into storage.
+    bool BoundedCString(const char* source,size_t maximum,QuotedText& view) noexcept
+    {
+        if(!source)return Fail(Error::InvalidInput);
+        const uintptr_t p=reinterpret_cast<uintptr_t>(source);
+        const uintptr_t own=reinterpret_cast<uintptr_t>(this);
+        if(sizeof(*this)>UINTPTR_MAX-own)return Fail(Error::InvalidInput);
+        for(size_t length=0;length<=maximum;++length)
+        {
+            if(length>UINTPTR_MAX-p)return Fail(Error::InvalidInput);
+            const uintptr_t at=p+length;
+            if(at>=own && at<own+sizeof(*this))return Fail(Error::AliasedInput);
+            if(source[length]=='\0')
+            {
+                view={source,length};
+                return true;
+            }
+        }
+        return Fail(Error::TextCapacity);
     }
     bool Copy(QuotedText source,Span& output) noexcept
     {
@@ -141,6 +169,7 @@ public:
     Error FirstError() const noexcept {return failure_;}
     bool RejectMalformedRegistry() noexcept {return Fail(Error::InvalidInput);}
     bool RejectChangedSource() noexcept {return Fail(Error::SourceChanged);}
+    bool RejectOwnerUnavailable() noexcept {return Fail(Error::OwnerUnavailable);}
     bool Complete() const noexcept {return phase_==Phase::Complete && failure_==Error::None;}
     size_t SourceCandidateCount() const noexcept{return expected_;}
     size_t PresentCount() const noexcept{return presentCount_;}
@@ -199,9 +228,9 @@ public:
         phase_=Phase::Resolve;
         return true;
     }
-    // Host/tests can model a separately REVIEWED metadata lifetime ticket.
-    // This API does not authenticate the supplied name or confer ownership.
-    // The live source method NEVER calls it without metadata-lifetime proof.
+    // The source owner must hold metadata admission and g_MetadataLock while
+    // providing names. Identity equality binds this row, NOT arbitrary pointer
+    // lifetime. No pointer, mutex or lifecycle capability is created here.
     bool ResolvePhysicalClass(size_t index,const void* exactOpaqueIdentity,
         QuotedText nameSpace,QuotedText name) noexcept
     {
@@ -219,7 +248,28 @@ public:
         view.bytes=used_-view.offset;
         slot.type=view;
         slot.typeResolved=true;
+        slot.raw.opaqueClass=nullptr;
         return true;
+    }
+    // Allocation-free C-string adapter for actual Il2CppClass raw names.
+    // Preserve the legacy first-use namespace + "." + name even when empty.
+    // No Quoted(const char*)/strlen, recursive type naming or truncation.
+    bool ResolvePhysicalClassCString(size_t index,const void* exactOpaqueIdentity,
+        const char* nameSpace,const char* name) noexcept
+    {
+        if(!Require(Phase::Resolve) || index>=expected_)
+            return Fail(Error::IndexMismatch);
+        const Slot& slot=slots_[index];
+        if(!slot.raw.present || !slot.raw.opaqueClass || slot.typeResolved ||
+            slot.raw.opaqueClass!=exactOpaqueIdentity)
+            return Fail(Error::ClassTokenMismatch);
+        const size_t remaining=kTextCapacity-used_;
+        if(remaining==0)return Fail(Error::TextCapacity);
+        QuotedText ns{},simple{};
+        // Reserve exactly one byte for the separator before either scan.
+        if(!BoundedCString(nameSpace,remaining-1,ns) ||
+           !BoundedCString(name,remaining-1-ns.bytes,simple))return false;
+        return ResolvePhysicalClass(index,exactOpaqueIdentity,ns,simple);
     }
     // The production source re-enters UsageLock ONLY to sample the ordinary
     // protected generation again. If different, no record can be released.
@@ -231,6 +281,7 @@ public:
         for(size_t i=0;i<expected_;++i)
             if(slots_[i].raw.present && !slots_[i].typeResolved)
                 return Fail(Error::UnverifiedClassMetadata);
+        for(size_t i=0;i<rawCount_;++i)slots_[i].raw.opaqueClass=nullptr;
         phase_=Phase::Complete;
         return true;
     }
@@ -250,8 +301,8 @@ public:
         output.sequence=slot.raw.sequence;
         return true;
     }
-    // Opaque identity for FUTURE separately reviewed metadata resolver only.
-    // Never dereference the return value without a VM lifetime ticket.
+    // Opaque identity for the native metadata-admitted resolution pass only.
+    // Never dereference it without the source reader's ticket and metadata lock.
     bool PendingOpaqueClass(size_t index,const void*& token) const noexcept
     {
         if(phase_!=Phase::Resolve || index>=expected_ ||

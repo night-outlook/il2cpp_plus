@@ -6,8 +6,10 @@ on:
       - 'libil2cpp/vm/AssemblyShadow.cpp'
       - 'libil2cpp/vm/AssemblyShadow.h'
       - 'libil2cpp/vm/AssemblyShadowBoundedFirstUseCapture.h'
+      - 'libil2cpp/vm/AssemblyShadowMetadataLifetime.h'
       - 'tools/r03/diagnostic_stream/bounded_first_use_fixture.cpp'
       - 'tools/r03/diagnostic_stream/run_bounded_first_use.py'
+      - 'tools/r03/diagnostic_stream/test_first_use_runner.py'
       - '.github/workflows/r03-p1-bounded-first-use.yml'
   workflow_dispatch:
 permissions:
@@ -35,12 +37,14 @@ jobs:
             libil2cpp/vm/AssemblyShadow.h
             libil2cpp/vm/AssemblyShadowTypes.h
             libil2cpp/vm/AssemblyShadowBoundedFirstUseCapture.h
+            libil2cpp/vm/AssemblyShadowMetadataLifetime.h
             libil2cpp/vm/AssemblyShadowFrozenGeneralCapture.h
             libil2cpp/vm/AssemblyShadowDiagnostics.cpp
             libil2cpp/vm/AssemblyShadowDiagnostics.h
             libil2cpp/vm/AssemblyShadowDiagnosticWriter.h
             tools/r03/diagnostic_stream/bounded_first_use_fixture.cpp
             tools/r03/diagnostic_stream/run_bounded_first_use.py
+            tools/r03/diagnostic_stream/test_first_use_runner.py
             tools/r03/diagnostic_stream/allocation_probe.cpp
           sparse-checkout-cone-mode: false
       - name: Actual native first-use producer, strict and sanitizer cases
@@ -49,6 +53,7 @@ jobs:
           CXX: ${{ matrix.compiler }}
         run: |
           set -euo pipefail
+          python3 -B tools/r03/diagnostic_stream/test_first_use_runner.py
           output="$RUNNER_TEMP/r03-first-use-${{ github.run_id }}-${{ github.run_attempt }}"
           python3 -B tools/r03/diagnostic_stream/run_bounded_first_use.py \
             --native "$GITHUB_WORKSPACE" --output "$output"
@@ -60,7 +65,10 @@ jobs:
           assert r['profilesCompleted']==['strict','sanitized']
           assert len(r['commands'])==4 and all(c['exit']==0 for c in r['commands'])
           assert r['compiledActualProductionMethod']
-          assert not r['classPointerDereferencedInSourceMethod']
+          assert r['classPointerDereferencedInSourceMethod']
+          assert r['metadataAdmissionAndNonNestedLocksCheckedUnderMocks']
+          assert r['classBearingSourceContractPassedUnderMocks']
+          assert all(len(r['caseGroups'][p])==15 for p in ('strict','sanitized'))
           assert not r['classBearingLiveProducerComplete']
           assert not r['realMetadataClassLifetimeTicket']
           assert not r['semanticAcceptance'] and not r['realPlayerRun']

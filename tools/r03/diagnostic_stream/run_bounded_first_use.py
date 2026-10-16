@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Compile the REAL P1 first-use VM source method with explicit C++ test mocks.
 
-It is intentionally NOT an official Unity SDK/Player test, and a class name
-requires an external metadata-lifetime ticket unavailable to the live method.
+The exact native method/header are compiled under instrumented class-name,
+metadata-lock, usage-lock and lifecycle mocks. This is NOT an official Unity
+SDK/Player/teardown proof. Complete source admission is a separate gate.
 """
 from __future__ import annotations
 import argparse
@@ -17,8 +18,15 @@ import time
 
 SYMBOL="bool AssemblyShadow::TryCaptureBoundedFirstUses("
 MARKER="// __EXACT_PRODUCTION_FIRST_USE_METHOD__"
+EXPECTED_METHOD_SHA256="67fcd9f6660c67c8a60ed610cdc9b3c3cfc06adb01f9805a581e6dd97dd42be2"
+EXPECTED_GROUPS=15
 REQUIRED=(
     "UsageLock lock;",
+    "assembly_shadow_metadata_lifetime::Gate::Reader reader(",
+    "if(!reader)return capture.RejectOwnerUnavailable()",
+    "os::FastAutoLock metadataLock(&g_MetadataLock)",
+    "capture.ResolvePhysicalClassCString(index,identity,",
+    "klass->namespaze,klass->name)",
     "raw.opaqueClass=use.klass",
     "capture.AddRaw(raw)",
     "capture.EndRaw(s_usageGeneration)",
@@ -33,9 +41,12 @@ FORBIDDEN=(
     "use.klass->",
     "Class::",
     "FormatMetadataOnly(",
-    "g_MetadataLock",
     "MetadataCache::",
     "ResolvePhysicalClass(",
+    "std::strlen(",
+    "Type::GetName(",
+    "new ",
+    "std::string(",
 )
 
 def sha(data:bytes)->str:return hashlib.sha256(data).hexdigest()
@@ -88,6 +99,17 @@ def command(argv:list,root:Path,key:str,records:list):
     if result.returncode:
         raise RuntimeError(f"{key} failed with {result.returncode}; preserve raw logs")
 
+def verify_method(actual:str)->None:
+    # Pin the exact reviewed function, not the continually changing whole VM
+    # file. Future source changes require a new review and regression update.
+    if sha(actual.encode())!=EXPECTED_METHOD_SHA256:
+        raise RuntimeError("Reviewed first-use source body changed")
+    if not all(x in actual for x in REQUIRED):
+        raise RuntimeError("First-use source lock/ordering contract changed")
+    statements="\n".join(line.split("//",1)[0] for line in actual.splitlines())
+    if any(token in statements for token in FORBIDDEN):
+        raise RuntimeError("Unreviewed first-use metadata operation")
+
 def main()->None:
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native",required=True,type=Path)
@@ -112,25 +134,23 @@ def main()->None:
       "tools/r03/diagnostic_stream/bounded_first_use_fixture.cpp",
       "tools/r03/diagnostic_stream/allocation_probe.cpp",
       "tools/r03/diagnostic_stream/run_bounded_first_use.py",
+      "libil2cpp/vm/AssemblyShadowMetadataLifetime.h",
     ]
     sources=[repo/p for p in paths]
-    before={str(p):{"bytes":p.stat().st_size,"sha256":sha(p.read_bytes()),
-                    "gitBlob":blob(p.read_bytes())} for p in sources}
-    actual=extract(sources[0].read_text())
-    if not all(x in actual for x in REQUIRED):
-        raise RuntimeError("First-use source lock/ordering contract changed")
-    # Check executable statements ONLY: the original comments explicitly
-    # discuss methods/metadata forbidden on this short usage spinlock.
-    statements="\n".join(line.split("//",1)[0] for line in actual.splitlines())
-    if any(token in statements for token in FORBIDDEN):
-        raise RuntimeError("First-use method gained unreviewed class/metadata access")
-    if "static bool TryCaptureBoundedFirstUses(" not in sources[1].read_text():
-        raise RuntimeError("Enabled native API declaration missing")
-    fixture=sources[8].read_text()
-    if fixture.count(MARKER)!=1:raise RuntimeError("Ambiguous test source insertion")
+    # Once an unused canonical root is admitted, source precondition failures
+    # also produce a factual result instead of disappearing before the ledger.
     out.mkdir(mode=0o700)
-    commands=[];completed=[];failure=None
+    commands=[];completed=[];failure=None;before=None;actual=""
+    compiled=False;groups={}
     try:
+        before={str(p):{"bytes":p.stat().st_size,"sha256":sha(p.read_bytes()),
+                        "gitBlob":blob(p.read_bytes())} for p in sources}
+        actual=extract(sources[0].read_text())
+        verify_method(actual)
+        if "static bool TryCaptureBoundedFirstUses(" not in sources[1].read_text():
+            raise RuntimeError("Enabled native API declaration missing")
+        fixture=sources[8].read_text()
+        if fixture.count(MARKER)!=1:raise RuntimeError("Ambiguous test source insertion")
         (out/"actual-method.cpp").write_text(actual+"\n")
         (out/"mock-execution.cpp").write_text(fixture.replace(MARKER,actual))
         stubs=out/"stubs";stubs.mkdir()
@@ -142,38 +162,51 @@ def main()->None:
             exe=out/(profile+".exe")
             flags=[cxx,"-std=c++17","-Wall","-Wextra","-Werror","-pedantic",
                    "-pthread","-iquote",repo/"libil2cpp/vm","-iquote",stubs,
-                   *flags,
-                   out/"mock-execution.cpp",
+                   *flags,out/"mock-execution.cpp",
                    repo/"tools/r03/diagnostic_stream/allocation_probe.cpp",
-                   repo/"libil2cpp/vm/AssemblyShadowDiagnostics.cpp",
-                   "-o",exe]
+                   repo/"libil2cpp/vm/AssemblyShadowDiagnostics.cpp","-o",exe]
             command(flags,out,profile+"-compile",commands)
+            compiled=True
             command([exe],out,profile+"-run",commands)
+            labels=[line[5:] for line in (out/(profile+"-run.stdout")).read_text().splitlines()
+                    if line.startswith("PASS ")]
+            if len(labels)!=EXPECTED_GROUPS or len(set(labels))!=EXPECTED_GROUPS:
+                raise RuntimeError("Incomplete first-use host case matrix")
+            groups[profile]=labels
             completed.append(profile)
     except Exception as error:
         failure=repr(error)
         raise
     finally:
-        preserved=all(before[str(p)]=={
-            "bytes":p.stat().st_size,"sha256":sha(p.read_bytes()),
-            "gitBlob":blob(p.read_bytes())}for p in sources)
-        passed=completed==["strict","sanitized"] and preserved
+        preserved=False
+        if before is not None:
+            try:
+                preserved=all(before[str(p)]=={
+                    "bytes":p.stat().st_size,"sha256":sha(p.read_bytes()),
+                    "gitBlob":blob(p.read_bytes())}for p in sources)
+            except OSError:
+                preserved=False
+        passed=completed==["strict","sanitized"] and preserved and failure is None
         result={
           "kind":"P1BoundedFirstUseActualSourceHost",
           "result":"PassedWithinHostScope" if passed else "FailedOrIncomplete",
-          "compiledActualProductionMethod":True,
-          "methodSha256":sha(actual.encode()),
+          "compiledActualProductionMethod":compiled,
+          "methodSha256":sha(actual.encode()) if actual else None,
           "sourceBefore":before,"sourcePreserved":preserved,
-          "profilesCompleted":completed,"commands":commands,"firstError":failure,
+          "profilesCompleted":completed,"caseGroups":groups,
+          "commands":commands,"firstError":failure,
           "realMetadataClassLifetimeTicket":False,
           "classBearingLiveProducerComplete":False,
-          "classPointerDereferencedInSourceMethod":False,
+          "classPointerDereferencedInSourceMethod":True,
+          "metadataAdmissionAndNonNestedLocksCheckedUnderMocks":passed,
+          "classBearingSourceContractPassedUnderMocks":passed,
           "actualUnitySdkCompile":False,
           "realPlayerRun":False,"semanticAcceptance":False
         }
         (out/"RESULT.json").write_text(json.dumps(result,indent=2)+"\n")
         files=[{"path":str(p.relative_to(out)),"bytes":p.stat().st_size,
-                "sha256":sha(p.read_bytes())} for p in sorted(out.rglob("*")) if p.is_file()]
+                "sha256":sha(p.read_bytes())} for p in sorted(out.rglob("*"))
+               if p.is_file() and not p.is_symlink()]
         (out/"MANIFEST.json").write_text(json.dumps({"files":files},indent=2)+"\n")
     print(json.dumps({"result":result["result"],"profiles":completed,
                       "methodSha256":result["methodSha256"]},indent=2))

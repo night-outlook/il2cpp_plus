@@ -11,6 +11,7 @@
 #include "AssemblyShadowObservationMemo.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+#include "AssemblyShadowMetadataLifetime.h"
 #include "AssemblyShadowName.h"
 #include "AssemblyShadowVisibility.h"
 #include "AssemblyShadowTypeResolver.h"
@@ -1479,8 +1480,13 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
     // P1 SOURCE-BOUND, INACTIVE first-use census, not a complete VM snapshot.
     // CandidateRegistry is immutable and process-retained after publication;
     // the short UsageLock serializes modifications of firstUse and the plain
-    // s_usageGeneration counter. Never dereference use.klass at any point.
+    // s_usageGeneration counter. Metadata admission precedes EVERY source read
+    // and remains owned through final usage-generation verification/Seal.
+    // No ticket or Il2CppClass pointer is retained by a sealed Capture.
     namespace first=assembly_shadow_bounded_first_use;
+    assembly_shadow_metadata_lifetime::Gate::Reader reader(
+        assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate);
+    if(!reader)return capture.RejectOwnerUnavailable();
     static_assert(sizeof(UseRecord::detail)==first::Capture::kDetailBytes,
                   "First-use raw detail storage ABI differs from capture");
     const CandidateRegistry* registry=s_candidates.load(std::memory_order_acquire);
@@ -1511,7 +1517,8 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
     // constructing the original " FirstUseSequence=N" detail suffix.
     // Registry identities/strings are published once and never destroyed by
     // this Assembly Shadow implementation. The registry pointer is checked
-    // again before Seal, though this does NOT prove metadata class lifetime.
+    // again before Seal. The admitted reader keeps Runtime::Shutdown from
+    // reaching its metadata teardown while this source operation is active.
     for(size_t index=0;index<count;++index)
     {
         Candidate* candidate=registry->entries[index].get();
@@ -1520,14 +1527,29 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
             assembly_shadow_diagnostic::Quoted(candidate->name)))return false;
     }
     if(!capture.EndNames())return false;
+    {
+        // NEVER nest UsageLock with g_MetadataLock: class initialization and
+        // other metadata owners can record baseline use in the opposite path.
+        // Read ONLY existing raw namespace/name, not Type::GetName, class
+        // conversion, generic inflation, callbacks, user code or filesystem I/O.
+        os::FastAutoLock metadataLock(&g_MetadataLock);
+        for(size_t index=0;index<count;++index)
+        {
+            const void* identity=nullptr;
+            if(!capture.PendingOpaqueClass(index,identity))continue;
+            const auto* klass=static_cast<const Il2CppClass*>(identity);
+            if(!capture.ResolvePhysicalClassCString(index,identity,
+                klass->namespaze,klass->name))return false;
+        }
+    }
     uint64_t verifiedGeneration=0;
     {
         UsageLock lock; // plain s_usageGeneration MUST be read under lock.
         verifiedGeneration=s_usageGeneration;
     }
-    // The live source adapter deliberately does NOT call ResolvePhysicalClass.
-    // For any non-null UseRecord::klass, Seal rejects the incomplete class name
-    // until a separately source-reviewed g_MetadataLock/lifetime ticket exists.
+    // Verify usage AFTER the complete metadata/name pass and after releasing
+    // g_MetadataLock. Equal usage generations are not an all-VM snapshot epoch;
+    // any observed new use or registry change invalidates every captured row.
     return capture.Seal(verifiedGeneration,
         s_candidates.load(std::memory_order_acquire)==registry);
 }
