@@ -1,0 +1,4 @@
+Disposable GitHub Connector Git-data write/read test.
+Repository: night-outlook/il2cpp_plus
+Base: 0a0b70156e75d450d75d0bcfd9132843b8abbbb0
+No product acceptance or active-branch change.
