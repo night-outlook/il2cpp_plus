@@ -17,6 +17,7 @@ struct MethodInfo;
 namespace il2cpp { namespace vm {
 namespace assembly_shadow_bounded_transaction { class Capture; }
 namespace assembly_shadow_bounded_inventory { class Capture; }
+namespace assembly_shadow_bounded_first_use { class Capture; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -72,6 +73,12 @@ public:
     // No metadata, first-use, class, R02 or Player validation is included.
     static bool TryCaptureBoundedTransactionInventory(
         assembly_shadow_bounded_inventory::Capture& capture);
+    // P1 additive, NO Player caller: copy raw first-use records under short
+    // UsageLock, then immutable candidate names after unlock. Never dereference
+    // physical Il2CppClass*; rows requiring class metadata fail closed until
+    // a separately reviewed metadata-lifetime name resolver exists.
+    static bool TryCaptureBoundedFirstUses(
+        assembly_shadow_bounded_first_use::Capture& capture);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();
