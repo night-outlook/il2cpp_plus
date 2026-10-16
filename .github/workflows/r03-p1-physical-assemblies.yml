@@ -1,0 +1,76 @@
+name: R03 P1 actual physical assembly inventory host
+on:
+  push:
+    branches: ['codex/assembly-shadow-r01b-h1']
+    paths:
+      - 'libil2cpp/vm/Assembly.cpp'
+      - 'libil2cpp/vm/Assembly.h'
+      - 'libil2cpp/vm/AssemblyShadowBoundedPhysicalAssemblies.h'
+      - 'tools/r03/diagnostic_stream/bounded_physical_assemblies_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/run_bounded_physical_assemblies.py'
+      - '.github/workflows/r03-p1-physical-assemblies.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-bound-assembly-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            compiler: clang++
+          - os: ubuntu-24.04
+            compiler: clang++
+          - os: ubuntu-24.04
+            compiler: g++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            libil2cpp/vm/Assembly.cpp
+            libil2cpp/vm/Assembly.h
+            libil2cpp/vm/AssemblyShadowBoundedPhysicalAssemblies.h
+            libil2cpp/vm/AssemblyShadowFrozenGeneralCapture.h
+            libil2cpp/vm/AssemblyShadowDiagnostics.cpp
+            libil2cpp/vm/AssemblyShadowDiagnostics.h
+            libil2cpp/vm/AssemblyShadowTypes.h
+            libil2cpp/vm/AssemblyShadowDiagnosticWriter.h
+            tools/r03/diagnostic_stream/bounded_physical_assemblies_fixture.cpp
+            tools/r03/diagnostic_stream/run_bounded_physical_assemblies.py
+            tools/r03/diagnostic_stream/fixtures/LegacyAssemblyShadowDiagnostics.cpp
+            tools/r03/diagnostic_stream/fixtures/AssemblyShadowDiagnostics.h
+            tools/r03/diagnostic_stream/allocation_probe.cpp
+          sparse-checkout-cone-mode: false
+      - name: Exact production Assembly code and immutable V1 parity
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          set -euo pipefail
+          dest="$RUNNER_TEMP/p1-physical-${{ github.run_id }}-${{ github.run_attempt }}"
+          python3 -B tools/r03/diagnostic_stream/run_bounded_physical_assemblies.py \
+            --native "$GITHUB_WORKSPACE" --output "$dest"
+          python3 -B - "$dest/RESULT.json" <<'PY'
+          import json,sys
+          from pathlib import Path
+          r=json.loads(Path(sys.argv[1]).read_text())
+          assert r['result']=='PassedWithinHostScope' and r['sourcePreserved']
+          assert r['profilesCompleted']==['strict','sanitized']
+          assert len(r['commands'])==6 and all(c['exit']==0 for c in r['commands'])
+          assert r['actualProductionMethodCompiled']
+          assert not r['realUnityMetadataLifetimeProof']
+          assert not r['actualUnityPlayerRun'] and not r['runtimeAcceptance']
+          print("Bounded physical assembly source+old/current/frozen V1 host contracts passed")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: p1-physical-${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
+          path: ${{ runner.temp }}/p1-physical-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
