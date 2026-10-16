@@ -19,7 +19,7 @@ namespace il2cpp { namespace vm { namespace assembly_shadow_bounded_classes {
 enum class Error : uint8_t
 {
     None, WrongPhase, NullName, AliasedInput,
-    TooManyClasses, TextCapacity, SourceChanged
+    TooManyClasses, TextCapacity, SourceChanged, OwnerUnavailable
 };
 struct ClassView
 {
@@ -105,6 +105,7 @@ public:
     uint64_t ClassEnumerationGeneration() const noexcept
     {return Complete()?generation_:0;}
     bool RejectInvalidSource() noexcept {return Fail(Error::NullName);}
+    bool RejectOwnerUnavailable() noexcept {return Fail(Error::OwnerUnavailable);}
 
     bool Begin() noexcept
     {
