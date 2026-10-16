@@ -20,8 +20,10 @@
 extern bool watch;
 extern size_t newCalls;
 
+struct Il2CppImage;
 struct Il2CppAssembly
 {
+    const Il2CppImage* image=nullptr;
     struct { const char* name=nullptr; } aname;
 };
 struct Il2CppImage
@@ -134,8 +136,9 @@ struct Source
             names.push_back("Class_"+std::to_string(i)+"_0123456789ABCDEFGHIJKLMN");
             namespaces.push_back(i%3==0 ? "Game.UI.中文" :
                 i%3==1 ? "" : "Game.Core");
-            assemblyRecords.push_back({{assemblies.back().c_str()}});
+            assemblyRecords.push_back({nullptr,{assemblies.back().c_str()}});
             images.push_back({&assemblyRecords.back(),i%2==0});
+            assemblyRecords.back().image=&images.back();
             classes.push_back({&images.back(),names.back().c_str(),
                 namespaces.back().c_str(),(i%4==0?reinterpret_cast<void*>(uintptr_t(1)):nullptr),
                 i%5==0,true,true});
@@ -190,7 +193,16 @@ static void VerifySimple()
     source.assemblies[2]="mutated";
     source.namespaces[2]="mutated";
     assert(owned->Get(2,row) && Text(row.typeName,row.typeNameBytes)==saved);
-    std::cout<<"owned class text, flags, namespaces, order and lifetime passed\n";
+    // The legacy source calls Interpreter(klass->image->assembly), not
+    // IsInterpreterImage(klass->image). A mismatched placeholder/physical
+    // image must therefore classify using assembly->image.
+    source.Prepare(6);
+    assert(source.images[3].interpreter==false);
+    Il2CppImage authoritativePhysical{&source.assemblyRecords[3],true};
+    source.assemblyRecords[3].image=&authoritativePhysical;
+    const auto physicalFlag=Collect();
+    assert(physicalFlag->Get(3,row) && row.isInterpreter);
+    std::cout<<"owned class text, flags, legacy assembly-image parity and lifetime passed\n";
 }
 static void Boundary()
 {
@@ -231,6 +243,11 @@ static void Negative()
     auto nullimage=std::make_unique<cl::Capture>();
     assert(!AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(*nullimage));
     assert(nullimage->FirstError()==cl::Error::NullName);
+    source.Prepare(3);
+    source.assemblyRecords[0].image=nullptr;
+    auto nullPhysical=std::make_unique<cl::Capture>();
+    assert(!AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(*nullPhysical));
+    assert(nullPhysical->FirstError()==cl::Error::NullName);
     source.Prepare(3);
     source.classes[0].image=&source.images[0];
     source.assemblies[0].assign(cl::Capture::kTextCapacity+1,'Z');
