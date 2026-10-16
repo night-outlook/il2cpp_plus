@@ -7,6 +7,7 @@
 #include "AssemblyShadowExecutionSerializer.h"
 #include "AssemblyShadowBoundedTransactionStatus.h"
 #include "AssemblyShadowBoundedTransactionInventory.h"
+#include "AssemblyShadowBoundedFirstUseCapture.h"
 #include "AssemblyShadowObservationMemo.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
@@ -1470,6 +1471,65 @@ bool AssemblyShadow::TryCaptureBoundedTransactionInventory(
         failureAfter ? assembly_shadow_diagnostic::Quoted(failureAfter->detail)
                      : assembly_shadow_diagnostic::Quoted(""),
         activeAfter!=nullptr);
+}
+
+bool AssemblyShadow::TryCaptureBoundedFirstUses(
+    assembly_shadow_bounded_first_use::Capture& capture)
+{
+    // P1 SOURCE-BOUND, INACTIVE first-use census, not a complete VM snapshot.
+    // CandidateRegistry is immutable and process-retained after publication;
+    // the short UsageLock serializes modifications of firstUse and the plain
+    // s_usageGeneration counter. Never dereference use.klass at any point.
+    namespace first=assembly_shadow_bounded_first_use;
+    static_assert(sizeof(UseRecord::detail)==first::Capture::kDetailBytes,
+                  "First-use raw detail storage ABI differs from capture");
+    const CandidateRegistry* registry=s_candidates.load(std::memory_order_acquire);
+    const size_t count=registry ? registry->entries.size() : 0;
+    if(!capture.Begin(count))return false;
+    {
+        UsageLock lock;
+        if(s_candidates.load(std::memory_order_acquire)!=registry)
+            return capture.RejectChangedSource();
+        for(size_t index=0;index<count;++index)
+        {
+            Candidate* candidate=registry->entries[index].get();
+            if(!candidate)return capture.RejectMalformedRegistry();
+            const UseRecord& use=candidate->firstUse;
+            first::Raw raw;
+            raw.present=use.present;
+            raw.kind=use.kind;
+            std::memcpy(raw.detail,use.detail,sizeof(raw.detail));
+            raw.opaqueClass=use.klass; // Opaque only, never dereferenced here.
+            raw.thread=use.thread;
+            raw.timestamp=use.timestamp;
+            raw.sequence=use.sequence;
+            if(!capture.AddRaw(raw))return false;
+        }
+        if(!capture.EndRaw(s_usageGeneration))return false;
+    }
+    // No UsageLock is held while copying immutable candidate names or
+    // constructing the original " FirstUseSequence=N" detail suffix.
+    // Registry identities/strings are published once and never destroyed by
+    // this Assembly Shadow implementation. The registry pointer is checked
+    // again before Seal, though this does NOT prove metadata class lifetime.
+    for(size_t index=0;index<count;++index)
+    {
+        Candidate* candidate=registry->entries[index].get();
+        if(!candidate)return capture.RejectMalformedRegistry();
+        if(!capture.AddCandidateName(index,
+            assembly_shadow_diagnostic::Quoted(candidate->name)))return false;
+    }
+    if(!capture.EndNames())return false;
+    uint64_t verifiedGeneration=0;
+    {
+        UsageLock lock; // plain s_usageGeneration MUST be read under lock.
+        verifiedGeneration=s_usageGeneration;
+    }
+    // The live source adapter deliberately does NOT call ResolvePhysicalClass.
+    // For any non-null UseRecord::klass, Seal rejects the incomplete class name
+    // until a separately source-reviewed g_MetadataLock/lifetime ticket exists.
+    return capture.Seal(verifiedGeneration,
+        s_candidates.load(std::memory_order_acquire)==registry);
 }
 
 AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
