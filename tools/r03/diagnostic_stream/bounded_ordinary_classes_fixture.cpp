@@ -3,6 +3,7 @@
 // mechanically inserted verbatim. All class/image/visibility metadata below
 // are explicit mocks; teardown and generics lifetime are NOT proven.
 #include "AssemblyShadowBoundedOrdinaryClasses.h"
+#include "AssemblyShadowMetadataLifetime.h"
 #include "AssemblyShadowFrozenGeneralCapture.h"
 #include "AssemblyShadowDiagnostics.h"
 #include <atomic>
@@ -53,6 +54,9 @@ public:
 };
 }}
 namespace il2cpp { namespace vm {
+namespace assembly_shadow_metadata_lifetime {
+Gate g_MetadataLifetimeGate; // host mock of Runtime.cpp single global owner
+}
 namespace {
 std::mutex g_MetadataLock;
 struct PrivateImage {unsigned token=0;};
@@ -342,9 +346,18 @@ static void CompleteOriginalV1Parity()
 
 int main()
 {
+    auto& admission=il2cpp::vm::assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate;
+    auto cold=std::make_unique<il2cpp::vm::assembly_shadow_bounded_classes::Capture>();
+    assert(!il2cpp::vm::AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(*cold));
+    assert(cold->FirstError()==il2cpp::vm::assembly_shadow_bounded_classes::Error::OwnerUnavailable);
+    assert(admission.OpenAfterInit());
     il2cpp::vm::VerifySimple();
     il2cpp::vm::Boundary();
     il2cpp::vm::Negative();
     il2cpp::vm::CompleteOriginalV1Parity();
+    admission.CloseAndDrain();
+    auto late=std::make_unique<il2cpp::vm::assembly_shadow_bounded_classes::Capture>();
+    assert(!il2cpp::vm::AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(*late));
+    assert(late->FirstError()==il2cpp::vm::assembly_shadow_bounded_classes::Error::OwnerUnavailable);
     std::cout<<"R03 P1 fixed ordinary classes V1 exact method host contract PASS\n";
 }
