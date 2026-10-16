@@ -139,6 +139,8 @@ public:
     Capture(Capture&&)=delete;
     Capture& operator=(Capture&&)=delete;
     Error FirstError() const noexcept {return failure_;}
+    bool RejectMalformedRegistry() noexcept {return Fail(Error::InvalidInput);}
+    bool RejectChangedSource() noexcept {return Fail(Error::SourceChanged);}
     bool Complete() const noexcept {return phase_==Phase::Complete && failure_==Error::None;}
     size_t SourceCandidateCount() const noexcept{return expected_;}
     size_t PresentCount() const noexcept{return presentCount_;}
