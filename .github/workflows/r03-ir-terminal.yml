@@ -48,7 +48,9 @@ jobs:
           ]
           for item in expected:
             assert item in s, item
-          assert s.count('FixedDiagnosticExceptionScope diagnostic;') >= 3
+          # One explicit fixed diagnostic scope remains in the current native
+          # reference-failure path; broad historical occurrence count is stale.
+          assert s.count('FixedDiagnosticExceptionScope diagnostic;') == 1
           # Current RequireActiveMethod contains bounded native producer logging
           # between the terminal decision and rejection, under a probe macro.
           # Require the same observed policy and reject dispatch ordering, not
