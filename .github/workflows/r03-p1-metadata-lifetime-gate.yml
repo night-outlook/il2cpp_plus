@@ -1,0 +1,77 @@
+name: R03 P1 metadata lifetime admission and shutdown ordering host
+on:
+  push:
+    branches: ['codex/assembly-shadow-r01b-h1']
+    paths:
+      - 'libil2cpp/vm/AssemblyShadowMetadataLifetime.h'
+      - 'libil2cpp/vm/Runtime.cpp'
+      - 'libil2cpp/vm/Assembly.cpp'
+      - 'libil2cpp/vm/AssemblyShadowVisibility.cpp'
+      - 'libil2cpp/vm/AssemblyShadowBoundedOrdinaryClasses.h'
+      - 'libil2cpp/vm/AssemblyShadowBoundedPhysicalAssemblies.h'
+      - 'tools/r03/diagnostic_stream/metadata_lifetime_gate_tests.cpp'
+      - 'tools/r03/diagnostic_stream/run_metadata_lifetime_gate.py'
+      - '.github/workflows/r03-p1-metadata-lifetime-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  metadata-admission-source-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            compiler: clang++
+          - os: ubuntu-24.04
+            compiler: clang++
+          - os: ubuntu-24.04
+            compiler: g++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadowMetadataLifetime.h
+            libil2cpp/vm/Runtime.cpp
+            libil2cpp/vm/Assembly.cpp
+            libil2cpp/vm/AssemblyShadowVisibility.cpp
+            libil2cpp/vm/AssemblyShadowBoundedOrdinaryClasses.h
+            libil2cpp/vm/AssemblyShadowBoundedPhysicalAssemblies.h
+            tools/r03/diagnostic_stream/metadata_lifetime_gate_tests.cpp
+            tools/r03/diagnostic_stream/run_metadata_lifetime_gate.py
+          sparse-checkout-cone-mode: false
+      - name: Actual header admission, concurrency and shutdown source audit
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          set -euo pipefail
+          dest="$RUNNER_TEMP/p1-metadata-gate-${{ github.run_id }}-${{ github.run_attempt }}"
+          python3 -B tools/r03/diagnostic_stream/run_metadata_lifetime_gate.py \
+            --native "$GITHUB_WORKSPACE" --output "$dest"
+          python3 -B - "$dest/RESULT.json" <<'PY'
+          import json,sys
+          from pathlib import Path
+          r=json.loads(Path(sys.argv[1]).read_text())
+          assert r['result']=='PassedWithinHostScope' and r['sourcePreserved']
+          assert r['profilesCompleted']==['strict','sanitized']
+          assert len(r['commands'])==4 and all(c['exit']==0 for c in r['commands'])
+          assert r['nativeHeaderRealSourceCompiled']
+          assert r['sourceContract']['closeBeforeTeardown']
+          assert r['sourceContract']['classesReadGateBeforeSourceLock']
+          assert r['sourceContract']['assembliesReadGateBeforeSourceLock']
+          assert not r['productionRuntimeBodiesHostCompiled']
+          assert not r['runtimeAcceptance'] and not r['engineOwnerProven']
+          print('P1 metadata lifecycle admission HOST scope only verified')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: p1-metadata-gate-${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
+          path: ${{ runner.temp }}/p1-metadata-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
