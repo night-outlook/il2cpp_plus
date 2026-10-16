@@ -1,0 +1,76 @@
+name: R03 P1 bounded first-use actual VM source host
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - 'libil2cpp/vm/AssemblyShadow.cpp'
+      - 'libil2cpp/vm/AssemblyShadow.h'
+      - 'libil2cpp/vm/AssemblyShadowBoundedFirstUseCapture.h'
+      - 'tools/r03/diagnostic_stream/bounded_first_use_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/run_bounded_first_use.py'
+      - '.github/workflows/r03-p1-bounded-first-use.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-first-use:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            compiler: clang++
+          - os: ubuntu-24.04
+            compiler: clang++
+          - os: ubuntu-24.04
+            compiler: g++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadow.cpp
+            libil2cpp/vm/AssemblyShadow.h
+            libil2cpp/vm/AssemblyShadowTypes.h
+            libil2cpp/vm/AssemblyShadowBoundedFirstUseCapture.h
+            libil2cpp/vm/AssemblyShadowFrozenGeneralCapture.h
+            libil2cpp/vm/AssemblyShadowDiagnostics.cpp
+            libil2cpp/vm/AssemblyShadowDiagnostics.h
+            libil2cpp/vm/AssemblyShadowDiagnosticWriter.h
+            tools/r03/diagnostic_stream/bounded_first_use_fixture.cpp
+            tools/r03/diagnostic_stream/run_bounded_first_use.py
+            tools/r03/diagnostic_stream/allocation_probe.cpp
+          sparse-checkout-cone-mode: false
+      - name: Actual native first-use producer, strict and sanitizer cases
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/r03-first-use-${{ github.run_id }}-${{ github.run_attempt }}"
+          python3 -B tools/r03/diagnostic_stream/run_bounded_first_use.py \
+            --native "$GITHUB_WORKSPACE" --output "$output"
+          python3 -B - "$output/RESULT.json" <<'PY'
+          import json,sys
+          from pathlib import Path
+          r=json.loads(Path(sys.argv[1]).read_text())
+          assert r['result']=='PassedWithinHostScope' and r['sourcePreserved']
+          assert r['profilesCompleted']==['strict','sanitized']
+          assert len(r['commands'])==4 and all(c['exit']==0 for c in r['commands'])
+          assert r['compiledActualProductionMethod']
+          assert not r['classPointerDereferencedInSourceMethod']
+          assert not r['classBearingLiveProducerComplete']
+          assert not r['realMetadataClassLifetimeTicket']
+          assert not r['semanticAcceptance'] and not r['realPlayerRun']
+          print("Scoped actual first-use source contract passed")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: p1-first-use-${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
+          path: ${{ runner.temp }}/r03-first-use-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
