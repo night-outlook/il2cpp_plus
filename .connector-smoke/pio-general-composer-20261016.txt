@@ -1,0 +1,3 @@
+Disposable connector transport check
+Repo night-outlook/il2cpp_plus
+Branch codex/pio-smoke-p1-general-composer-20261016-a4
