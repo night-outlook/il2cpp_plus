@@ -90,7 +90,10 @@ namespace vm
     baselib::ReentrantLock g_MetadataLock;
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
     // The only gate instance: shared by Runtime lifecycle and bounded readers.
-    assembly_shadow_metadata_lifetime::Gate assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate;
+    namespace assembly_shadow_metadata_lifetime
+    {
+        Gate g_MetadataLifetimeGate;
+    }
 #endif
 
     static int32_t exitcode = 0;
