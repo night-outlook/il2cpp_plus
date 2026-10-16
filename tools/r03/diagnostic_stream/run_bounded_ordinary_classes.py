@@ -31,7 +31,8 @@ REQUIRED = (
 CALLBACK_REQUIRED = (
     "owned.Add(klass->image->assembly->aname.name,klass->namespaze,klass->name,",
     "AssemblyShadowVisibility::ClassUsesStagedMetadata(klass)",
-    "hybridclr::metadata::IsInterpreterImage(klass->image)",
+    "hybridclr::metadata::IsInterpreterImage(",
+    "klass->image->assembly->image",
     "klass->generic_class!=nullptr"
 )
 FORBIDDEN = ("std::vector<", "push_back(", "std::string(", "Class::FromIl2CppType(",
