@@ -1,4 +1,4 @@
-name: R03 P1 metadata lifetime admission and shutdown ordering host
+name: R03 P1 metadata epoch and source admission host
 on:
   push:
     branches: ['codex/assembly-shadow-r01b-h1']
@@ -11,6 +11,9 @@ on:
       - 'libil2cpp/vm/AssemblyShadowBoundedPhysicalAssemblies.h'
       - 'tools/r03/diagnostic_stream/metadata_lifetime_gate_tests.cpp'
       - 'tools/r03/diagnostic_stream/run_metadata_lifetime_gate.py'
+      - 'tools/r03/diagnostic_stream/metadata_lifetime_readers_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/metadata_lifetime_reopen_regression.cpp'
+      - 'tools/r03/diagnostic_stream/fixtures/metadata_lifetime_v0/AssemblyShadowMetadataLifetime.h'
       - '.github/workflows/r03-p1-metadata-lifetime-gate.yml'
   workflow_dispatch:
 permissions:
@@ -42,8 +45,11 @@ jobs:
             libil2cpp/vm/AssemblyShadowBoundedPhysicalAssemblies.h
             tools/r03/diagnostic_stream/metadata_lifetime_gate_tests.cpp
             tools/r03/diagnostic_stream/run_metadata_lifetime_gate.py
+            tools/r03/diagnostic_stream/metadata_lifetime_readers_fixture.cpp
+            tools/r03/diagnostic_stream/metadata_lifetime_reopen_regression.cpp
+            tools/r03/diagnostic_stream/fixtures/metadata_lifetime_v0/AssemblyShadowMetadataLifetime.h
           sparse-checkout-cone-mode: false
-      - name: Actual header admission, concurrency and shutdown source audit
+      - name: Epoch admission, actual reader entries and immutable old-gate regression
         shell: bash
         env:
           CXX: ${{ matrix.compiler }}
@@ -58,19 +64,25 @@ jobs:
           r=json.loads(Path(sys.argv[1]).read_text())
           assert r['result']=='PassedWithinHostScope' and r['sourcePreserved']
           assert r['profilesCompleted']==['strict','sanitized']
-          assert len(r['commands'])==4 and all(c['exit']==0 for c in r['commands'])
-          assert r['nativeHeaderRealSourceCompiled']
-          assert r['sourceContract']['closeBeforeTeardown']
+          expected={p+'-'+s for p in ('old-reopen','current-reopen') for s in ('compile','run')}
+          expected|={p+'-'+n+'-'+s for p in ('strict','sanitized') for n in ('gate','readers') for s in ('compile','run')}
+          assert len(r['commands'])==12 and {c['label'] for c in r['commands']}==expected
+          for c in r['commands']:
+              assert c['expectedExit']==(4 if c['label']=='old-reopen-run' else 0)
+              assert c['exit']==c['expectedExit'] and not c['timedOut']
+          assert r['originalGateGitBlob']=='88f60fac00a52c0b518e99f1bda31be61eff0ca0'
+          assert r['nativeHeaderRealSourceCompiled'] and r['actualEntryMethodsHostCompiled']
+          assert r['sourceContract']['closeBeforeTeardown'] and r['defaultSourceEpoch']==1
           assert r['sourceContract']['classesReadGateBeforeSourceLock']
           assert r['sourceContract']['assembliesReadGateBeforeSourceLock']
-          assert not r['productionRuntimeBodiesHostCompiled']
-          assert not r['runtimeAcceptance'] and not r['engineOwnerProven']
-          print('P1 metadata lifecycle admission HOST scope only verified')
+          assert not r['productionRuntimeBodiesHostCompiled'] and not r['officialUnitySDKCompiled']
+          assert not r['runtimeAcceptance'] and not r['engineOwnerProven'] and not r['allVmEpochProven']
+          print('P1 runtime-epoch admission HOST scope verified; old regression remains expected failure')
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: p1-metadata-gate-${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
+          name: p1-metadata-epoch-${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
           path: ${{ runner.temp }}/p1-metadata-gate-${{ github.run_id }}-${{ github.run_attempt }}
           include-hidden-files: true
           if-no-files-found: warn
