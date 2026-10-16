@@ -44,7 +44,7 @@ jobs:
             'FixedDiagnosticExceptionScope diagnostic;',
             'IsFixedDiagnosticConstructor',
             'std::strcmp(method->name, ".ctor")',
-            'const TypeFailure* first = s_typeFailure.load(std::memory_order_acquire);',
+            'const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);',
           ]
           for item in expected:
             assert item in s, item
