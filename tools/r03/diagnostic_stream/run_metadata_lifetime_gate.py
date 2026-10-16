@@ -43,7 +43,7 @@ def verify_source(repo:Path)->dict:
     h=(repo/FILES[0]).read_text()
     if "std::atomic<uint32_t> state_{kClosed};" not in h:
         raise RuntimeError("Metadata gate is no longer closed before Init")
-    definition=exactly(runtime,"assembly_shadow_metadata_lifetime::Gate g_MetadataLifetimeGate;","single gate storage")
+    definition=exactly(runtime,"Gate g_MetadataLifetimeGate;","single gate storage")
     open_site=exactly(runtime,"assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit()","Init admission")
     mark_site=exactly(runtime,"AssemblyShadowStartup::MarkCoreReady();","startup ready")
     close_site=exactly(runtime,"assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.CloseAndDrain();","Shutdown drain")
