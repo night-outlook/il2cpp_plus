@@ -11,6 +11,7 @@ struct Il2CppClass;
 struct Il2CppType;
 
 namespace il2cpp { namespace vm {
+namespace assembly_shadow_bounded_classes { class Capture; }
 
 class AssemblyShadowVisibility
 {
@@ -31,6 +32,13 @@ public:
 
     // Calls the actual public API without creating managed reflection handles.
     static void CollectOrdinaryClasses(std::vector<Il2CppClass*>& classes, uint64_t& generation);
+    // P1 additive, inactive. Calls the same physical class iterator while
+    // g_MetadataLock is held and deep-copies V1 diagnostic names and flags.
+    // Caller must independently guarantee metadata shutdown quiescence.
+    // The original class-pointer vector enumerator remains unchanged.
+    static bool TryCaptureBoundedOrdinaryClasses(
+        assembly_shadow_bounded_classes::Capture& capture);
+
 };
 
 }}
