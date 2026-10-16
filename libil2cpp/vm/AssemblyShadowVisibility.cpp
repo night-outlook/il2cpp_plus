@@ -3,6 +3,7 @@
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadow.h"
 #include "AssemblyShadowBoundedOrdinaryClasses.h"
+#include "AssemblyShadowMetadataLifetime.h"
 #include "GlobalMetadataFileInternals.h"
 #include "MetadataLock.h"
 #include "il2cpp-api.h"
@@ -232,6 +233,11 @@ bool AssemblyShadowVisibility::TryCaptureBoundedOrdinaryClasses(
     // Caller MUST provide independently proven metadata/shutdown lifetime
     // and a preallocated single-owner Capture. g_MetadataLock alone does not
     // synchronize with Runtime::Shutdown or MetadataAllocCleanup.
+    // Acquire admission BEFORE the metadata lock. Shutdown closes admission
+    // and waits for this reader to release it before metadata cleanup.
+    assembly_shadow_metadata_lifetime::Gate::Reader reader(
+        assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate);
+    if(!reader)return capture.RejectOwnerUnavailable();
     os::FastAutoLock lock(&g_MetadataLock);
     const uint64_t before=AssemblyShadow::ActiveGeneration();
     const PrivateImage* visibilityBefore=s_privateImages.load(std::memory_order_acquire);
