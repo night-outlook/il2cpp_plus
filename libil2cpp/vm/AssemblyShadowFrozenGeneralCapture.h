@@ -173,6 +173,10 @@ public:
     Capture(Capture&&)=delete;
     Capture& operator=(Capture&&)=delete;
     CaptureError FirstError() const noexcept { return error_; }
+    // A caller composing independently captured sources must permanently
+    // invalidate this partial record if a late source/view check fails.
+    // Never expose a syntactically finished prefix as a complete snapshot.
+    bool RejectInvalidSource() noexcept { return Fail(CaptureError::InvalidInput); }
     bool Complete() const noexcept { return complete_ && error_==CaptureError::None && stage_==Stage::Complete; }
     size_t Bytes() const noexcept { return Complete() ? used_ : 0; }
     const char* Data() const noexcept { return Complete() ? bytes_ : nullptr; }
