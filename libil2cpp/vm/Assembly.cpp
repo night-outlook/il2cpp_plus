@@ -14,6 +14,7 @@
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "vm/AssemblyShadowName.h"
 #include "vm/AssemblyShadowBoundedPhysicalAssemblies.h"
+#include "vm/AssemblyShadowMetadataLifetime.h"
 #include "hybridclr/metadata/MetadataModule.h"
 #endif
 
@@ -290,6 +291,11 @@ namespace vm
         // the same assembly lock as CaptureShadowEnumeration. Do not retain
         // assemblies/images/names after the lock; only fixed owned bytes.
         // Class metadata, GC and engine shutdown lifetime are not covered.
+        // Close-and-drain admission precedes Runtime metadata cleanup; the
+        // assembly lock alone cannot protect against that teardown.
+        assembly_shadow_metadata_lifetime::Gate::Reader reader(
+            assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate);
+        if(!reader)return capture.RejectOwnerUnavailable();
         os::FastAutoLock lock(&s_assemblyLock);
         const uint64_t beforeGeneration=AssemblyShadow::ActiveGeneration();
         if(!capture.Begin())return false;
