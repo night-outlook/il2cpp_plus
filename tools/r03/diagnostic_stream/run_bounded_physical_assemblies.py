@@ -114,6 +114,7 @@ def main():
         "tools/r03/diagnostic_stream/fixtures/AssemblyShadowDiagnostics.h",
         "tools/r03/diagnostic_stream/allocation_probe.cpp",
         "tools/r03/diagnostic_stream/run_bounded_physical_assemblies.py",
+        "libil2cpp/vm/AssemblyShadowMetadataLifetime.h",
     ]
     sources=[repo/p for p in relative]
     expected={str(p):{"bytes":p.stat().st_size,"sha256":digest(p.read_bytes()),
