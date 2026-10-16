@@ -1,0 +1,4 @@
+Disposable GitHub Connector smoke test
+Repository: night-outlook/il2cpp_plus
+Active base SHA: f71691407bf9af5544d00dd54bff9e2e7eb77307
+Scope: not product code; not active branch
