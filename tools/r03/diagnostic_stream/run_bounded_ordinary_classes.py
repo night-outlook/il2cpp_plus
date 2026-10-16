@@ -109,6 +109,7 @@ def main():
         "tools/r03/diagnostic_stream/fixtures/LegacyAssemblyShadowDiagnostics.cpp",
         "tools/r03/diagnostic_stream/fixtures/AssemblyShadowDiagnostics.h",
         "tools/r03/diagnostic_stream/allocation_probe.cpp",
+        "libil2cpp/vm/AssemblyShadowMetadataLifetime.h",
     ]
     sources=[repo/p for p in relative]
     before={str(p):{"bytes":p.stat().st_size,"sha256":hash256(p.read_bytes()),
