@@ -6,6 +6,7 @@ on:
       - 'libil2cpp/vm/Assembly.cpp'
       - 'libil2cpp/vm/Assembly.h'
       - 'libil2cpp/vm/AssemblyShadowBoundedPhysicalAssemblies.h'
+      - 'libil2cpp/vm/AssemblyShadowMetadataLifetime.h'
       - 'tools/r03/diagnostic_stream/bounded_physical_assemblies_fixture.cpp'
       - 'tools/r03/diagnostic_stream/run_bounded_physical_assemblies.py'
       - '.github/workflows/r03-p1-physical-assemblies.yml'
@@ -34,6 +35,7 @@ jobs:
             libil2cpp/vm/Assembly.cpp
             libil2cpp/vm/Assembly.h
             libil2cpp/vm/AssemblyShadowBoundedPhysicalAssemblies.h
+            libil2cpp/vm/AssemblyShadowMetadataLifetime.h
             libil2cpp/vm/AssemblyShadowFrozenGeneralCapture.h
             libil2cpp/vm/AssemblyShadowDiagnostics.cpp
             libil2cpp/vm/AssemblyShadowDiagnostics.h
