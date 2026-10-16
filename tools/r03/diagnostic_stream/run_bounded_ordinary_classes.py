@@ -25,7 +25,8 @@ ORIGINAL_GIT_BLOB = "226b01273d3e30d190422c4c4c740c49a8d957f0"
 REQUIRED = (
     "os::FastAutoLock lock(&g_MetadataLock)",
     "il2cpp_class_for_each(CaptureOwnedOrdinaryClass,&capture)",
-    "capture.Seal(after,before==after)"
+    "visibilityBefore==visibilityAfter",
+    "capture.Seal(after,before==after && visibilityBefore==visibilityAfter)"
 )
 CALLBACK_REQUIRED = (
     "owned.Add(klass->image->assembly->aname.name,klass->namespaze,klass->name,",
