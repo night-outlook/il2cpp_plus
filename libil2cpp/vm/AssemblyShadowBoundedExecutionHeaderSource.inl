@@ -37,6 +37,7 @@ bool AssemblyShadow::TryCaptureBoundedExecutionHeader(
         return h;
     };
     const ActiveSnapshot* activeBefore=s_active.load(std::memory_order_acquire);
+    const AssemblyShadowState stateBefore=s_state.load(std::memory_order_acquire);
     const serial::Header before=readHeader();
     const uint64_t droppedBefore=r02::ObservationCounters::DroppedThreads();
     const bool saturatedBefore=r02::ObservationCounters::Saturated();
@@ -46,9 +47,16 @@ bool AssemblyShadow::TryCaptureBoundedExecutionHeader(
     const uint64_t droppedAfter=r02::ObservationCounters::DroppedThreads();
     const bool saturatedAfter=r02::ObservationCounters::Saturated();
     const ActiveSnapshot* activeAfter=s_active.load(std::memory_order_acquire);
-    // Fail if active pointer is replaced, even if generation values match.
-    // Equal samples do not exclude ABA, an unobserved intermediate update,
-    // or any class/R02/GC/counter activity after the second sample.
-    return capture.Seal(after,droppedAfter,saturatedAfter,
-                        activeBefore==activeAfter);
+    const AssemblyShadowState stateAfter=s_state.load(std::memory_order_acquire);
+    // Catch a state/active publication while one header itself was sampled.
+    // A bitwise-equal pair of headers is not sufficient when the second read
+    // observed stale state before a newer publication during counter reads.
+    const bool stableOwners=activeBefore==activeAfter &&
+       before.stateCode==static_cast<int32_t>(stateBefore) &&
+       after.stateCode==static_cast<int32_t>(stateAfter) &&
+       before.generation==(activeBefore?activeBefore->generation:0) &&
+       after.generation==(activeAfter?activeAfter->generation:0);
+    // Equal samples still exclude neither ABA, an unobserved intermediate
+    // update, nor any class/R02/GC/counter activity after this read.
+    return capture.Seal(after,droppedAfter,saturatedAfter,stableOwners);
 }
