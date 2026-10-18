@@ -9,6 +9,7 @@
 #include "AssemblyShadowBoundedTransactionInventory.h"
 #include "AssemblyShadowBoundedFirstUseCapture.h"
 #include "AssemblyShadowBoundedGeneralLive.h"
+#include "AssemblyShadowBoundedExecutionHeader.h"
 #include "AssemblyShadowObservationMemo.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
@@ -1723,6 +1724,9 @@ const Il2CppAssembly* AssemblyShadow::ResolveReferencedAssembly(const Il2CppAsse
     }
     return physicalProvider;
 }
+
+// Additive native scalar subset, never invoked by the original getter.
+#include "AssemblyShadowBoundedExecutionHeaderSource.inl"
 
 AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& json)
 {
