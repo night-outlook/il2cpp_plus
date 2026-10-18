@@ -105,6 +105,11 @@ def main():
     cxx=shutil.which(os.environ.get("CXX","clang++"))
     if not cxx:raise RuntimeError("Host compiler unavailable")
     out.mkdir(mode=0o700)
+    # The real scalar/diagnostic type headers require a native il2cpp-config.h.
+    # Host fixture uses a minimal explicit stub; this is NOT an SDK compile.
+    (out/"stubs").mkdir()
+    (out/"stubs/il2cpp-config.h").write_text(
+        "#pragma once\n// Host-only real serializer fixture; not Unity SDK.\n")
     commands=[];profiles={};failure=None
     try:
         for profile,extra in (("strict",["-O2"]),("sanitized",[
@@ -112,7 +117,7 @@ def main():
             exe=out/(profile+".exe")
             cmd=[cxx,"-std=c++17","-Wall","-Wextra","-Werror","-pedantic",
                  "-pthread","-DHYBRIDCLR_ASSEMBLY_SHADOW_DIAGNOSTICS_LEVEL=2",
-                 "-iquote",native/"libil2cpp/vm",*extra,
+                 "-iquote",native/"libil2cpp/vm","-iquote",out/"stubs",*extra,
                  native/FILES[12],native/"libil2cpp/vm/AssemblyShadowDiagnostics.cpp",
                  native/"tools/r03/diagnostic_stream/allocation_probe.cpp",
                  "-o",exe]
