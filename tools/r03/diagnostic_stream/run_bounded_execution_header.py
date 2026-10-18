@@ -81,7 +81,10 @@ def check(repo:Path):
     if source.count("bool AssemblyShadow::TryCaptureBoundedExecutionHeader(")!=1:
         raise ValueError("Ambiguous or missing exact production method")
     for needle in REQUIRED:
-        if source.count(needle)!=1:
+        expected=2 if needle in (
+          "r02::ObservationCounters::DroppedThreads()",
+          "r02::ObservationCounters::Saturated()") else 1
+        if source.count(needle)!=expected:
             raise ValueError("Production scalar acquisition ordering changed: "+needle)
     if fixture.count(MARKER)!=1:
         raise ValueError("Expected one marked real-source replacement slot")
