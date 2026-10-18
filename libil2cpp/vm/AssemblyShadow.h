@@ -20,6 +20,7 @@ namespace assembly_shadow_bounded_inventory { class Capture; }
 namespace assembly_shadow_bounded_first_use { class Capture; }
 namespace assembly_shadow_frozen_general { class Capture; }
 namespace assembly_shadow_bounded_general_live { struct Sources; class Scratch; struct Receipt; }
+namespace assembly_shadow_bounded_execution_header { class Capture; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -90,6 +91,12 @@ public:
         assembly_shadow_bounded_general_live::Scratch& scratch,
         assembly_shadow_frozen_general::Capture& output,
         assembly_shadow_bounded_general_live::Receipt& receipt);
+    // P1 INACTIVE execution header scalar capture. No class/type-key census,
+    // R02 diagnostic object or original Player getter change. Requires
+    // prewarmed counters and metadata reader admission; refutes only witnessed
+    // concurrent scalar changes, NOT a global VM epoch.
+    static bool TryCaptureBoundedExecutionHeader(
+        assembly_shadow_bounded_execution_header::Capture& capture);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();
