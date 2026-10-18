@@ -1,0 +1,80 @@
+name: R03 P1 real bounded R02 metrics staging
+on:
+  push:
+    branches: ['codex/p1-execution-scalars-20261018']
+    paths:
+      - 'libil2cpp/vm/AssemblyShadowBoundedR02Metrics.h'
+      - 'libil2cpp/vm/AssemblyShadowR02Diagnostics.h'
+      - 'libil2cpp/vm/AssemblyShadowObservationCounters.h'
+      - 'libil2cpp/vm/AssemblyShadowObservationMemo.h'
+      - 'libil2cpp/vm/AssemblyShadowDiagnosticsProfile.h'
+      - 'tools/r03/diagnostic_stream/bounded_r02_metrics_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/run_bounded_r02_metrics.py'
+      - '.github/workflows/r03-p1-bounded-r02-metrics-staging.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  original-r02-exact-snapshot:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: g++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadowBoundedR02Metrics.h
+            libil2cpp/vm/AssemblyShadowR02Diagnostics.h
+            libil2cpp/vm/AssemblyShadowObservationCounters.h
+            libil2cpp/vm/AssemblyShadowObservationMemo.h
+            libil2cpp/vm/AssemblyShadowDiagnosticsProfile.h
+            libil2cpp/vm/AssemblyShadowDiagnosticWriter.h
+            tools/r03/diagnostic_stream/bounded_r02_metrics_fixture.cpp
+            tools/r03/diagnostic_stream/allocation_probe.cpp
+            tools/r03/diagnostic_stream/run_bounded_r02_metrics.py
+          sparse-checkout-cone-mode: false
+      - name: Source-bound actual R02 counters and legacy byte-for-byte JSON
+        shell: bash
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/r03-bounded-r02-${{ github.run_id }}-${{ github.run_attempt }}"
+          python3 -B tools/r03/diagnostic_stream/run_bounded_r02_metrics.py \
+            --native "$GITHUB_WORKSPACE" --output "$root"
+          python3 -B - "$root/RESULT.json" <<'PY'
+          import json,sys
+          from pathlib import Path
+          r=json.loads(Path(sys.argv[1]).read_bytes())
+          assert r['result']=='PassedWithinInactiveHostScope'
+          assert r['sourcePreserved'] and r['productionObservationCountersNotMocked']
+          assert r['exactLegacySourceContract']['legacyFieldOrderAuthenticated']
+          assert len(r['exactLegacySourceContract']['metricNamePairs'])==22
+          assert set(r['profiles'])=={'strict','sanitized'}
+          assert all(len(p['groups'])==12 for p in r['profiles'].values())
+          assert len(r['commands'])==4 and all(c['exit']==0 for c in r['commands'])
+          for flag in ('fullVmEpochProven','realClassTypeKeysCaptured',
+                       'r02AllVmAtomicSnapshotProven','realGcRssOrShutdownQualified',
+                       'originalExecutionGetterReplaced','unitySdkCompiled',
+                       'playerRun','runtimeAcceptance'):
+              assert r[flag] is False,flag
+          print('R03 P1 actual R02 metrics hosted capture and JSON equality PASS only')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: p1-bounded-r02-${{ matrix.os }}-${{ matrix.cxx }}-${{ github.sha }}
+          path: ${{ runner.temp }}/r03-bounded-r02-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
