@@ -71,7 +71,7 @@ def contract(root:Path)->dict:
     )[:-1]:
         if s not in current:
             raise RuntimeError("Missing real source capture/serializer contract "+s)
-    if current.count("f.values[i]!=b.values[i]")!=1:
+    if current.count("a.values[i]!=b.values[i]")!=1:
         raise RuntimeError("Missing exact field-by-field second-sample equality")
     if current.count("f.droppedThreads=ObservationCounters::DroppedThreads();")!=2:
         raise RuntimeError("Expected final independent dropped-thread recheck")
