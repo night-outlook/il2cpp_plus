@@ -89,9 +89,11 @@ def provenance(repo:Path)->tuple[str,str]:
         raise RuntimeError("Source admission/ordering/conservative fence contract changed")
     if mock.count(MARKER)!=1:
         raise RuntimeError("Fixture insertion marker missing or repeated")
-    if mock.count('std::cout<<"GROUP:')!=len(GROUPS):
-        raise RuntimeError("Unexpected number of executable group markers")
-    if not all(("GROUP:"+name) in mock for name in GROUPS):
+    # SourceFailure/SourceChanged print their supplied group name once from
+    # shared helpers; the distinct names are checked at actual execution.
+    if mock.count('std::cout<<"GROUP:')!=8:
+        raise RuntimeError("Unexpected number of source group emitters")
+    if not all(name in mock for name in GROUPS):
         raise RuntimeError("Missing executable negative or ownership coverage")
     return code,mock.replace(MARKER,code)
 
