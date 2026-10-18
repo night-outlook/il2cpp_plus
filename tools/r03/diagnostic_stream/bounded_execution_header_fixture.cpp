@@ -241,7 +241,7 @@ void AdmissionClosedRejected()
     assert(!capture.Complete());
     std::cout<<"GROUP:closed-gate-no-source-admission\n";
 }
-}} // vm and local anonymous
+}}} // il2cpp::vm and local anonymous
 
 int main()
 {
