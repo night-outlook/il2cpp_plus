@@ -18,6 +18,8 @@ namespace il2cpp { namespace vm {
 namespace assembly_shadow_bounded_transaction { class Capture; }
 namespace assembly_shadow_bounded_inventory { class Capture; }
 namespace assembly_shadow_bounded_first_use { class Capture; }
+namespace assembly_shadow_frozen_general { class Capture; }
+namespace assembly_shadow_bounded_general_live { struct Sources; class Scratch; struct Receipt; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -79,6 +81,15 @@ public:
     // a separately reviewed metadata-lifetime name resolver exists.
     static bool TryCaptureBoundedFirstUses(
         assembly_shadow_bounded_first_use::Capture& capture);
+    // P1 INACTIVE live-source orchestrator: collect preallocated bounded
+    // component captures while one metadata admission ticket is held. Reject
+    // observed publication/usage changes across the collection AND composition.
+    // Equal fence samples are NOT a coherent all-VM epoch. No Player caller.
+    static bool TryCaptureBoundedGeneralLive(
+        const assembly_shadow_bounded_general_live::Sources& sources,
+        assembly_shadow_bounded_general_live::Scratch& scratch,
+        assembly_shadow_frozen_general::Capture& output,
+        assembly_shadow_bounded_general_live::Receipt& receipt);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();
