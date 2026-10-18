@@ -1,0 +1,81 @@
+name: R03 P1 execution scalar header staging source contract
+on:
+  push:
+    branches: ['codex/p1-execution-scalars-20261018']
+    paths:
+      - 'libil2cpp/vm/AssemblyShadow.cpp'
+      - 'libil2cpp/vm/AssemblyShadow.h'
+      - 'libil2cpp/vm/AssemblyShadowBoundedExecutionHeader.h'
+      - 'libil2cpp/vm/AssemblyShadowBoundedExecutionHeaderSource.inl'
+      - 'tools/r03/diagnostic_stream/bounded_execution_header_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/run_bounded_execution_header.py'
+      - '.github/workflows/r03-p1-bounded-execution-header-staging.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-execution-source:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: g++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadow.cpp
+            libil2cpp/vm/AssemblyShadow.h
+            libil2cpp/vm/AssemblyShadowBoundedExecutionHeader.h
+            libil2cpp/vm/AssemblyShadowBoundedExecutionHeaderSource.inl
+            libil2cpp/vm/AssemblyShadowExecutionSerializer.h
+            libil2cpp/vm/AssemblyShadowMetadataLifetime.h
+            libil2cpp/vm/AssemblyShadowDiagnostics.cpp
+            libil2cpp/vm/AssemblyShadowDiagnostics.h
+            libil2cpp/vm/AssemblyShadowDiagnosticWriter.h
+            libil2cpp/vm/AssemblyShadowTypes.h
+            tools/r03/diagnostic_stream/bounded_execution_header_fixture.cpp
+            tools/r03/diagnostic_stream/allocation_probe.cpp
+            tools/r03/diagnostic_stream/run_bounded_execution_header.py
+          sparse-checkout-cone-mode: false
+      - name: Compile the exact native scalar method and exercise source errors
+        shell: bash
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/r03-execution-header-${{ github.run_id }}-${{ github.run_attempt }}"
+          python3 -B tools/r03/diagnostic_stream/run_bounded_execution_header.py \
+            --native "$GITHUB_WORKSPACE" --output "$dir"
+          python3 -B - "$dir/RESULT.json" <<'PY'
+          import json,sys
+          from pathlib import Path
+          r=json.loads(Path(sys.argv[1]).read_bytes())
+          assert r['result']=='PassedWithinInactiveHostScope'
+          assert r['sourcePreserved'] and r['exactNativeSourceMethodCompiled']
+          assert r['realBoundedCaptureAndLegacyExecutionSerializerCompiled']
+          assert list(r['cases'])==['strict','sanitized']
+          assert all(len(v['groups'])==13 for v in r['cases'].values())
+          assert len(r['commands'])==4 and all(v['exit']==0 for v in r['commands'])
+          for k in ('realR02MetricSetCovered','realExecutionClassesOrTypeKeysCovered',
+                    'coherentVmEpochProven','officialUnitySdkCompile',
+                    'nativeLinkOrPlayerRun','runtimeAcceptance'):
+              assert r[k] is False,k
+          print("R03 P1 bounded execution scalar SOURCE HOST ONLY PASS")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: p1-execution-scalars-${{ matrix.os }}-${{ matrix.cxx }}-${{ github.sha }}
+          path: ${{ runner.temp }}/r03-execution-header-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
