@@ -7,6 +7,7 @@ on:
       - 'libil2cpp/vm/AssemblyShadow.cpp'
       - 'libil2cpp/vm/AssemblyShadow.h'
       - 'tools/r03/diagnostic_stream/run_bounded_execution_empty_live.py'
+      - 'tools/r03/diagnostic_stream/test_bounded_execution_empty_live_receipts.py'
       - 'tools/r03/diagnostic_stream/empty_live_fixture/**'
       - '.github/workflows/r03-p1-empty-execution-live-source.yml'
   workflow_dispatch:
@@ -33,6 +34,11 @@ jobs:
         with:
           persist-credentials: false
           path: native
+      - name: Native command failure and summary contracts (12 tests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B "$GITHUB_WORKSPACE/native/tools/r03/diagnostic_stream/test_bounded_execution_empty_live_receipts.py"
       - name: Exact inactive zero-class source method under controlled VM mocks
         shell: bash
         run: |

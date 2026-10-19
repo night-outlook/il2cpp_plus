@@ -87,7 +87,8 @@ def verify(native:Path)->str:
 
 def run(argv:list,output:Path,name:str,env:dict,receipts:list,timeout=180)->bytes:
     receipt={'name':name,'argv':list(map(str,argv)),'startedUnix':time.time(),
-             'status':'Failed','exit':None,'outputCompleteness':'Unavailable'}
+             'status':'Failed','exit':None,'outputCompleteness':'Unavailable',
+             'commandLifetimeUnverified':False,'timedOut':False,'interrupted':False}
     stdout=stderr=None
     try:
         p=subprocess.run(list(map(str,argv)),capture_output=True,timeout=timeout,env=env)
@@ -98,9 +99,16 @@ def run(argv:list,output:Path,name:str,env:dict,receipts:list,timeout=180)->byte
     except subprocess.TimeoutExpired as e:
         stdout,stderr=e.stdout,e.stderr
         receipt['exception']=repr(e);receipt['outputCompleteness']='CapturedPrefix'
-        receipt['commandLifetimeUnverified']=True
+        receipt['commandLifetimeUnverified']=True;receipt['timedOut']=True
     except OSError as e:
+        # Known spawn failure: no process was started by subprocess.run.
         receipt['exception']=repr(e)
+    except BaseException as e:
+        # KeyboardInterrupt or an unknown post-launch error cannot certify
+        # child/descendant termination. Preserve a fail-stop receipt.
+        receipt['exception']=repr(e)
+        receipt['commandLifetimeUnverified']=True
+        receipt['interrupted']=isinstance(e,KeyboardInterrupt)
     finally:
         for stream,raw in (('stdout',stdout),('stderr',stderr)):
             data=raw if raw is not None else b''
@@ -128,8 +136,8 @@ def main():
         or output in native.parents):raise RuntimeError('Fresh external canonical root required')
     before={name:identity(native/name) for name in SOURCES}
     code=verify(native)
-    cxx=shutil.which(os.environ.get('CXX','clang++'))
-    if not cxx:raise RuntimeError('C++17 host compiler unavailable')
+    # Create evidence before compiler discovery, so a missing executable has
+    # an accurate FailedOrIncomplete summary instead of no summary.
     output.mkdir(mode=0o700)
     stub=output/'host-only-includes';stub.mkdir()
     for p in (H,INL):(stub/Path(p).name).write_bytes((native/p).read_bytes())
@@ -139,7 +147,9 @@ def main():
              UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
     receipts=[];profiles={};firstError=None
     try:
-        version=run([cxx,'--version'],output,'compiler-version',env,receipts,30)
+        cxx=shutil.which(os.environ.get('CXX','clang++'))
+        if not cxx:raise RuntimeError('C++17 host compiler unavailable')
+        run([cxx,'--version'],output,'compiler-version',env,receipts,30)
         for profile,extra in (('strict',['-O2']),('sanitized',['-O1','-g','-fno-omit-frame-pointer','-fsanitize=address,undefined'])):
             exe=output/(profile+'.exe')
             run([cxx,'-std=c++17','-Wall','-Wextra','-Werror','-pedantic','-pthread',
@@ -150,23 +160,44 @@ def main():
             if matches!=GROUPS or not raw.rstrip().endswith('P1 EMPTY LIVE EXECUTION SOURCE HOST PASS'):
                 raise RuntimeError('Unexpected/duplicate/missing source test groups '+profile)
             profiles[profile]={'result':'PassedWithinHostScope','caseGroups':list(matches)}
-    except Exception as e:
+    except BaseException as e:
         firstError=repr(e)
     finally:
-        try:
-            after={name:identity(native/name) for name in SOURCES}
-            preserved=before==after
-        except Exception as e:
+        # Per-command uncertainty MUST propagate into the aggregate consumed
+        # by the outer fail-stop scheduler. Do not run source postflight when
+        # detached children may still exist. Never label the inventory sealed.
+        lifetimeUnverified=any(x['commandLifetimeUnverified'] for x in receipts)
+        postflightError=None
+        if lifetimeUnverified:
             after={};preserved=False
-            firstError=(firstError or '')+' source-postflight '+repr(e)
-        passed=(firstError is None and preserved and len(receipts)==5 and
+            postflightError='NotRun: command lifetime unverified'
+        else:
+            try:
+                after={name:identity(native/name) for name in SOURCES}
+                preserved=before==after
+            except Exception as e:
+                after={};preserved=False
+                postflightError=repr(e)
+                firstError=(firstError or '')+' source-postflight '+repr(e)
+        # Real successful source-bound compiler receipts, not declarations or
+        # a compiler-version probe, are the ONLY basis for this claim.
+        successfulCompiles=[name for name in ('strict-compile','sanitized-compile')
+            if any(row['name']==name and row['status']=='Passed' and row['exit']==0
+                   for row in receipts)]
+        sourceCompiled=(len(successfulCompiles)==2 and preserved)
+        passed=(firstError is None and preserved and not lifetimeUnverified and
+                sourceCompiled and len(receipts)==5 and
                 all(x['status']=='Passed' for x in receipts) and len(profiles)==2)
         result={'kind':'R03P1EmptyExecutionLiveSourceHost','schemaVersion':1,
                 'result':'PassedWithinInactiveZeroClassHostScope' if passed else 'FailedOrIncomplete',
                 'originalProductionMethodSha256':digest(code.encode()),
                 'sourceBefore':before,'sourceAfter':after,'sourcePreserved':preserved,
                 'commands':receipts,'profiles':profiles,'firstError':firstError,
-                'actualProductionHeaderAndMethodCompiled':True,
+                'commandLifetimeUnverified':lifetimeUnverified,
+                'descendantQuiescenceProven':False,
+                'postflightError':postflightError,
+                'successfulSourceCompileProfiles':successfulCompiles,
+                'actualProductionHeaderAndMethodCompiled':sourceCompiled,
                 'nativeVmInputsExplicitlyMocked':True,
                 'zeroClassSubsetOnly':True,'completeExecutionSource':False,
                 'coherentVmEpochProven':False,'classPointerOriginProven':False,
@@ -176,8 +207,11 @@ def main():
         manifest=[{'path':str(p.relative_to(output)),'bytes':p.stat().st_size,
                    'sha256':digest(p.read_bytes())} for p in sorted(output.rglob('*'))
                   if p.is_file() and not p.is_symlink()]
-        write(output/'MANIFEST.json',{'files':manifest})
+        write(output/'MANIFEST.json',{'files':manifest,
+              'inventoryScope':'UnsealedObservedFiles' if lifetimeUnverified else 'CompletedHostFiles',
+              'commandLifetimeUnverified':lifetimeUnverified})
     print(json.dumps({'result':result['result'],'profiles':list(profiles),
                       'testsPerProfile':len(GROUPS)}))
+    if any(x['interrupted'] for x in receipts):raise SystemExit(130)
     if not passed:raise SystemExit(1)
 if __name__=='__main__':main()
