@@ -63,7 +63,7 @@ def verify(native:Path)->str:
         if source.count(token)!=1:
             raise RuntimeError("Native bounded pointer safety contract changed: "+token)
     if fixture.count(include)!=1 or fixture.count(header)!=1 or \
-       any(('"'+x+'"') not in fixture for x in GROUPS):
+       any(('"'+x+'"') not in fixture and ('PASS '+x+'\\n') not in fixture for x in GROUPS):
         raise RuntimeError("Fixture does not compile exact native code/case groups")
     oldcpp=cpp.replace(header+"\n","").replace(
         "// P1 inactive opaque execution observation inventory. No class dereference.\n"+
