@@ -33,7 +33,9 @@ class CommandReceipts(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root=Path(self.tmp.name)
+        # macOS TemporaryDirectory may use a /var -> /private/var alias.
+        # Source admission requires a canonical absolute output path.
+        self.root=Path(self.tmp.name).resolve()
         self.mod=load()
         self.receipts=[]
 
@@ -96,7 +98,9 @@ class NativeSummaryContracts(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root=Path(self.tmp.name)
+        # macOS TemporaryDirectory may use a /var -> /private/var alias.
+        # Source admission requires a canonical absolute output path.
+        self.root=Path(self.tmp.name).resolve()
         self.output=self.root/'unused-native-output'
         self.mod=load()
         self.assertTrue(NATIVE.is_dir())
