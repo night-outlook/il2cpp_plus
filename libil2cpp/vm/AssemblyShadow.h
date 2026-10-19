@@ -21,6 +21,7 @@ namespace assembly_shadow_bounded_first_use { class Capture; }
 namespace assembly_shadow_frozen_general { class Capture; }
 namespace assembly_shadow_bounded_general_live { struct Sources; class Scratch; struct Receipt; }
 namespace assembly_shadow_bounded_execution_header { class Capture; }
+namespace assembly_shadow_bounded_execution_census { class Capture; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -97,6 +98,11 @@ public:
     // concurrent scalar changes, NOT a global VM epoch.
     static bool TryCaptureBoundedExecutionHeader(
         assembly_shadow_bounded_execution_header::Capture& capture);
+    // P1 INACTIVE: count/hash the bounded original R02 execution identity
+    // registry under its short lock, no Il2CppClass dereference or retention.
+    // Neither class names/type keys nor a global VM epoch are captured.
+    static bool TryCaptureBoundedExecutionCensus(
+        assembly_shadow_bounded_execution_census::Capture& capture);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();
