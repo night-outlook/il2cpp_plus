@@ -20,6 +20,8 @@ namespace assembly_shadow_bounded_inventory { class Capture; }
 namespace assembly_shadow_bounded_first_use { class Capture; }
 namespace assembly_shadow_frozen_general { class Capture; }
 namespace assembly_shadow_bounded_general_live { struct Sources; class Scratch; struct Receipt; }
+namespace assembly_shadow_frozen_execution_record { class Record; }
+namespace assembly_shadow_bounded_execution_empty_live { struct Receipt; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -90,6 +92,13 @@ public:
         assembly_shadow_bounded_general_live::Scratch& scratch,
         assembly_shadow_frozen_general::Capture& output,
         assembly_shadow_bounded_general_live::Receipt& receipt);
+    // P1 INACTIVE: actual R02 live source + zero observed class subset only.
+    // Nonempty classes and incomplete counters are refused before formatting.
+    // This does NOT establish full execution capture, class pointer provenance,
+    // VM-wide atomicity, or original Player getter acceptance.
+    static bool TryCaptureBoundedEmptyExecutionLive(
+        assembly_shadow_frozen_execution_record::Record& output,
+        assembly_shadow_bounded_execution_empty_live::Receipt& receipt);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();

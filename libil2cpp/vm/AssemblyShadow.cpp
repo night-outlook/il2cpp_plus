@@ -9,6 +9,7 @@
 #include "AssemblyShadowBoundedTransactionInventory.h"
 #include "AssemblyShadowBoundedFirstUseCapture.h"
 #include "AssemblyShadowBoundedGeneralLive.h"
+#include "AssemblyShadowBoundedExecutionEmptyLive.h"
 #include "AssemblyShadowObservationMemo.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
@@ -1558,6 +1559,8 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
 // Single native TU owns the live VM globals and UsageLock. The additive
 // adapter is inactive until an independently reviewed caller is connected.
 #include "AssemblyShadowBoundedGeneralLiveSource.inl"
+// P1 inactive execution R02 source; exact bounded zero-class subset only.
+#include "AssemblyShadowBoundedExecutionEmptyLiveSource.inl"
 
 AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
 {
