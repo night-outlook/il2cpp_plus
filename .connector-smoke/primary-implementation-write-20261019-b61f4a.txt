@@ -1,0 +1,4 @@
+Disposable connector transport test
+Repository night-outlook/il2cpp_plus
+Base codex/assembly-shadow-r01b-h1 @ d8a1df3007e93aeb65dd9fe97ab96b4771de8f17
+No project code or validation evidence.
