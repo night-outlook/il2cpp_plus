@@ -1,0 +1,6 @@
+GitHub Connector write smoke test only.
+Repository: night-outlook/il2cpp_plus
+Base: codex/assembly-shadow-r01b-h1
+Base SHA: 5667e3712f49e4b38c7dd7359e57f81e344626da
+Disposable branch: codex/owner-connector-smoke-20261019-346e8a
+This file is not product or validation evidence.
