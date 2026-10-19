@@ -98,24 +98,52 @@ def provenance(repo:Path)->tuple[str,str]:
     return code,mock.replace(MARKER,code)
 
 def run(argv:list,root:Path,name:str,commands:list)->bytes:
+    # A timeout's bytes are a captured PREFIX, never a complete diagnostic.
+    # subprocess.run controls its direct child, not every descendant/session.
+    # Persist that distinction before propagating any command failure.
     began=time.time()
     env=dict(os.environ)
     env["ASAN_OPTIONS"]=("abort_on_error=1:detect_leaks=0" if sys.platform=="darwin"
                          else "abort_on_error=1:detect_leaks=1")
     env["UBSAN_OPTIONS"]="halt_on_error=1:print_stacktrace=1"
-    result=subprocess.run([str(x) for x in argv],env=env,capture_output=True,timeout=180)
-    (root/(name+".stdout.bin")).write_bytes(result.stdout)
-    (root/(name+".stderr.bin")).write_bytes(result.stderr)
-    receipt={"name":name,"argv":list(map(str,argv)),
-             "startedUnix":began,"finishedUnix":time.time(),
-             "exit":result.returncode,
-             "stdoutSha256":sha(result.stdout),
-             "stderrSha256":sha(result.stderr)}
-    commands.append(receipt)
-    (root/(name+".command.json")).write_text(json.dumps(receipt,indent=2)+"\n")
-    if result.returncode!=0:
-        raise RuntimeError(f"{name}: exit={result.returncode}; inspect raw output")
-    return result.stdout
+    receipt={"name":name,"argv":list(map(str,argv)),"startedUnix":began,
+             "exit":None,"timedOut":False,"interrupted":False,
+             "outputCompleteness":"Unavailable",
+             "commandLifetimeUnverified":False,"descendantQuiescenceProven":False}
+    stdout=stderr=None
+    try:
+        result=subprocess.run([str(x) for x in argv],env=env,capture_output=True,timeout=180)
+        stdout,stderr=result.stdout,result.stderr
+        receipt.update(exit=result.returncode,outputCompleteness="CompleteDirectChildStreams")
+    except subprocess.TimeoutExpired as error:
+        stdout,stderr=error.stdout,error.stderr
+        receipt.update(timedOut=True,outputCompleteness="CapturedPrefix",
+                       commandLifetimeUnverified=True,exception=repr(error))
+        raise
+    except KeyboardInterrupt as error:
+        receipt.update(interrupted=True,commandLifetimeUnverified=True,
+                       exception=type(error).__name__)
+        raise
+    except BaseException as error:
+        receipt["exception"]=repr(error)
+        # Unknown execution outcome must not be treated as a completed child.
+        receipt["commandLifetimeUnverified"]=not isinstance(error,OSError)
+        raise
+    finally:
+        for stream,data in (("stdout",stdout),("stderr",stderr)):
+            receipt[stream+"Available"]=data is not None
+            if data is None:data=b""
+            if not isinstance(data,bytes):
+                raise TypeError("Command capture must return bytes, not decoded text")
+            (root/(name+"."+stream+".bin")).write_bytes(data)
+            receipt[stream+"Sha256"]=sha(data)
+            receipt[stream+"CapturedBytes"]=len(data)
+        receipt["finishedUnix"]=time.time()
+        commands.append(receipt)
+        (root/(name+".command.json")).write_text(json.dumps(receipt,indent=2)+"\n")
+    if receipt["exit"]!=0:
+        raise RuntimeError(f"{name}: exit={receipt['exit']}; inspect raw output")
+    return stdout
 
 def main()->None:
     p=argparse.ArgumentParser(description=__doc__)
@@ -140,10 +168,10 @@ def main()->None:
         "#pragma once\n// HOST source mock, no Unity SDK.\n")
     (output/"actual-source.inl").write_text(actual)
     (output/"mock-execution.cpp").write_text(assembled)
-    cxx=shutil.which(os.environ.get("CXX","clang++"))
-    if not cxx:raise RuntimeError("Missing C++ compiler")
     commands=[];profiles={};firstError=None
     try:
+        cxx=shutil.which(os.environ.get("CXX","clang++"))
+        if not cxx:raise RuntimeError("Missing C++ compiler")
         for profile,extra in (("strict",["-O2"]),("sanitized",[
           "-O1","-g","-fno-omit-frame-pointer","-fsanitize=address,undefined"])):
             exe=output/(profile+".exe")
@@ -162,25 +190,38 @@ def main()->None:
                     "P1 REAL GENERAL LIVE SOURCE METHOD HOST PASS"):
                 raise RuntimeError(f"{profile}: missing/duplicate/changed case groups")
             profiles[profile]={"result":"PassedWithinHostScope","caseGroups":list(groups)}
-    except Exception as error:
+    except BaseException as error:
         firstError=repr(error)
         raise
     finally:
-        after={name:{"bytes":len((native/name).read_bytes()),
-                     "sha256":sha((native/name).read_bytes()),
-                     "gitBlob":blob((native/name).read_bytes())} for name in FILES}
-        preserved=before==after
-        passed=(preserved and list(profiles)==["strict","sanitized"]
+        postflightError=None
+        after={}
+        try:
+            after={name:{"bytes":len((native/name).read_bytes()),
+                         "sha256":sha((native/name).read_bytes()),
+                         "gitBlob":blob((native/name).read_bytes())} for name in FILES}
+        except Exception as error:
+            postflightError=repr(error)
+        lifetimeUnknown=any(c.get("commandLifetimeUnverified",False) for c in commands)
+        preserved=postflightError is None and before==after and not lifetimeUnknown
+        compiled=(len([c for c in commands if c["name"].endswith("-compile") and c["exit"]==0])==2)
+        passed=(firstError is None and preserved and list(profiles)==["strict","sanitized"]
                 and len(commands)==4 and all(c["exit"]==0 for c in commands))
         record={
            "kind":"R03P1ActualBoundedGeneralLiveSourceHost",
            "result":"PassedWithinInactiveSourceHostScope" if passed else "FailedOrIncomplete",
            "sourceMethodSha256":sha(actual.encode()),
-           "compiledExactProductionSource":True,
-           "compiledActualBoundedSourcesAndSerializer":True,
+           "compiledExactProductionSource":compiled,
+           "compiledActualBoundedSourcesAndSerializer":compiled,
+           "sourcePrepared":True,
+           "commandLifetimeUnverified":lifetimeUnknown,
+           "descendantQuiescenceProven":False,
+           "postflightError":postflightError,
            "caseGroups":profiles,
            "commands":commands,
-           "sourceBefore":before,"sourcePreserved":preserved,
+           "sourceBefore":before,"sourceAfter":after,
+           "observedSourceHashesEqual":postflightError is None and before==after,
+           "sourcePreserved":preserved,
            "firstError":firstError,
            "realEngineMetadataGate":False,"coherentVmEpochProven":False,
            "nativeClassPointerOriginProven":False,
@@ -195,7 +236,9 @@ def main()->None:
                    "bytes":p.stat().st_size,"sha256":sha(p.read_bytes())}
                   for p in sorted(output.rglob("*"))
                   if p.is_file() and not p.is_symlink()]
-        (output/"MANIFEST.json").write_text(json.dumps({"files":manifest},indent=2)+"\n")
+        (output/"MANIFEST.json").write_text(json.dumps({"files":manifest,
+            "inventoryScope":"UnsealedObservedFiles" if lifetimeUnknown else "CompletedRunnerFiles",
+            "commandLifetimeUnverified":lifetimeUnknown},indent=2)+"\n")
     print(json.dumps({"result":record["result"],
                      "profiles":list(profiles),
                      "groupsPerProfile":len(GROUPS)}))

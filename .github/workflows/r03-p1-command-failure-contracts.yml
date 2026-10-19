@@ -1,0 +1,83 @@
+name: R03 P1 command failure receipt contracts
+on:
+  push:
+    branches: ['codex/assembly-shadow-r01b-h1']
+    paths:
+      - 'tools/r03/diagnostic_stream/test_bounded_general_live_command.py'
+      - 'tools/r03/diagnostic_stream/run_bounded_general_live.py'
+      - '.github/workflows/r03-p1-command-failure-contracts.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  failure-contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/r03/diagnostic_stream/test_bounded_general_live_command.py
+            tools/r03/diagnostic_stream/run_bounded_general_live.py
+          sparse-checkout-cone-mode: false
+      - name: Real Python command and mocked source/SDK contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B - "$RUNNER_TEMP/p1-command-failures-${{ github.run_id }}-${{ github.run_attempt }}" <<'PYTHON'
+          import hashlib,json,os,platform,re,subprocess,sys,time
+          from pathlib import Path
+          root=Path(sys.argv[1]);root.mkdir(mode=0o700)
+          sources=[Path('tools/r03/diagnostic_stream/test_bounded_general_live_command.py'),Path('tools/r03/diagnostic_stream/run_bounded_general_live.py')]
+          def hashes():
+              return {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
+          before=hashes()
+          result={'kind':'R03P1CommandFailureHostCI','result':'FailedOrIncomplete',
+              'sourceCommit':os.environ['GITHUB_SHA'],'startedUnix':time.time(),
+              'platform':platform.platform(),'python':sys.version,'expectedTests':10,
+              'sourceBefore':before,'sourcePreserved':False,'commandLifetimeUnverified':False,
+              'realPythonChildTests':True,'gitSdkVmChildrenMocked':True,
+              'officialUnitySdkCompiled':False,'nativeCompilerExecuted':False,'runtimeAcceptance':False}
+          stdout=stderr=None
+          try:
+              p=subprocess.run([sys.executable,'-B','tools/r03/diagnostic_stream/test_bounded_general_live_command.py'],capture_output=True,timeout=180)
+              stdout,stderr=p.stdout,p.stderr
+              text=stderr.decode('utf-8',errors='replace')
+              match=re.search(r'Ran (\d+) tests? in ',text)
+              count=int(match.group(1)) if match else 0
+              after=hashes()
+              result.update(exit=p.returncode,tests=count,sourceAfter=after,sourcePreserved=before==after)
+              if p.returncode==0 and count==10 and text.rstrip().endswith('OK') and before==after:
+                  result['result']='PassedWithinHostScope'
+          except subprocess.TimeoutExpired as e:
+              stdout,stderr=e.stdout,e.stderr
+              result.update(exception=repr(e),outputCompleteness='CapturedPrefix',commandLifetimeUnverified=True)
+          except BaseException as e:
+              result.update(exception=repr(e),commandLifetimeUnverified=not isinstance(e,OSError))
+              raise
+          finally:
+              for name,data in [('stdout',stdout),('stderr',stderr)]:
+                  result[name+'Available']=data is not None
+                  raw=data if data is not None else b''
+                  (root/(name+'.bin')).write_bytes(raw)
+                  result[name+'Sha256']=hashlib.sha256(raw).hexdigest()
+              result['finishedUnix']=time.time()
+              (root/'RESULT.json').write_text(json.dumps(result,indent=2)+'\n')
+              files=[{'path':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+                     for p in sorted(root.iterdir()) if p.is_file()]
+              (root/'MANIFEST.json').write_text(json.dumps({'files':files,
+                  'commandLifetimeUnverified':result['commandLifetimeUnverified']},indent=2)+'\n')
+          if result['result']!='PassedWithinHostScope':raise SystemExit(1)
+          PYTHON
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: p1-command-failures-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/p1-command-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
