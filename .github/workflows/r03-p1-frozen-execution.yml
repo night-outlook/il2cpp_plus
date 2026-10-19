@@ -40,6 +40,11 @@ jobs:
             Tools/AssemblyShadow/R03IR/bounded_v2
             Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/N_SNAPSHOT_PUBLICATION_91b7/checks
             Docs/AssemblyShadow/History/M07R/R03/IR_Remediation/SNAP01_BOUNDED_DESIGN_f8a2/reference
+      - name: Quoted VM include-path regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B "$GITHUB_WORKSPACE/native/tools/r03/diagnostic_stream/test_frozen_execution_include_path.py"
       - name: Typed R02 source and complete owned execution record
         shell: bash
         run: |

@@ -153,7 +153,9 @@ def main() -> None:
                 extra = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer'] if sanitized else []
                 argv = [compiler, '-std=c++17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-pedantic', '-pthread',
                         '-DHYBRIDCLR_ASSEMBLY_SHADOW_DIAGNOSTICS_LEVEL='+str(level),
-                        '-I'+str(native/'libil2cpp/vm'),
+                        # Restrict vm include lookup to quoted headers. An -I entry
+                        # shadows system <string.h> with vm/string.h on macOS libc++.
+                        '-iquote', str(native/'libil2cpp/vm'),
                         '-DFROZEN_EXECUTION_REFERENCE_HEADER=\"'+str(output/'reference-AssemblyShadowExecutionSerializer.h')+'\"',
                         '-DFROZEN_R02_REFERENCE_HEADER=\"'+str(output/'reference-AssemblyShadowR02Diagnostics.h')+'\"',
                         str(fixture), str(allocations), *extra, '-o', str(executable)]
