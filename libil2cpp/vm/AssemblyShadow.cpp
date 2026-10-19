@@ -11,6 +11,7 @@
 #include "AssemblyShadowBoundedGeneralLive.h"
 #include "AssemblyShadowBoundedExecutionEmptyLive.h"
 #include "AssemblyShadowObservationMemo.h"
+#include "AssemblyShadowOpaqueExecutionInventory.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -1561,6 +1562,8 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
 #include "AssemblyShadowBoundedGeneralLiveSource.inl"
 // P1 inactive execution R02 source; exact bounded zero-class subset only.
 #include "AssemblyShadowBoundedExecutionEmptyLiveSource.inl"
+// P1 inactive opaque execution observation inventory. No class dereference.
+#include "AssemblyShadowOpaqueExecutionInventorySource.inl"
 
 AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
 {

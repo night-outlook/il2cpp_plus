@@ -22,6 +22,7 @@ namespace assembly_shadow_frozen_general { class Capture; }
 namespace assembly_shadow_bounded_general_live { struct Sources; class Scratch; struct Receipt; }
 namespace assembly_shadow_frozen_execution_record { class Record; }
 namespace assembly_shadow_bounded_execution_empty_live { struct Receipt; }
+namespace assembly_shadow_opaque_execution { class Scratch; struct Receipt; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -99,6 +100,11 @@ public:
     static bool TryCaptureBoundedEmptyExecutionLive(
         assembly_shadow_frozen_execution_record::Record& output,
         assembly_shadow_bounded_execution_empty_live::Receipt& receipt);
+    // P1 INACTIVE: observable opaque class identities without metadata dereference.
+    // Never returns pointers, type keys, JSON, or a VM-coherence claim.
+    static bool TryCaptureOpaqueExecutionInventory(
+        assembly_shadow_opaque_execution::Scratch& scratch,
+        assembly_shadow_opaque_execution::Receipt& receipt);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();

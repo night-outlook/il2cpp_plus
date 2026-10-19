@@ -1,0 +1,50 @@
+name: R03 P1 inactive opaque execution observation inventory
+on:
+  push:
+    branches: ['codex/assembly-shadow-r01b-h1']
+    paths:
+      - 'libil2cpp/vm/AssemblyShadowOpaqueExecutionInventory*'
+      - 'libil2cpp/vm/AssemblyShadow.cpp'
+      - 'libil2cpp/vm/AssemblyShadow.h'
+      - 'tools/r03/diagnostic_stream/opaque_inventory_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/run_opaque_execution_inventory.py'
+      - '.github/workflows/r03-p1-opaque-execution-source.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  opaque-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: g++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 16
+    env:
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: native
+      - name: Exact opaque production source under controlled VM mocks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B "$GITHUB_WORKSPACE/native/tools/r03/diagnostic_stream/run_opaque_execution_inventory.py" \
+            --native "$GITHUB_WORKSPACE/native" \
+            --output "$RUNNER_TEMP/p1-opaque-${{ github.run_id }}-${{ github.run_attempt }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: p1-opaque-${{ matrix.os }}-${{ matrix.cxx }}-${{ github.sha }}
+          path: ${{ runner.temp }}/p1-opaque-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
