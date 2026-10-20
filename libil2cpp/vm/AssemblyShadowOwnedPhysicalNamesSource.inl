@@ -11,6 +11,7 @@ bool AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(
     auto reject=[&](owned::Error why)->bool {
         if(receipt.error==owned::Error::None)receipt.error=why;
         receipt.namesCopiedFromMatchedEnumeratorCallbacks=false;
+        receipt.allRowsBoundToObservedRegistry=false;
         names.Revoke();
         membershipScratch.Scrub();
         return false;
@@ -53,14 +54,25 @@ bool AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(
                 context.names->RejectInvalidSource();
                 return;
             }
-            context.names->Add(klass->image->assembly->aname.name,
+            // Bind copied bytes to the short-lived observed registry slot and
+            // original registration source, never to a retained class pointer.
+            size_t registeredSlot=physical::kSlots;
+            auto registeredSource=assembly_shadow_execution_witness::Source::None;
+            if(!context.membership->TryObservedRegistrationBinding(
+                   klass,registeredSlot,registeredSource))
+            {
+                context.names->RejectInvalidBinding();
+                return;
+            }
+            context.names->Add(registeredSlot,registeredSource,
+                               klass->image->assembly->aname.name,
                                klass->namespaze,klass->name);
         },&context);
     }
     receipt.matchedClasses=membershipScratch.Matched();
     if(!membershipScratch.EnumeratorHealthy())
         return reject(owned::Error::EnumeratorIncomplete);
-    if(!names.CollectingHealthy())return reject(owned::Error::NameCaptureFailed);
+    if(!names.CollectingHealthy())return reject(names.FirstError());
     bool sameRegistry=false;
     {
         ExecutionObservationLock lock;
@@ -80,6 +92,8 @@ bool AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(
     membershipScratch.Scrub();
     receipt.ownedRows=names.Count();
     receipt.ownedTextBytes=names.TextBytes();
+    receipt.boundRegistrationRows=names.Count();
+    receipt.allRowsBoundToObservedRegistry=true;
     // This is an owned *physical display name* subset, not an execution TypeKey.
     receipt.namesCopiedFromMatchedEnumeratorCallbacks=true;
     return true;

@@ -2,42 +2,58 @@
 // R03 P1 INACTIVE: names copied synchronously from classes emitted by the
 // physical enumerator while g_MetadataLock is held. This owns TEXT ONLY.
 // No Il2CppClass*, Il2CppImage* or assembly pointer survives a callback.
-// A physical name is NOT a canonical execution TypeKey, safe pointer lifetime,
+// A physical name/registry-slot binding is NOT a canonical execution TypeKey, safe pointer lifetime,
 // VM-wide coherent epoch or Player/runtime qualification.
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include "AssemblyShadowExecutionRegistrationWitness.h"
 
 namespace il2cpp { namespace vm { namespace assembly_shadow_owned_physical_names {
 
 static constexpr size_t kMaximumRows=1024;
 static constexpr size_t kMaximumTextBytes=256u*1024u;
 static constexpr size_t kMaximumFieldBytes=4096;
+static constexpr size_t kRegistrationSlots=assembly_shadow_execution_witness::kSlots;
 
 enum class Error:uint8_t {
     None, ReusedCapture, BadPhase, MissingName, AliasedSource,
     FieldTooLong, TextCapacity, TooManyRows, CountMismatch,
     AdmissionUnavailable, RegistryInvalid, EnumeratorIncomplete,
-    SourceChanged, NameCaptureFailed
+    SourceChanged, NameCaptureFailed, InvalidRegistrationBinding,
+    DuplicateRegistrationBinding
 };
 struct TextView { const char* data=nullptr; size_t bytes=0; };
 struct RowView {
     TextView physicalAssemblyName{}, nameSpace{}, simpleName{};
+    size_t registrySlot=kRegistrationSlots;
+    assembly_shadow_execution_witness::Source registrationSource=
+        assembly_shadow_execution_witness::Source::None;
 };
 class Capture final {
     struct Span {uint32_t offset=0,bytes=0;};
-    struct Row {Span assembly{},nameSpace{},simpleName{};};
+    struct Row {
+        Span assembly{},nameSpace{},simpleName{};
+        uint16_t registrySlot=static_cast<uint16_t>(kRegistrationSlots);
+        assembly_shadow_execution_witness::Source registrationSource=
+            assembly_shadow_execution_witness::Source::None;
+    };
     enum class Stage:uint8_t {New, Collecting, Sealed, Failed};
     std::array<Row,kMaximumRows> rows_{};
     std::array<char,kMaximumTextBytes> text_{};
+    std::array<uint8_t,kRegistrationSlots> usedRegistrationSlots_{};
     uint32_t used_=0,count_=0;
     Stage stage_=Stage::New;
     Error firstError_=Error::None;
     bool Fail(Error error) noexcept {
         if(firstError_==Error::None)firstError_=error;
         stage_=Stage::Failed;
+        text_.fill(0);
+        rows_.fill(Row{});
+        usedRegistrationSlots_.fill(0);
+        used_=count_=0;
         return false;
     }
     bool Append(const char* source,Span& result) noexcept {
@@ -77,15 +93,25 @@ public:
         stage_=Stage::Collecting;
         return true;
     }
-    bool Add(const char* assembly,const char* nameSpace,const char* simpleName) noexcept {
+    bool Add(size_t registrationSlot,
+             assembly_shadow_execution_witness::Source registrationSource,
+             const char* assembly,const char* nameSpace,const char* simpleName) noexcept {
         if(stage_!=Stage::Collecting || firstError_!=Error::None)
             return Fail(Error::BadPhase);
         if(count_==kMaximumRows)return Fail(Error::TooManyRows);
+        if(registrationSlot>=kRegistrationSlots ||
+           (registrationSource!=assembly_shadow_execution_witness::Source::Candidate &&
+            registrationSource!=assembly_shadow_execution_witness::Source::ActiveShadow))
+            return Fail(Error::InvalidRegistrationBinding);
+        if(usedRegistrationSlots_[registrationSlot])return Fail(Error::DuplicateRegistrationBinding);
         if(!assembly||!simpleName)return Fail(Error::MissingName);
         Row& row=rows_[count_];
         if(!Append(assembly,row.assembly) ||
            !Append(nameSpace?nameSpace:"",row.nameSpace) ||
            !Append(simpleName,row.simpleName))return false;
+        row.registrySlot=static_cast<uint16_t>(registrationSlot);
+        row.registrationSource=registrationSource;
+        usedRegistrationSlots_[registrationSlot]=1;
         ++count_;
         return true;
     }
@@ -108,9 +134,12 @@ public:
         out.physicalAssemblyName={text_.data()+row.assembly.offset,row.assembly.bytes};
         out.nameSpace={text_.data()+row.nameSpace.offset,row.nameSpace.bytes};
         out.simpleName={text_.data()+row.simpleName.offset,row.simpleName.bytes};
+        out.registrySlot=row.registrySlot;
+        out.registrationSource=row.registrationSource;
         return true;
     }
     bool RejectInvalidSource() noexcept{return Fail(Error::MissingName);}
+    bool RejectInvalidBinding() noexcept{return Fail(Error::InvalidRegistrationBinding);}
     void Revoke() noexcept {
         if(stage_!=Stage::Sealed && firstError_==Error::None)
             firstError_=Error::NameCaptureFailed;
@@ -118,14 +147,17 @@ public:
         // Do not expose partial names after a failed VM enumeration.
         text_.fill(0);
         rows_.fill(Row{});
+        usedRegistrationSlots_.fill(0);
         used_=count_=0;
     }
 };
 struct Receipt {
     Error error=Error::None;
     size_t observedClasses=0,matchedClasses=0,ownedRows=0,ownedTextBytes=0;
+    size_t boundRegistrationRows=0;
     uint64_t registryRevisionBefore=0,registryRevisionAfter=0;
     bool namesCopiedFromMatchedEnumeratorCallbacks=false;
+    bool allRowsBoundToObservedRegistry=false;
     bool classPointerOwnershipProven=false;
     bool metadataPointerLifetimeProven=false;
     bool completeExecutionTypeKeys=false;

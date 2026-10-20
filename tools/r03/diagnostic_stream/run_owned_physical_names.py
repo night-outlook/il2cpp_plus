@@ -30,12 +30,16 @@ SOURCES=(HEADER,METHOD,PHYSICAL,CPP,API,FIXTURE,RUNNER,
 BASE_CPP_BLOB='46240c58f83f1ce1a048266ed3bf421af4197567'
 BASE_API_BLOB='55b1be3a134b41652fd88e24d8d548e5ca98126e'
 BASE_PHYSICAL_BLOB='375d9225bfbb7be693b15ffc7fc7203b48e45d92'
+REGISTRATION_BINDING_BLOCK="    // Read only the opaque slot and registered source of a class ALREADY\n    // identified as FirstMatch in the synchronous physical enumeration.\n    // No class metadata is touched and no pointer is returned. The slot is\n    // scoped to this registry snapshot, not a persistent class identity.\n    bool TryObservedRegistrationBinding(const void* address,size_t& slotOut,\n        assembly_shadow_execution_witness::Source& sourceOut) const noexcept\n    {\n        slotOut=kSlots;\n        sourceOut=assembly_shadow_execution_witness::Source::None;\n        if(!captured_||badEnumeration_||!address)return false;\n        size_t slot=(reinterpret_cast<uintptr_t>(address)>>3)%kSlots;\n        for(size_t probe=0;probe<kSlots;++probe)\n        {\n            const void* current=identities_[slot];\n            if(!current)return false;\n            if(current==address)\n            {\n                if(!seen_[slot])return false;\n                const auto role=static_cast<assembly_shadow_execution_witness::Source>(roles_[slot]);\n                if(role!=assembly_shadow_execution_witness::Source::Candidate &&\n                   role!=assembly_shadow_execution_witness::Source::ActiveShadow)\n                    return false;\n                slotOut=slot;\n                sourceOut=role;\n                return true;\n            }\n            slot=(slot+1)%kSlots;\n        }\n        return false;\n    }\n"
 GROUPS=(
  'empty-physical-owned','one-physical-owned','two-roles-owned',
  'duplicate-enumerated-owned-once',
  'unrelated-malformed-class-not-dereferenced',
  'null-namespace-copied-as-empty',
  'owned-bytes-survive-vm-change',
+ 'reverse-enumeration-role-binding',
+ 'same-display-name-distinct-binding',
+ 'hash-collision-binding',
  'missing-physical-row-refused',
  'bad-matched-image-refused',
  'bad-matched-assembly-refused',
@@ -48,6 +52,11 @@ GROUPS=(
  'active-changed-after-iteration',
  'closed-admission-refused',
  'unknown-callback-null-refused',
+ 'binding-not-matched-refused',
+ 'unobserved-binding-refused',
+ 'invalid-slot-refused-and-scrubbed',
+ 'invalid-role-refused-and-scrubbed',
+ 'duplicate-registration-binding-refused-and-scrubbed',
  'reused-owned-capture-refused',
 )
 def sha(raw:bytes)->str:return hashlib.sha256(raw).hexdigest()
@@ -63,6 +72,7 @@ def verify(native:Path)->str:
     physical=(native/PHYSICAL).read_text()
     method=(native/METHOD).read_text()
     fixture=(native/FIXTURE).read_text()
+    header=(native/HEADER).read_text()
     include='#include "AssemblyShadowOwnedPhysicalNames.h"'
     inline='#include "AssemblyShadowOwnedPhysicalNamesSource.inl"'
     forward='namespace assembly_shadow_owned_physical_names { class Capture; struct Receipt; }\n'
@@ -85,6 +95,8 @@ def verify(native:Path)->str:
               'il2cpp_class_for_each(',
               'ObserveEnumeratedOwned(klass)',
               'context.names->Add(',
+              'TryObservedRegistrationBinding(',
+              'receipt.allRowsBoundToObservedRegistry=true;',
               'membershipScratch.SameRegistry(',
               'names.Seal(membershipScratch.Observed())',
               'receipt.namesCopiedFromMatchedEnumeratorCallbacks=true;')
@@ -92,6 +104,10 @@ def verify(native:Path)->str:
         if method.count(token)!=1:raise RuntimeError('Actual owned VM source contract changed: '+token)
     if fixture.count(include)!=1 or fixture.count(inline)!=1 or any(('"'+n+'"') not in fixture for n in GROUPS):
         raise RuntimeError('Host fixture does not compile actual source or all named tests')
+    if physical.count('enum class ObservationEvent:uint8_t')!=1 or physical.count('ObserveEnumeratedOwned(')!=2 or physical.count(REGISTRATION_BINDING_BLOCK)!=1:
+        raise RuntimeError('Physical iterator slot/source witness contract changed')
+    if header.count('bool Add(size_t registrationSlot,')!=1 or header.count('bool allRowsBoundToObservedRegistry=false;')!=1 or header.count('usedRegistrationSlots_')<3:
+        raise RuntimeError('Owned registration binding storage/admission contract changed')
     if physical.count('enum class ObservationEvent:uint8_t')!=1 or physical.count('ObserveEnumeratedOwned(')!=2:
         raise RuntimeError('Physical iterator first-match classification contract changed')
     oldcpp=cpp.replace(include+'\n','').replace(inline_block,'')
@@ -165,7 +181,7 @@ def verify(native:Path)->str:
     enumAdded='enum class ObservationEvent:uint8_t {Ignored,FirstMatch,DuplicateMatch,Invalid};\n'
     if (physical.count(enumAdded)!=1 or physical.count(newEnumeration)!=1):
         raise RuntimeError('Physical enumeration source modification differs from reviewed first-match contract')
-    oldPhysical=physical.replace(enumAdded,'').replace(newEnumeration,oldEnumeration)
+    oldPhysical=physical.replace(REGISTRATION_BINDING_BLOCK,'').replace(enumAdded,'').replace(newEnumeration,oldEnumeration)
     if blob(oldPhysical.encode())!=BASE_PHYSICAL_BLOB:
         raise RuntimeError('Original physical membership source unexpectedly changed')
     return method

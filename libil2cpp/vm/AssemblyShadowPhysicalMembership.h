@@ -100,6 +100,36 @@ public:
     {
         (void)ObserveEnumeratedOwned(address);
     }
+    // Read only the opaque slot and registered source of a class ALREADY
+    // identified as FirstMatch in the synchronous physical enumeration.
+    // No class metadata is touched and no pointer is returned. The slot is
+    // scoped to this registry snapshot, not a persistent class identity.
+    bool TryObservedRegistrationBinding(const void* address,size_t& slotOut,
+        assembly_shadow_execution_witness::Source& sourceOut) const noexcept
+    {
+        slotOut=kSlots;
+        sourceOut=assembly_shadow_execution_witness::Source::None;
+        if(!captured_||badEnumeration_||!address)return false;
+        size_t slot=(reinterpret_cast<uintptr_t>(address)>>3)%kSlots;
+        for(size_t probe=0;probe<kSlots;++probe)
+        {
+            const void* current=identities_[slot];
+            if(!current)return false;
+            if(current==address)
+            {
+                if(!seen_[slot])return false;
+                const auto role=static_cast<assembly_shadow_execution_witness::Source>(roles_[slot]);
+                if(role!=assembly_shadow_execution_witness::Source::Candidate &&
+                   role!=assembly_shadow_execution_witness::Source::ActiveShadow)
+                    return false;
+                slotOut=slot;
+                sourceOut=role;
+                return true;
+            }
+            slot=(slot+1)%kSlots;
+        }
+        return false;
+    }
     template<class Pointer,class Witnesses>
     bool SameRegistry(const Pointer* slots,size_t length,size_t claimed,
                       uint64_t revision,const Witnesses& witnesses) const noexcept

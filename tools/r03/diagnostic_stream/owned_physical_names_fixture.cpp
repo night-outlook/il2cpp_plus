@@ -77,9 +77,9 @@ using namespace il2cpp::vm;
 namespace owned=il2cpp::vm::assembly_shadow_owned_physical_names;
 namespace physical=il2cpp::vm::assembly_shadow_physical_membership;
 namespace witness=il2cpp::vm::assembly_shadow_execution_witness;
-static Il2CppClass classes[1024]{};
-static Il2CppImage images[1024]{};
-static Il2CppAssembly assemblies[1024]{};
+static Il2CppClass classes[2050]{};
+static Il2CppImage images[2050]{};
+static Il2CppAssembly assemblies[2050]{};
 static char mutableName[64]="MutableBefore";
 static char longName[4100]{};
 static char bigName[4100]{};
@@ -93,7 +93,7 @@ static void reset(){
  admissionOpen=true;readers=observationLockDepth=metadataLockDepth=0;
  physicalEnumeration.clear();afterMetadataRelease=nullptr;
  std::fill(std::begin(classes),std::end(classes),Il2CppClass{});
- for(size_t i=0;i<1024;++i){
+ for(size_t i=0;i<2050;++i){
   assemblies[i].aname.name="PhysicalAssembly";
   images[i].assembly=&assemblies[i];
   classes[i].image=&images[i];classes[i].name="Class";classes[i].namespaze="Namespace";
@@ -123,11 +123,23 @@ static void test(const char*label,bool expected,std::function<void()> arrange={}
   require(names.Complete()&&receipt.namesCopiedFromMatchedEnumeratorCallbacks,"owned capture missing");
   require(names.Count()==receipt.observedClasses && names.Count()==receipt.matchedClasses,
           "row count mismatched observed identities");
+  require(receipt.allRowsBoundToObservedRegistry &&
+          receipt.boundRegistrationRows==names.Count(),"owned binding count missing");
+  for(size_t rowIndex=0;rowIndex<names.Count();++rowIndex){
+   owned::RowView row{};require(names.Get(rowIndex,row),"bound row unavailable");
+   require(row.registrySlot<physical::kSlots,"invalid bound registry slot");
+   witness::Source observed=witness::Source::None;
+   require(s_executionRegistrationWitnesses.Matches(row.registrySlot,
+           s_executionClasses[row.registrySlot],observed),"binding witness not current");
+   require(observed==row.registrationSource && observed!=witness::Source::None,
+           "row binding role differs from observed registry witness");
+  }
   require(receipt.ownedRows==names.Count()&&receipt.ownedTextBytes==names.TextBytes(),
           "receipt does not match owned source");
   require(scratch.Observed()==0,"original pointer scratch not cleared");
  }else{
-  require(!names.Complete()&&!receipt.namesCopiedFromMatchedEnumeratorCallbacks,
+  require(!names.Complete()&&!receipt.namesCopiedFromMatchedEnumeratorCallbacks &&
+          !receipt.allRowsBoundToObservedRegistry && receipt.boundRegistrationRows==0,
           "partial source promoted to a successful result");
   require(scratch.Observed()==0,"failure retained pointer table");
  }
@@ -139,10 +151,15 @@ int main(){try{
  test("one-physical-owned",true,[]{publish(&classes[0]);physicalEnumeration={&classes[0]};},
      [](const auto&n,const auto&){owned::RowView row{};require(n.Get(0,row),"missing owned row");
         require(value(row.physicalAssemblyName)=="PhysicalAssembly"&&
-                value(row.nameSpace)=="Namespace"&&value(row.simpleName)=="Class","wrong names");});
+                value(row.nameSpace)=="Namespace"&&value(row.simpleName)=="Class","wrong names");
+       require(row.registrySlot==slot(&classes[0]) &&
+         row.registrationSource==witness::Source::Candidate,"single registration not bound");});
  test("two-roles-owned",true,[]{publish(&classes[0]);publish(&classes[1],witness::Source::ActiveShadow);
                             physicalEnumeration={&classes[0],&classes[1]};},
-     [](const auto&n,const auto&){require(n.Count()==2,"role-owned name count");});
+     [](const auto&n,const auto&){require(n.Count()==2,"role-owned name count");
+        owned::RowView a{},b{};require(n.Get(0,a)&&n.Get(1,b),"role rows unavailable");
+        require(a.registrationSource==witness::Source::Candidate &&
+                b.registrationSource==witness::Source::ActiveShadow,"role association lost");});
  test("duplicate-enumerated-owned-once",true,[]{publish(&classes[0]);physicalEnumeration={&classes[0],&classes[0]};},
      [](const auto&n,const auto&){require(n.Count()==1,"duplicate row copied");});
  test("unrelated-malformed-class-not-dereferenced",true,[]{publish(&classes[0]);
@@ -156,6 +173,29 @@ int main(){try{
      [](const auto&n,const auto&){std::strcpy(mutableName,"ChangedLater");
        owned::RowView row{};require(n.Get(0,row)&&value(row.physicalAssemblyName)=="MutableBefore",
        "retained borrowed name pointer");});
+ test("reverse-enumeration-role-binding",true,[]{
+       publish(&classes[0]);publish(&classes[1],witness::Source::ActiveShadow);
+       physicalEnumeration={&classes[1],&classes[0]};},
+     [](const auto&n,const auto&){owned::RowView a{},b{};require(n.Get(0,a)&&n.Get(1,b),"reverse rows");
+        require(a.registrySlot==slot(&classes[1])&&
+                a.registrationSource==witness::Source::ActiveShadow&&
+                b.registrySlot==slot(&classes[0])&&
+                b.registrationSource==witness::Source::Candidate,"enumerator order changed binding");});
+ test("same-display-name-distinct-binding",true,[]{
+       publish(&classes[0]);publish(&classes[1]);
+       physicalEnumeration={&classes[0],&classes[1]};},
+     [](const auto&n,const auto&){owned::RowView a{},b{};require(n.Get(0,a)&&n.Get(1,b),"name rows");
+        require(value(a.simpleName)==value(b.simpleName) &&
+                a.registrySlot!=b.registrySlot,"same names conflated registry identities");});
+ test("hash-collision-binding",true,[]{
+       require(slot(&classes[0])==slot(&classes[2048]),"fixture did not collide");
+       publish(&classes[0]);publish(&classes[2048],witness::Source::ActiveShadow);
+       physicalEnumeration={&classes[2048],&classes[0]};},
+     [](const auto&n,const auto&){owned::RowView a{},b{};require(n.Get(0,a)&&n.Get(1,b),"collision rows");
+        require(a.registrySlot==(slot(&classes[0])+1)%physical::kSlots &&
+                a.registrationSource==witness::Source::ActiveShadow &&
+                b.registrySlot==slot(&classes[0]) &&
+                b.registrationSource==witness::Source::Candidate,"linear-probe binding lost");});
  test("missing-physical-row-refused",false,[]{publish(&classes[0]);});
  test("bad-matched-image-refused",false,[]{publish(&classes[0]);classes[0].image=nullptr;
        physicalEnumeration={&classes[0]};});
@@ -177,6 +217,61 @@ int main(){try{
        afterMetadataRelease=[](){s_active.store(&secondary);};});
  test("closed-admission-refused",false,[]{admissionOpen=false;});
  test("unknown-callback-null-refused",false,[]{publish(&classes[0]);physicalEnumeration={nullptr,&classes[0]};});
+ reset();{
+   publish(&classes[0]);physical::Scratch scratch;
+   require(scratch.Consume(),"scratch consume");
+   require(scratch.Capture(s_executionClasses.data(),s_executionClasses.size(),
+       s_executionClassCount,s_executionRegistryRevision.Current(),
+       s_executionRegistrationWitnesses),"binding capture");
+   size_t index=0;witness::Source role=witness::Source::Candidate;
+   require(!scratch.TryObservedRegistrationBinding(&classes[0],index,role) &&
+           index==physical::kSlots&&role==witness::Source::None,
+           "unmatched identity incorrectly bound");
+   require(scratch.ObserveEnumeratedOwned(&classes[0])==physical::ObservationEvent::FirstMatch,
+           "first match missing");
+   require(scratch.TryObservedRegistrationBinding(&classes[0],index,role)&&
+           index==slot(&classes[0])&&role==witness::Source::Candidate,
+           "first matched observed binding wrong");
+   scratch.Scrub();
+   require(!scratch.TryObservedRegistrationBinding(&classes[0],index,role),
+           "scrubbed scratch still permits binding");
+   std::cout<<"PASS binding-not-matched-refused"<<"\n";
+ }
+ reset();{
+   publish(&classes[0]);physical::Scratch scratch;require(scratch.Consume(),"consume");
+   require(scratch.Capture(s_executionClasses.data(),s_executionClasses.size(),
+       s_executionClassCount,s_executionRegistryRevision.Current(),
+       s_executionRegistrationWitnesses),"capture");
+   require(scratch.ObserveEnumeratedOwned(&classes[1])==physical::ObservationEvent::Ignored,
+           "unexpectedly registered unrelated class");
+   size_t index=0;witness::Source role=witness::Source::Candidate;
+   require(!scratch.TryObservedRegistrationBinding(&classes[1],index,role),"unrelated got binding");
+   std::cout<<"PASS unobserved-binding-refused"<<"\n";
+ }
+ reset();{
+   owned::Capture n;require(n.Begin(),"begin");
+   require(!n.Add(owned::kRegistrationSlots,witness::Source::Candidate,"Asm","Ns","Name") &&
+           n.FirstError()==owned::Error::InvalidRegistrationBinding &&
+           !n.Complete()&&n.Count()==0&&n.TextBytes()==0,"invalid slot accepted");
+   owned::RowView v{};require(!n.Get(0,v),"failed slot exposed row");
+   std::cout<<"PASS invalid-slot-refused-and-scrubbed"<<"\n";
+ }
+ reset();{
+   owned::Capture n;require(n.Begin(),"begin");
+   require(!n.Add(7,witness::Source::None,"Asm","Ns","Name") &&
+           n.FirstError()==owned::Error::InvalidRegistrationBinding &&
+           !n.Complete()&&n.TextBytes()==0,"invalid role accepted");
+   std::cout<<"PASS invalid-role-refused-and-scrubbed"<<"\n";
+ }
+ reset();{
+   owned::Capture n;require(n.Begin(),"begin");
+   require(n.Add(7,witness::Source::Candidate,mutableName,"Ns","First"),"initial add");
+   require(!n.Add(7,witness::Source::Candidate,"Asm","Ns","Second") &&
+           n.FirstError()==owned::Error::DuplicateRegistrationBinding &&
+           !n.Complete()&&n.Count()==0&&n.TextBytes()==0,"duplicate registry slot accepted");
+   owned::RowView v{};require(!n.Get(0,v),"failed duplicate exposed row");
+   std::cout<<"PASS duplicate-registration-binding-refused-and-scrubbed"<<"\n";
+ }
  reset();{
   physical::Scratch scratch;owned::Capture names;owned::Receipt receipt;
   require(AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(scratch,names,receipt),"first empty capture failed");
