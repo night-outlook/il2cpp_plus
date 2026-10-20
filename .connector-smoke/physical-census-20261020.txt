@@ -1,0 +1,4 @@
+Disposable connector transport verification
+Repository: night-outlook/il2cpp_plus
+Feature source: 699dec4698a529c66e201aca1802ee8f498d8334
+No source or historical evidence modified.
