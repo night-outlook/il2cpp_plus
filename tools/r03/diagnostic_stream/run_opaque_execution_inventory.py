@@ -80,7 +80,7 @@ def verify(native:Path)->str:
         raise RuntimeError("Fixture does not compile exact native code/case groups")
     # Strip only the reviewed witness source; retain the original guarded
     # publication/access code and exact original getter blobs.
-    witnessDecl="    // P1 registration-path witness: write-once pointer/value source token.\n    assembly_shadow_execution_witness::Table s_executionRegistrationWitnesses{};\n"
+    witnessDecl="    // P1 registration-path source witness, immutable after successful insert.\n    assembly_shadow_execution_witness::Table s_executionRegistrationWitnesses{};\n"
     witnessInsert="                // Record registration-path identity before publication, under\n                // the same short observation lock. No extra metadata access.\n                if(!s_executionRegistrationWitnesses.Register(slot,klass,witnessedSource))\n                {\n                    s_droppedClassObservations.fetch_add(1,std::memory_order_relaxed);\n                    return;\n                }\n"
     witnessClassify="        const bool knownCandidate=candidates->byAssembly.count(klass->image->assembly)!=0;\n        const bool knownActive=active && active->shadowToBaseline.count(klass->image->assembly)!=0;\n        if(!knownCandidate && !knownActive)return;\n        // Preserve the original candidate-before-shadow admission precedence.\n        const auto witnessedSource=knownCandidate\n            ? assembly_shadow_execution_witness::Source::Candidate\n            : assembly_shadow_execution_witness::Source::ActiveShadow;\n"
     oldAdmission="        if (!candidates->byAssembly.count(klass->image->assembly) &&\n            !(active && active->shadowToBaseline.count(klass->image->assembly))) return;\n"
