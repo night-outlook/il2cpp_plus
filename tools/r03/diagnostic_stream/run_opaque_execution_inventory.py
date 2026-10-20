@@ -24,7 +24,8 @@ MOCK="tools/r03/diagnostic_stream/opaque_inventory_fixture.cpp"
 RUNNER="tools/r03/diagnostic_stream/run_opaque_execution_inventory.py"
 SOURCES=(H,SRC,CPP,API,MOCK,RUNNER,
          "libil2cpp/vm/AssemblyShadowExecutionRegistryRevision.h",
-         "libil2cpp/vm/AssemblyShadowExecutionRegistrationWitness.h")
+         "libil2cpp/vm/AssemblyShadowExecutionRegistrationWitness.h",
+         "libil2cpp/vm/AssemblyShadowExecutionRegistryPublisher.h")
 ORIGINAL_CPP_BLOB="53aecc2d113b20b6ff825d0aa4ca0f4372a7cce2"
 ORIGINAL_API_BLOB="32956c2c4084951131b497c1201712a0d4fe11b3"
 GROUPS=(
@@ -43,6 +44,11 @@ GROUPS=(
  "phantom-witness-empty-slot-refused",
  "active-shadow-witness-admitted",
  "successful-scratch-reuse-refused",
+ "publisher-candidate","publisher-active-shadow",
+ "publisher-duplicate","publisher-capacity",
+ "publisher-existing-at-capacity","publisher-conflicting-witness",
+ "publisher-saturated-revision","publisher-invalid-input",
+ "publisher-collision-probe",
 )
 def sha(value:bytes)->str:return hashlib.sha256(value).hexdigest()
 def blob(value:bytes)->str:
@@ -61,7 +67,8 @@ def verify(native:Path)->str:
     header='#include "AssemblyShadowOpaqueExecutionInventory.h"'
     revisionHeader='#include "AssemblyShadowExecutionRegistryRevision.h"'
     witnessHeader='#include "AssemblyShadowExecutionRegistrationWitness.h"'
-    if cpp.count(include)!=1 or cpp.count(header)!=1 or cpp.count(revisionHeader)!=1 or cpp.count(witnessHeader)!=1 or \
+    publisherHeader='#include "AssemblyShadowExecutionRegistryPublisher.h"'
+    if cpp.count(include)!=1 or cpp.count(header)!=1 or cpp.count(revisionHeader)!=1 or cpp.count(witnessHeader)!=1 or cpp.count(publisherHeader)!=1 or \
        api.count("static bool TryCaptureOpaqueExecutionInventory(")!=1 or \
        source.count("bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(")!=1:
         raise RuntimeError("Actual native method/header not included exactly once")
@@ -75,9 +82,17 @@ def verify(native:Path)->str:
                   "receipt.registryRevisionFenceStable=true;"):
         if source.count(token)!=1:
             raise RuntimeError("Native bounded pointer safety contract changed: "+token)
-    if fixture.count(include)!=1 or fixture.count(header)!=1 or fixture.count(revisionHeader)!=1 or fixture.count(witnessHeader)!=1 or \
+    if fixture.count(include)!=1 or fixture.count(header)!=1 or fixture.count(revisionHeader)!=1 or fixture.count(witnessHeader)!=1 or fixture.count(publisherHeader)!=1 or \
        any(('"'+x+'"') not in fixture and ('PASS '+x+'\\n') not in fixture for x in GROUPS):
         raise RuntimeError("Fixture does not compile exact native code/case groups")
+    # Exercise EXACTLY the production writer body through the new bounded
+    # helper. Restore its previous source before the older strict getter audit.
+    # This prevents passing a stand-alone test helper that is never called.
+    publisherCall="        ExecutionObservationLock lock;\n        // P1: use the same bounded publisher that strict/sanitized host tests\n        // compile. Witness, table slot, count and revision publish under this\n        // existing observation lock, with no extra metadata dereference.\n        const auto published=assembly_shadow_execution_publisher::Insert(\n            s_executionClasses,s_executionClassCount,kMaximumExecutionClasses,\n            s_executionRegistrationWitnesses,s_executionRegistryRevision,\n            klass,witnessedSource);\n        if(published==assembly_shadow_execution_publisher::Result::Existing ||\n           published==assembly_shadow_execution_publisher::Result::Inserted)\n        {\n            assembly_shadow_r02::ObservationMemo::Remember(klass);\n            return;\n        }\n        s_droppedClassObservations.fetch_add(1,std::memory_order_relaxed);\n"
+    previousWriter="        ExecutionObservationLock lock;\n        size_t slot = (reinterpret_cast<uintptr_t>(klass) >> 3) % s_executionClasses.size();\n        for (size_t probe = 0; probe < s_executionClasses.size(); ++probe)\n        {\n            Il2CppClass*& entry = s_executionClasses[slot];\n            if (entry == klass)\n            {\n                assembly_shadow_r02::ObservationMemo::Remember(klass);\n                return;\n            }\n            if (!entry)\n            {\n                if (s_executionClassCount == kMaximumExecutionClasses) break;\n                // Record registration-path identity before publication, under\n                // the same short observation lock. No extra metadata access.\n                if(!s_executionRegistrationWitnesses.Register(slot,klass,witnessedSource))\n                {\n                    s_droppedClassObservations.fetch_add(1,std::memory_order_relaxed);\n                    return;\n                }\n                entry = klass;\n                ++s_executionClassCount;\n                // P1 registry-only publication revision (same observation lock).\n                s_executionRegistryRevision.Advance();\n                assembly_shadow_r02::ObservationMemo::Remember(klass);\n                return;\n            }\n            slot = (slot + 1) % s_executionClasses.size();\n        }\n        s_droppedClassObservations.fetch_add(1, std::memory_order_relaxed);\n"
+    if cpp.count(publisherCall)!=1 or not cpp.count(publisherHeader)==1:
+        raise RuntimeError("Production registration writer differs from bound helper")
+    cpp=cpp.replace(publisherHeader+"\n","").replace(publisherCall,previousWriter)
     # Strip only the reviewed witness source; retain the original guarded
     # publication/access code and exact original getter blobs.
     witnessDecl="    // P1 registration-path source witness, immutable after successful insert.\n    assembly_shadow_execution_witness::Table s_executionRegistrationWitnesses{};\n"

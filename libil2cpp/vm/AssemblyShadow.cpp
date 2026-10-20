@@ -14,6 +14,7 @@
 #include "AssemblyShadowOpaqueExecutionInventory.h"
 #include "AssemblyShadowExecutionRegistryRevision.h"
 #include "AssemblyShadowExecutionRegistrationWitness.h"
+#include "AssemblyShadowExecutionRegistryPublisher.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -218,35 +219,20 @@ namespace {
             ? assembly_shadow_execution_witness::Source::Candidate
             : assembly_shadow_execution_witness::Source::ActiveShadow;
         ExecutionObservationLock lock;
-        size_t slot = (reinterpret_cast<uintptr_t>(klass) >> 3) % s_executionClasses.size();
-        for (size_t probe = 0; probe < s_executionClasses.size(); ++probe)
+        // P1: use the same bounded publisher that strict/sanitized host tests
+        // compile. Witness, table slot, count and revision publish under this
+        // existing observation lock, with no extra metadata dereference.
+        const auto published=assembly_shadow_execution_publisher::Insert(
+            s_executionClasses,s_executionClassCount,kMaximumExecutionClasses,
+            s_executionRegistrationWitnesses,s_executionRegistryRevision,
+            klass,witnessedSource);
+        if(published==assembly_shadow_execution_publisher::Result::Existing ||
+           published==assembly_shadow_execution_publisher::Result::Inserted)
         {
-            Il2CppClass*& entry = s_executionClasses[slot];
-            if (entry == klass)
-            {
-                assembly_shadow_r02::ObservationMemo::Remember(klass);
-                return;
-            }
-            if (!entry)
-            {
-                if (s_executionClassCount == kMaximumExecutionClasses) break;
-                // Record registration-path identity before publication, under
-                // the same short observation lock. No extra metadata access.
-                if(!s_executionRegistrationWitnesses.Register(slot,klass,witnessedSource))
-                {
-                    s_droppedClassObservations.fetch_add(1,std::memory_order_relaxed);
-                    return;
-                }
-                entry = klass;
-                ++s_executionClassCount;
-                // P1 registry-only publication revision (same observation lock).
-                s_executionRegistryRevision.Advance();
-                assembly_shadow_r02::ObservationMemo::Remember(klass);
-                return;
-            }
-            slot = (slot + 1) % s_executionClasses.size();
+            assembly_shadow_r02::ObservationMemo::Remember(klass);
+            return;
         }
-        s_droppedClassObservations.fetch_add(1, std::memory_order_relaxed);
+        s_droppedClassObservations.fetch_add(1,std::memory_order_relaxed);
     }
 
     void RecordFirstGuardFailure(AssemblyShadowError error, const std::string& detail)

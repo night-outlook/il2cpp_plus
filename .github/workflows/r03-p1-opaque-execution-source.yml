@@ -6,6 +6,7 @@ on:
       - 'libil2cpp/vm/AssemblyShadowOpaqueExecutionInventory*'
       - 'libil2cpp/vm/AssemblyShadowExecutionRegistryRevision.h'
       - 'libil2cpp/vm/AssemblyShadowExecutionRegistrationWitness.h'
+      - 'libil2cpp/vm/AssemblyShadowExecutionRegistryPublisher.h'
       - 'libil2cpp/vm/AssemblyShadow.cpp'
       - 'libil2cpp/vm/AssemblyShadow.h'
       - 'tools/r03/diagnostic_stream/opaque_inventory_fixture.cpp'

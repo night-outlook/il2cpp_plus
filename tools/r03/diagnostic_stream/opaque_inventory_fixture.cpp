@@ -10,6 +10,7 @@
 #include "AssemblyShadowOpaqueExecutionInventory.h"
 #include "AssemblyShadowExecutionRegistryRevision.h"
 #include "AssemblyShadowExecutionRegistrationWitness.h"
+#include "AssemblyShadowExecutionRegistryPublisher.h"
 struct Il2CppClass { int deliberatelyUnread; };
 namespace il2cpp { namespace vm {
 struct ActiveSnapshot {uint64_t generation;};
@@ -102,6 +103,29 @@ static void test(const char* name,opaque::Error expected,
                   !receipt.registryRevisionFenceStable,"partial success");
     require(!scratch.Before().Populated()&&!scratch.After().Populated(),
             "opaque scratch was not invalidated");
+    std::cout<<"PASS "<<name<<"\n";
+}
+// Exercise the EXACT native publisher used by ObserveExecutionClass, under
+// controlled single-threaded fixture ownership. No class is dereferenced.
+namespace publisher=il2cpp::vm::assembly_shadow_execution_publisher;
+namespace witness=il2cpp::vm::assembly_shadow_execution_witness;
+static publisher::Result publish(Il2CppClass* klass,witness::Source source,
+                                 size_t maximum=1024)
+{
+    ExecutionObservationLock lock;
+    return publisher::Insert(s_executionClasses,s_executionClassCount,maximum,
+                             s_executionRegistrationWitnesses,
+                             s_executionRegistryRevision,klass,source);
+}
+static size_t slot_for(Il2CppClass* klass)
+{
+    return (reinterpret_cast<uintptr_t>(klass)>>3)%s_executionClasses.size();
+}
+static void writer_test(const char* name,std::function<void()> check)
+{
+    reset();
+    check();
+    require(g_readers==0&&g_lockDepth==0,"publisher lock leak");
     std::cout<<"PASS "<<name<<"\n";
 }
 int main(){
@@ -215,6 +239,90 @@ int main(){
                     !receipt.opaqueInventoryObserved,"reuse receipt incorrect");
             std::cout<<"PASS successful-scratch-reuse-refused\n";
         }
+        writer_test("publisher-candidate",[](){
+            require(publish(&entities[0],witness::Source::Candidate)==publisher::Result::Inserted,
+                    "candidate not published");
+            witness::Source observed{};
+            require(s_executionRegistrationWitnesses.Matches(slot_for(&entities[0]),&entities[0],observed)
+                    &&observed==witness::Source::Candidate,"candidate witness unavailable");
+            opaque::Scratch scratch;opaque::Receipt receipt;
+            require(AssemblyShadow::TryCaptureOpaqueExecutionInventory(scratch,receipt) &&
+                    receipt.candidateWitnessesBefore==1&&receipt.activeWitnessesBefore==0,
+                    "registered candidate not visible in collector");
+            require(s_executionRegistryRevision.Current()==1,"candidate revision");
+        });
+        writer_test("publisher-active-shadow",[](){
+            require(publish(&entities[1],witness::Source::ActiveShadow)==publisher::Result::Inserted,
+                    "active-shadow not published");
+            opaque::Scratch scratch;opaque::Receipt receipt;
+            require(AssemblyShadow::TryCaptureOpaqueExecutionInventory(scratch,receipt) &&
+                    receipt.activeWitnessesBefore==1&&receipt.candidateWitnessesBefore==0,
+                    "active-shadow source witness not captured");
+        });
+        writer_test("publisher-duplicate",[](){
+            require(publish(&entities[0],witness::Source::Candidate)==publisher::Result::Inserted,
+                    "initial registration rejected");
+            require(publish(&entities[0],witness::Source::ActiveShadow)==publisher::Result::Existing,
+                    "duplicate should remain first registered source");
+            require(s_executionClassCount==1&&s_executionRegistryRevision.Current()==1,
+                    "duplicate changed registry count/revision");
+        });
+        writer_test("publisher-capacity",[](){
+            require(publish(&entities[0],witness::Source::Candidate,1)==publisher::Result::Inserted,
+                    "first capacity slot failed");
+            require(publish(&entities[1],witness::Source::Candidate,1)==publisher::Result::Full,
+                    "capacity should fail closed");
+            require(s_executionClassCount==1&&s_executionRegistryRevision.Current()==1,
+                    "full registry was mutated");
+        });
+        writer_test("publisher-existing-at-capacity",[](){
+            require(publish(&entities[0],witness::Source::Candidate,1)==publisher::Result::Inserted,
+                    "first registration failed");
+            require(publish(&entities[0],witness::Source::Candidate,1)==publisher::Result::Existing,
+                    "registered duplicate must survive capacity limit");
+        });
+        writer_test("publisher-conflicting-witness",[](){
+            const auto slot=slot_for(&entities[0]);
+            require(s_executionRegistrationWitnesses.Register(slot,&entities[1],witness::Source::Candidate),
+                    "fixture could not install conflicting witness");
+            require(publish(&entities[0],witness::Source::Candidate)==publisher::Result::WitnessRejected,
+                    "conflicting witness accepted");
+            require(s_executionClassCount==0&&s_executionRegistryRevision.Current()==0&&
+                    !s_executionClasses[slot],"failed publication changed pointer/count/revision");
+        });
+        writer_test("publisher-saturated-revision",[](){
+            s_executionRegistryRevision=assembly_shadow_execution_registry::Revision{
+                std::numeric_limits<uint64_t>::max()};
+            require(publish(&entities[0],witness::Source::Candidate)==publisher::Result::RevisionExhausted,
+                    "saturated revision allowed publication");
+            witness::Source observed{};
+            require(s_executionRegistrationWitnesses.Matches(slot_for(&entities[0]),nullptr,observed)&&
+                    s_executionClassCount==0,"saturated revision left a phantom witness");
+        });
+        writer_test("publisher-invalid-input",[](){
+            require(publish(nullptr,witness::Source::Candidate)==publisher::Result::InvalidInput,
+                    "null pointer accepted");
+            require(publish(&entities[0],witness::Source::None)==publisher::Result::InvalidInput,
+                    "invalid source accepted");
+            require(s_executionClassCount==0&&s_executionRegistryRevision.Current()==0,
+                    "invalid insertion had side effects");
+        });
+        writer_test("publisher-collision-probe",[](){
+            // These values are never dereferenced: only the pointer hash is tested.
+            auto* a=reinterpret_cast<Il2CppClass*>(static_cast<uintptr_t>(0x1000));
+            auto* b=reinterpret_cast<Il2CppClass*>(static_cast<uintptr_t>(0x5000));
+            require(slot_for(a)==slot_for(b),"fixture expected hash collision");
+            require(publish(a,witness::Source::Candidate)==publisher::Result::Inserted,
+                    "first collision publication failed");
+            require(publish(b,witness::Source::ActiveShadow)==publisher::Result::Inserted,
+                    "second collision publication failed");
+            opaque::Scratch scratch;opaque::Receipt receipt;
+            require(AssemblyShadow::TryCaptureOpaqueExecutionInventory(scratch,receipt)&&
+                    receipt.candidateWitnessesBefore==1&&receipt.activeWitnessesBefore==1,
+                    "collision lost a witnessed identity");
+            require(s_executionClassCount==2&&s_executionRegistryRevision.Current()==2,
+                    "collision count/revision changed unexpectedly");
+        });
         std::cout<<"P1 OPAQUE EXECUTION INVENTORY SOURCE HOST PASS\n";
         return 0;
     }catch(const std::exception& error){
