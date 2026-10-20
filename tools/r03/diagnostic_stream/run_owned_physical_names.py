@@ -102,7 +102,9 @@ def verify(native:Path)->str:
               'receipt.namesCopiedFromMatchedEnumeratorCallbacks=true;')
     for token in required:
         if method.count(token)!=1:raise RuntimeError('Actual owned VM source contract changed: '+token)
-    if fixture.count(include)!=1 or fixture.count(inline)!=1 or any(('"'+n+'"') not in fixture for n in GROUPS):
+    if fixture.count(include)!=1 or fixture.count(inline)!=1 or any(
+            ('"'+n+'"') not in fixture and ('"PASS '+n+'"') not in fixture
+            for n in GROUPS):
         raise RuntimeError('Host fixture does not compile actual source or all named tests')
     if physical.count('enum class ObservationEvent:uint8_t')!=1 or physical.count('ObserveEnumeratedOwned(')!=2 or physical.count(REGISTRATION_BINDING_BLOCK)!=1:
         raise RuntimeError('Physical iterator slot/source witness contract changed')
