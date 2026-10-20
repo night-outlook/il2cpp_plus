@@ -93,6 +93,29 @@ def verify(native:Path)->str:
     if cpp.count(publisherCall)!=1 or not cpp.count(publisherHeader)==1:
         raise RuntimeError("Production registration writer differs from bound helper")
     cpp=cpp.replace(publisherHeader+"\n","").replace(publisherCall,previousWriter)
+    # The new inactive physical-membership audit adds only these exact
+    # includes/declaration. Preserve strict equality with the original
+    # execution getter/guard blob, not a rebaselined fingerprint.
+    physicalHeader='#include "AssemblyShadowPhysicalMembership.h"'
+    physicalApi='#include "il2cpp-api.h"'
+    physicalInclude="""// P1 inactive: compare opaque registry values to physical class enumeration only.
+#include "AssemblyShadowPhysicalMembershipSource.inl"
+"""
+    physicalNamespace="namespace assembly_shadow_physical_membership { class Scratch; struct Receipt; }\n"
+    physicalDecl="""    // P1 INACTIVE: observed registry addresses vs physical class enumerator.
+    // No pointer is dereferenced/returned; membership does not prove lifetime,
+    // physical ownership, VM epoch, or complete execution diagnostics.
+    static bool TryAuditObservedPhysicalClassMembership(
+        assembly_shadow_physical_membership::Scratch& scratch,
+        assembly_shadow_physical_membership::Receipt& receipt);
+"""
+    if (cpp.count(physicalHeader)!=1 or cpp.count(physicalApi)!=1 or
+        cpp.count(physicalInclude)!=1 or api.count(physicalNamespace)!=1 or
+        api.count(physicalDecl)!=1):
+        raise RuntimeError("Inactive physical enumeration addition missing/modified")
+    cpp=(cpp.replace(physicalHeader+"\n","")
+            .replace(physicalApi+"\n","").replace(physicalInclude,""))
+    api=api.replace(physicalNamespace,"").replace(physicalDecl,"")
     # Strip only the reviewed witness source; retain the original guarded
     # publication/access code and exact original getter blobs.
     witnessDecl="    // P1 registration-path source witness, immutable after successful insert.\n    assembly_shadow_execution_witness::Table s_executionRegistrationWitnesses{};\n"
