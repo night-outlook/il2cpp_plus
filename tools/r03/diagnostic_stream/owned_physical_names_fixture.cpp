@@ -182,7 +182,7 @@ int main(){try{
   require(AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(scratch,names,receipt),"first empty capture failed");
   require(!AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(scratch,names,receipt),"reused capture accepted");
   require(receipt.error==owned::Error::ReusedCapture,"wrong reused capture error");
-  std::cout<<"PASS reused-owned-capture-refused\n";
+  std::cout<<"PASS "<<"reused-owned-capture-refused"<<"\n";
  }
  std::cout<<"P1 OWNED PHYSICAL NAMES SOURCE HOST PASS\n";
  return 0;
