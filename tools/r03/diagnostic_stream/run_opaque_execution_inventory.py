@@ -22,7 +22,8 @@ CPP="libil2cpp/vm/AssemblyShadow.cpp"
 API="libil2cpp/vm/AssemblyShadow.h"
 MOCK="tools/r03/diagnostic_stream/opaque_inventory_fixture.cpp"
 RUNNER="tools/r03/diagnostic_stream/run_opaque_execution_inventory.py"
-SOURCES=(H,SRC,CPP,API,MOCK,RUNNER)
+SOURCES=(H,SRC,CPP,API,MOCK,RUNNER,
+         "libil2cpp/vm/AssemblyShadowExecutionRegistryRevision.h")
 ORIGINAL_CPP_BLOB="53aecc2d113b20b6ff825d0aa4ca0f4372a7cce2"
 ORIGINAL_API_BLOB="32956c2c4084951131b497c1201712a0d4fe11b3"
 GROUPS=(
@@ -33,6 +34,9 @@ GROUPS=(
  "class-added-before-second-sample","same-count-replacement",
  "same-count-relocation","state-flip","active-identity-flip",
  "one-shot-failure","second-sample-count-corruption",
+ "same-slots-new-registry-revision",
+ "stable-nonzero-registry-revision",
+ "saturated-registry-revision-refused",
  "successful-scratch-reuse-refused",
 )
 def sha(value:bytes)->str:return hashlib.sha256(value).hexdigest()
@@ -50,7 +54,8 @@ def verify(native:Path)->str:
     fixture=(native/MOCK).read_text()
     include='#include "AssemblyShadowOpaqueExecutionInventorySource.inl"'
     header='#include "AssemblyShadowOpaqueExecutionInventory.h"'
-    if cpp.count(include)!=1 or cpp.count(header)!=1 or \
+    revisionHeader='#include "AssemblyShadowExecutionRegistryRevision.h"'
+    if cpp.count(include)!=1 or cpp.count(header)!=1 or cpp.count(revisionHeader)!=1 or \
        api.count("static bool TryCaptureOpaqueExecutionInventory(")!=1 or \
        source.count("bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(")!=1:
         raise RuntimeError("Actual native method/header not included exactly once")
@@ -59,13 +64,23 @@ def verify(native:Path)->str:
     for token in ("assembly_shadow_metadata_lifetime::Gate::Reader admission(",
                   "ExecutionObservationLock lock;","scratch.Before().Unique()",
                   "scratch.After().Unique()","scratch.Before().SameAs(scratch.After())",
-                  "scratch.Scrub();","receipt.opaqueInventoryObserved=true;"):
+                  "scratch.Scrub();","receipt.opaqueInventoryObserved=true;",
+                  "receipt.registryRevisionFenceStable=true;"):
         if source.count(token)!=1:
             raise RuntimeError("Native bounded pointer safety contract changed: "+token)
-    if fixture.count(include)!=1 or fixture.count(header)!=1 or \
+    if fixture.count(include)!=1 or fixture.count(header)!=1 or fixture.count(revisionHeader)!=1 or \
        any(('"'+x+'"') not in fixture and ('PASS '+x+'\\n') not in fixture for x in GROUPS):
         raise RuntimeError("Fixture does not compile exact native code/case groups")
-    oldcpp=cpp.replace(header+"\n","").replace(
+    # Remove only the exact additive revision source, preserving the original
+    # getter and runtime policy blob as a strict provenance control.
+    revisionDecl="    // P1 registry-only mutation fence. Access requires execution observation lock.\n    assembly_shadow_execution_registry::Revision s_executionRegistryRevision{};\n"
+    revisionInsert="                // P1 registry-only publication revision (same observation lock).\n                s_executionRegistryRevision.Advance();\n"
+    if cpp.count(revisionDecl)!=1 or cpp.count(revisionInsert)!=1:
+        raise RuntimeError("Real registry publication instrumentation changed")
+    oldcpp=(cpp.replace(revisionHeader+"\n","")
+               .replace(revisionDecl,"").replace(revisionInsert,""))
+    oldcpp=oldcpp.replace(header+"\n","").replace(
+
         "// P1 inactive opaque execution observation inventory. No class dereference.\n"+
         include+"\n","")
     oldapi=api.replace(

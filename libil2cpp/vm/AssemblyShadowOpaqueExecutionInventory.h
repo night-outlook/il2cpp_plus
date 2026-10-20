@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 namespace il2cpp { namespace vm { namespace assembly_shadow_opaque_execution {
 static constexpr size_t kSlotCount=2048;
 static constexpr size_t kMaximumClasses=1024;
@@ -13,15 +14,19 @@ enum class Error:uint8_t { None,ReusedScratch,AdmissionUnavailable,
 class Snapshot final {
     std::array<const void*,kSlotCount> slots_{};
     size_t count_=0;
+    uint64_t registryRevision_=0;
     bool populated_=false;
 public:
     Snapshot() noexcept=default;
     Snapshot(const Snapshot&)=delete;
     Snapshot& operator=(const Snapshot&)=delete;
     template<class Pointer>
-    bool Populate(const Pointer* table,size_t length,size_t claimed) noexcept {
-        if(populated_||!table||length!=kSlotCount||claimed>kMaximumClasses)return false;
+    bool Populate(const Pointer* table,size_t length,size_t claimed,
+                  uint64_t revision) noexcept {
+        if(populated_||!table||length!=kSlotCount||claimed>kMaximumClasses||
+           revision==std::numeric_limits<uint64_t>::max())return false;
         populated_=true;
+        registryRevision_=revision;
         for(size_t i=0;i<kSlotCount;++i){
             slots_[i]=table[i];
             if(slots_[i])++count_;
@@ -40,16 +45,18 @@ public:
         return true;
     }
     bool SameAs(const Snapshot& b) const noexcept {
-        if(!populated_||!b.populated_||count_!=b.count_)return false;
+        if(!populated_||!b.populated_||count_!=b.count_||
+           registryRevision_!=b.registryRevision_)return false;
         for(size_t i=0;i<kSlotCount;++i)
             if(slots_[i]!=b.slots_[i])return false;
         return true;
     }
     size_t Count() const noexcept{return populated_?count_:0;}
+    uint64_t RegistryRevision() const noexcept{return populated_?registryRevision_:0;}
     bool Populated() const noexcept{return populated_;}
     void Clear() noexcept {
         for(auto& slot:slots_)slot=nullptr;
-        count_=0;populated_=false;
+        count_=0;registryRevision_=0;populated_=false;
     }
 };
 class Scratch final {
@@ -69,6 +76,8 @@ struct Receipt {
     Error error=Error::None;
     size_t countBefore=0,countAfter=0,completedSourceSamples=0;
     uint64_t generationBefore=0,generationAfter=0;
+    uint64_t registryRevisionBefore=0,registryRevisionAfter=0;
+    bool registryRevisionFenceStable=false;
     bool opaqueInventoryObserved=false;
     bool exactOpaqueSlotSamplesEqual=false;
     bool physicalClassPointerOriginProven=false;
@@ -81,6 +90,7 @@ inline bool Fail(Scratch& scratch,Receipt& receipt,Error error) noexcept {
     if(receipt.error==Error::None)receipt.error=error;
     receipt.opaqueInventoryObserved=false;
     receipt.exactOpaqueSlotSamplesEqual=false;
+    receipt.registryRevisionFenceStable=false;
     scratch.Scrub();
     return false;
 }

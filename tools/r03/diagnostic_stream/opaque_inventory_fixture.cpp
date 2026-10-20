@@ -8,6 +8,7 @@
 #include <iostream>
 #include <stdexcept>
 #include "AssemblyShadowOpaqueExecutionInventory.h"
+#include "AssemblyShadowExecutionRegistryRevision.h"
 struct Il2CppClass { int deliberatelyUnread; };
 namespace il2cpp { namespace vm {
 struct ActiveSnapshot {uint64_t generation;};
@@ -17,6 +18,7 @@ static std::atomic<const ActiveSnapshot*> s_active{&act};
 static std::atomic<AssemblyShadowState> s_state{AssemblyShadowState::Committed};
 static std::array<Il2CppClass*,2048> s_executionClasses{};
 static size_t s_executionClassCount=0;
+static assembly_shadow_execution_registry::Revision s_executionRegistryRevision{};
 static bool g_admission=true;
 static size_t g_readers=0,g_lockDepth=0,g_sampleCount=0;
 static std::function<void()> g_onSample;
@@ -50,6 +52,7 @@ static void require(bool ok,const char* why){if(!ok)throw std::runtime_error(why
 static void reset(){
     s_active.store(&act);s_state.store(AssemblyShadowState::Committed);
     s_executionClasses.fill(nullptr);s_executionClassCount=0;
+    s_executionRegistryRevision=assembly_shadow_execution_registry::Revision{};
     g_admission=true;g_readers=0;g_lockDepth=0;g_sampleCount=0;g_onSample=nullptr;
 }
 static void test(const char* name,opaque::Error expected,
@@ -68,9 +71,14 @@ static void test(const char* name,opaque::Error expected,
         require(receipt.opaqueInventoryObserved&&receipt.exactOpaqueSlotSamplesEqual,
                 "missing complete bounded observation");
         require(receipt.completedSourceSamples==2&&g_sampleCount==2,"wrong sampling");
+        require(receipt.registryRevisionFenceStable&&
+                receipt.registryRevisionBefore==receipt.registryRevisionAfter&&
+                receipt.registryRevisionAfter==s_executionRegistryRevision.Current(),
+                "registry mutation fence not stable");
         require(receipt.countBefore==receipt.countAfter&&
                 receipt.countAfter==s_executionClassCount,"incorrect count");
-    }else require(!receipt.opaqueInventoryObserved,"partial success");
+    }else require(!receipt.opaqueInventoryObserved&&
+                  !receipt.registryRevisionFenceStable,"partial success");
     require(!scratch.Before().Populated()&&!scratch.After().Populated(),
             "opaque scratch was not invalidated");
     std::cout<<"PASS "<<name<<"\n";
@@ -118,6 +126,21 @@ int main(){
             require(scratch.Consume(),"initial consumption failed");});
         test("second-sample-count-corruption",opaque::Error::InvalidRegistry,[](auto&){
             g_onSample=[](){if(g_sampleCount==2)s_executionClassCount=1;};});
+        test("same-slots-new-registry-revision",opaque::Error::SourceChanged,[](auto&){
+            s_executionClasses[40]=&entities[0];s_executionClassCount=1;
+            s_executionRegistryRevision=assembly_shadow_execution_registry::Revision{8};
+            g_onSample=[](){if(g_sampleCount==2)
+                require(s_executionRegistryRevision.Advance(),"revision advance failed");};
+        });
+        test("stable-nonzero-registry-revision",opaque::Error::None,[](auto&){
+            s_executionClasses[40]=&entities[0];s_executionClassCount=1;
+            s_executionRegistryRevision=assembly_shadow_execution_registry::Revision{9};
+        });
+        test("saturated-registry-revision-refused",opaque::Error::InvalidRegistry,[](auto&){
+            s_executionRegistryRevision=assembly_shadow_execution_registry::Revision{
+                std::numeric_limits<uint64_t>::max()};
+            require(!s_executionRegistryRevision.Advance(),"revision overflow accepted");
+        });
         reset();
         {
             opaque::Scratch scratch;opaque::Receipt receipt;

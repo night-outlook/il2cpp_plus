@@ -12,6 +12,7 @@
 #include "AssemblyShadowBoundedExecutionEmptyLive.h"
 #include "AssemblyShadowObservationMemo.h"
 #include "AssemblyShadowOpaqueExecutionInventory.h"
+#include "AssemblyShadowExecutionRegistryRevision.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -168,6 +169,8 @@ namespace {
     const size_t kMaximumExecutionClasses = 1024;
     std::array<Il2CppClass*, kMaximumExecutionClasses * 2> s_executionClasses{};
     size_t s_executionClassCount = 0;
+    // P1 registry-only mutation fence. Access requires execution observation lock.
+    assembly_shadow_execution_registry::Revision s_executionRegistryRevision{};
     std::atomic_flag s_executionObservationLock = ATOMIC_FLAG_INIT;
 
     struct ExecutionObservationLock
@@ -221,6 +224,8 @@ namespace {
                 if (s_executionClassCount == kMaximumExecutionClasses) break;
                 entry = klass;
                 ++s_executionClassCount;
+                // P1 registry-only publication revision (same observation lock).
+                s_executionRegistryRevision.Advance();
                 assembly_shadow_r02::ObservationMemo::Remember(klass);
                 return;
             }

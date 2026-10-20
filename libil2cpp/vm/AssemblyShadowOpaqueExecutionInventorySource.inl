@@ -20,7 +20,8 @@ bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(
         // UsageLock or the transaction mutex. No metadata dereference.
         ExecutionObservationLock lock;
         return output.Populate(s_executionClasses.data(),
-                               s_executionClasses.size(),s_executionClassCount);
+                               s_executionClasses.size(),s_executionClassCount,
+                               s_executionRegistryRevision.Current());
     };
     const ActiveSnapshot* beforeActive=s_active.load(std::memory_order_acquire);
     const AssemblyShadowState beforeState=s_state.load(std::memory_order_acquire);
@@ -29,6 +30,7 @@ bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(
         return opaque::Fail(scratch,receipt,opaque::Error::InvalidRegistry);
     receipt.completedSourceSamples=1;
     receipt.countBefore=scratch.Before().Count();
+    receipt.registryRevisionBefore=scratch.Before().RegistryRevision();
     if(!scratch.Before().Unique())
         return opaque::Fail(scratch,receipt,opaque::Error::DuplicateIdentity);
 
@@ -36,6 +38,7 @@ bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(
         return opaque::Fail(scratch,receipt,opaque::Error::InvalidRegistry);
     receipt.completedSourceSamples=2;
     receipt.countAfter=scratch.After().Count();
+    receipt.registryRevisionAfter=scratch.After().RegistryRevision();
     if(!scratch.After().Unique())
         return opaque::Fail(scratch,receipt,opaque::Error::DuplicateIdentity);
     const ActiveSnapshot* afterActive=s_active.load(std::memory_order_acquire);
@@ -50,5 +53,6 @@ bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(
     scratch.Scrub();
     receipt.opaqueInventoryObserved=true;
     receipt.exactOpaqueSlotSamplesEqual=true;
+    receipt.registryRevisionFenceStable=true;
     return true;
 }
