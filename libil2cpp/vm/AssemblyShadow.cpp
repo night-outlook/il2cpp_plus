@@ -15,6 +15,7 @@
 #include "AssemblyShadowExecutionRegistryRevision.h"
 #include "AssemblyShadowExecutionRegistrationWitness.h"
 #include "AssemblyShadowExecutionRegistryPublisher.h"
+#include "AssemblyShadowPhysicalMembership.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -22,6 +23,7 @@
 #include "AssemblyShadowVisibility.h"
 #include "AssemblyShadowTypeResolver.h"
 #include "il2cpp-class-internals.h"
+#include "il2cpp-api.h"
 #include "il2cpp-object-internals.h"
 #include "vm/Assembly.h"
 #include "vm/Exception.h"
@@ -1570,6 +1572,8 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
 #include "AssemblyShadowBoundedExecutionEmptyLiveSource.inl"
 // P1 inactive opaque execution observation inventory. No class dereference.
 #include "AssemblyShadowOpaqueExecutionInventorySource.inl"
+// P1 inactive: compare opaque registry values to physical class enumeration only.
+#include "AssemblyShadowPhysicalMembershipSource.inl"
 
 AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
 {

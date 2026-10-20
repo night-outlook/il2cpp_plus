@@ -23,6 +23,7 @@ namespace assembly_shadow_bounded_general_live { struct Sources; class Scratch; 
 namespace assembly_shadow_frozen_execution_record { class Record; }
 namespace assembly_shadow_bounded_execution_empty_live { struct Receipt; }
 namespace assembly_shadow_opaque_execution { class Scratch; struct Receipt; }
+namespace assembly_shadow_physical_membership { class Scratch; struct Receipt; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -105,6 +106,12 @@ public:
     static bool TryCaptureOpaqueExecutionInventory(
         assembly_shadow_opaque_execution::Scratch& scratch,
         assembly_shadow_opaque_execution::Receipt& receipt);
+    // P1 INACTIVE: observed registry addresses vs physical class enumerator.
+    // No pointer is dereferenced/returned; membership does not prove lifetime,
+    // physical ownership, VM epoch, or complete execution diagnostics.
+    static bool TryAuditObservedPhysicalClassMembership(
+        assembly_shadow_physical_membership::Scratch& scratch,
+        assembly_shadow_physical_membership::Receipt& receipt);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();
