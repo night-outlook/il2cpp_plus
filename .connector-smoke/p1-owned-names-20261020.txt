@@ -1,0 +1,4 @@
+Disposable Connector write/read check.
+repo=night-outlook/il2cpp_plus
+base=52d056848738493b02e0ae9a4e733dffeca8d134
+No product source or evidence.
