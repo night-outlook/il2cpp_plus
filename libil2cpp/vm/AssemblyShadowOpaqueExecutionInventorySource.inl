@@ -21,7 +21,8 @@ bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(
         ExecutionObservationLock lock;
         return output.Populate(s_executionClasses.data(),
                                s_executionClasses.size(),s_executionClassCount,
-                               s_executionRegistryRevision.Current());
+                               s_executionRegistryRevision.Current(),
+                               s_executionRegistrationWitnesses);
     };
     const ActiveSnapshot* beforeActive=s_active.load(std::memory_order_acquire);
     const AssemblyShadowState beforeState=s_state.load(std::memory_order_acquire);
@@ -31,6 +32,8 @@ bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(
     receipt.completedSourceSamples=1;
     receipt.countBefore=scratch.Before().Count();
     receipt.registryRevisionBefore=scratch.Before().RegistryRevision();
+    receipt.candidateWitnessesBefore=scratch.Before().CandidateWitnesses();
+    receipt.activeWitnessesBefore=scratch.Before().ActiveWitnesses();
     if(!scratch.Before().Unique())
         return opaque::Fail(scratch,receipt,opaque::Error::DuplicateIdentity);
 
@@ -39,6 +42,8 @@ bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(
     receipt.completedSourceSamples=2;
     receipt.countAfter=scratch.After().Count();
     receipt.registryRevisionAfter=scratch.After().RegistryRevision();
+    receipt.candidateWitnessesAfter=scratch.After().CandidateWitnesses();
+    receipt.activeWitnessesAfter=scratch.After().ActiveWitnesses();
     if(!scratch.After().Unique())
         return opaque::Fail(scratch,receipt,opaque::Error::DuplicateIdentity);
     const ActiveSnapshot* afterActive=s_active.load(std::memory_order_acquire);
@@ -52,6 +57,7 @@ bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(
     // establishes physical origin, lifetime, ABA freedom or VM coherence.
     scratch.Scrub();
     receipt.opaqueInventoryObserved=true;
+    receipt.registrationWitnessesObserved=true;
     receipt.exactOpaqueSlotSamplesEqual=true;
     receipt.registryRevisionFenceStable=true;
     return true;

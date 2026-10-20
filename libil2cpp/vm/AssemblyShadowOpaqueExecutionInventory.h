@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include "AssemblyShadowExecutionRegistrationWitness.h"
 namespace il2cpp { namespace vm { namespace assembly_shadow_opaque_execution {
 static constexpr size_t kSlotCount=2048;
 static constexpr size_t kMaximumClasses=1024;
@@ -15,23 +16,34 @@ class Snapshot final {
     std::array<const void*,kSlotCount> slots_{};
     size_t count_=0;
     uint64_t registryRevision_=0;
+    size_t candidateWitnesses_=0,activeWitnesses_=0;
     bool populated_=false;
 public:
     Snapshot() noexcept=default;
     Snapshot(const Snapshot&)=delete;
     Snapshot& operator=(const Snapshot&)=delete;
-    template<class Pointer>
+    template<class Pointer,class WitnessTable>
     bool Populate(const Pointer* table,size_t length,size_t claimed,
-                  uint64_t revision) noexcept {
+                  uint64_t revision,const WitnessTable& witnesses) noexcept {
         if(populated_||!table||length!=kSlotCount||claimed>kMaximumClasses||
            revision==std::numeric_limits<uint64_t>::max())return false;
         populated_=true;
         registryRevision_=revision;
         for(size_t i=0;i<kSlotCount;++i){
             slots_[i]=table[i];
-            if(slots_[i])++count_;
+            assembly_shadow_execution_witness::Source source{};
+            if(!witnesses.Matches(i,slots_[i],source))return false;
+            if(slots_[i])
+            {
+                ++count_;
+                if(source==assembly_shadow_execution_witness::Source::Candidate)
+                    ++candidateWitnesses_;
+                else if(source==assembly_shadow_execution_witness::Source::ActiveShadow)
+                    ++activeWitnesses_;
+                else return false;
+            }
         }
-        return count_==claimed;
+        return count_==claimed && candidateWitnesses_+activeWitnesses_==count_;
     }
     bool Unique() const noexcept {
         if(!populated_)return false;
@@ -46,6 +58,8 @@ public:
     }
     bool SameAs(const Snapshot& b) const noexcept {
         if(!populated_||!b.populated_||count_!=b.count_||
+           candidateWitnesses_!=b.candidateWitnesses_||
+           activeWitnesses_!=b.activeWitnesses_||
            registryRevision_!=b.registryRevision_)return false;
         for(size_t i=0;i<kSlotCount;++i)
             if(slots_[i]!=b.slots_[i])return false;
@@ -53,10 +67,12 @@ public:
     }
     size_t Count() const noexcept{return populated_?count_:0;}
     uint64_t RegistryRevision() const noexcept{return populated_?registryRevision_:0;}
+    size_t CandidateWitnesses() const noexcept{return populated_?candidateWitnesses_:0;}
+    size_t ActiveWitnesses() const noexcept{return populated_?activeWitnesses_:0;}
     bool Populated() const noexcept{return populated_;}
     void Clear() noexcept {
         for(auto& slot:slots_)slot=nullptr;
-        count_=0;registryRevision_=0;populated_=false;
+        count_=0;registryRevision_=0;candidateWitnesses_=0;activeWitnesses_=0;populated_=false;
     }
 };
 class Scratch final {
@@ -77,6 +93,9 @@ struct Receipt {
     size_t countBefore=0,countAfter=0,completedSourceSamples=0;
     uint64_t generationBefore=0,generationAfter=0;
     uint64_t registryRevisionBefore=0,registryRevisionAfter=0;
+    size_t candidateWitnessesBefore=0,candidateWitnessesAfter=0;
+    size_t activeWitnessesBefore=0,activeWitnessesAfter=0;
+    bool registrationWitnessesObserved=false;
     bool registryRevisionFenceStable=false;
     bool opaqueInventoryObserved=false;
     bool exactOpaqueSlotSamplesEqual=false;
@@ -89,6 +108,7 @@ struct Receipt {
 inline bool Fail(Scratch& scratch,Receipt& receipt,Error error) noexcept {
     if(receipt.error==Error::None)receipt.error=error;
     receipt.opaqueInventoryObserved=false;
+    receipt.registrationWitnessesObserved=false;
     receipt.exactOpaqueSlotSamplesEqual=false;
     receipt.registryRevisionFenceStable=false;
     scratch.Scrub();

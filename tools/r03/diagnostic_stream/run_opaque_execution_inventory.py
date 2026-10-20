@@ -23,7 +23,8 @@ API="libil2cpp/vm/AssemblyShadow.h"
 MOCK="tools/r03/diagnostic_stream/opaque_inventory_fixture.cpp"
 RUNNER="tools/r03/diagnostic_stream/run_opaque_execution_inventory.py"
 SOURCES=(H,SRC,CPP,API,MOCK,RUNNER,
-         "libil2cpp/vm/AssemblyShadowExecutionRegistryRevision.h")
+         "libil2cpp/vm/AssemblyShadowExecutionRegistryRevision.h",
+         "libil2cpp/vm/AssemblyShadowExecutionRegistrationWitness.h")
 ORIGINAL_CPP_BLOB="53aecc2d113b20b6ff825d0aa4ca0f4372a7cce2"
 ORIGINAL_API_BLOB="32956c2c4084951131b497c1201712a0d4fe11b3"
 GROUPS=(
@@ -37,6 +38,10 @@ GROUPS=(
  "same-slots-new-registry-revision",
  "stable-nonzero-registry-revision",
  "saturated-registry-revision-refused",
+ "unwitnessed-pointer-refused",
+ "mismatched-witness-pointer-refused",
+ "phantom-witness-empty-slot-refused",
+ "active-shadow-witness-admitted",
  "successful-scratch-reuse-refused",
 )
 def sha(value:bytes)->str:return hashlib.sha256(value).hexdigest()
@@ -55,7 +60,8 @@ def verify(native:Path)->str:
     include='#include "AssemblyShadowOpaqueExecutionInventorySource.inl"'
     header='#include "AssemblyShadowOpaqueExecutionInventory.h"'
     revisionHeader='#include "AssemblyShadowExecutionRegistryRevision.h"'
-    if cpp.count(include)!=1 or cpp.count(header)!=1 or cpp.count(revisionHeader)!=1 or \
+    witnessHeader='#include "AssemblyShadowExecutionRegistrationWitness.h"'
+    if cpp.count(include)!=1 or cpp.count(header)!=1 or cpp.count(revisionHeader)!=1 or cpp.count(witnessHeader)!=1 or \
        api.count("static bool TryCaptureOpaqueExecutionInventory(")!=1 or \
        source.count("bool AssemblyShadow::TryCaptureOpaqueExecutionInventory(")!=1:
         raise RuntimeError("Actual native method/header not included exactly once")
@@ -65,19 +71,32 @@ def verify(native:Path)->str:
                   "ExecutionObservationLock lock;","scratch.Before().Unique()",
                   "scratch.After().Unique()","scratch.Before().SameAs(scratch.After())",
                   "scratch.Scrub();","receipt.opaqueInventoryObserved=true;",
+                  "receipt.registrationWitnessesObserved=true;",
                   "receipt.registryRevisionFenceStable=true;"):
         if source.count(token)!=1:
             raise RuntimeError("Native bounded pointer safety contract changed: "+token)
-    if fixture.count(include)!=1 or fixture.count(header)!=1 or fixture.count(revisionHeader)!=1 or \
+    if fixture.count(include)!=1 or fixture.count(header)!=1 or fixture.count(revisionHeader)!=1 or fixture.count(witnessHeader)!=1 or \
        any(('"'+x+'"') not in fixture and ('PASS '+x+'\\n') not in fixture for x in GROUPS):
         raise RuntimeError("Fixture does not compile exact native code/case groups")
+    # Strip only the reviewed witness source; retain the original guarded
+    # publication/access code and exact original getter blobs.
+    witnessDecl="    // P1 registration-path witness: write-once pointer/value source token.\n    assembly_shadow_execution_witness::Table s_executionRegistrationWitnesses{};\n"
+    witnessInsert="                // Record registration-path identity before publication, under\n                // the same short observation lock. No extra metadata access.\n                if(!s_executionRegistrationWitnesses.Register(slot,klass,witnessedSource))\n                {\n                    s_droppedClassObservations.fetch_add(1,std::memory_order_relaxed);\n                    return;\n                }\n"
+    witnessClassify="        const bool knownCandidate=candidates->byAssembly.count(klass->image->assembly)!=0;\n        const bool knownActive=active && active->shadowToBaseline.count(klass->image->assembly)!=0;\n        if(!knownCandidate && !knownActive)return;\n        // Preserve the original candidate-before-shadow admission precedence.\n        const auto witnessedSource=knownCandidate\n            ? assembly_shadow_execution_witness::Source::Candidate\n            : assembly_shadow_execution_witness::Source::ActiveShadow;\n"
+    oldAdmission="        if (!candidates->byAssembly.count(klass->image->assembly) &&\n            !(active && active->shadowToBaseline.count(klass->image->assembly))) return;\n"
+    if cpp.count(witnessDecl)!=1 or cpp.count(witnessInsert)!=1 or cpp.count(witnessClassify)!=1:
+        raise RuntimeError("Real registration witness publication changed")
+    oldcpp=(cpp.replace(witnessHeader+"\n","")
+               .replace(witnessDecl,"")
+               .replace(witnessInsert,"")
+               .replace(witnessClassify,oldAdmission))
     # Remove only the exact additive revision source, preserving the original
     # getter and runtime policy blob as a strict provenance control.
     revisionDecl="    // P1 registry-only mutation fence. Access requires execution observation lock.\n    assembly_shadow_execution_registry::Revision s_executionRegistryRevision{};\n"
     revisionInsert="                // P1 registry-only publication revision (same observation lock).\n                s_executionRegistryRevision.Advance();\n"
     if cpp.count(revisionDecl)!=1 or cpp.count(revisionInsert)!=1:
         raise RuntimeError("Real registry publication instrumentation changed")
-    oldcpp=(cpp.replace(revisionHeader+"\n","")
+    oldcpp=(oldcpp.replace(revisionHeader+"\n","")
                .replace(revisionDecl,"").replace(revisionInsert,""))
     oldcpp=oldcpp.replace(header+"\n","").replace(
 

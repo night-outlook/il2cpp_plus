@@ -13,6 +13,7 @@
 #include "AssemblyShadowObservationMemo.h"
 #include "AssemblyShadowOpaqueExecutionInventory.h"
 #include "AssemblyShadowExecutionRegistryRevision.h"
+#include "AssemblyShadowExecutionRegistrationWitness.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -171,6 +172,8 @@ namespace {
     size_t s_executionClassCount = 0;
     // P1 registry-only mutation fence. Access requires execution observation lock.
     assembly_shadow_execution_registry::Revision s_executionRegistryRevision{};
+    // P1 registration-path source witness, immutable after successful insert.
+    assembly_shadow_execution_witness::Table s_executionRegistrationWitnesses{};
     std::atomic_flag s_executionObservationLock = ATOMIC_FLAG_INIT;
 
     struct ExecutionObservationLock
@@ -207,8 +210,13 @@ namespace {
         const CandidateRegistry* candidates = s_candidates.load(std::memory_order_acquire);
         if (!candidates) return; // Startup execution policy is a separate proof.
         const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
-        if (!candidates->byAssembly.count(klass->image->assembly) &&
-            !(active && active->shadowToBaseline.count(klass->image->assembly))) return;
+        const bool knownCandidate=candidates->byAssembly.count(klass->image->assembly)!=0;
+        const bool knownActive=active && active->shadowToBaseline.count(klass->image->assembly)!=0;
+        if(!knownCandidate && !knownActive)return;
+        // Preserve the original candidate-before-shadow admission precedence.
+        const auto witnessedSource=knownCandidate
+            ? assembly_shadow_execution_witness::Source::Candidate
+            : assembly_shadow_execution_witness::Source::ActiveShadow;
         ExecutionObservationLock lock;
         size_t slot = (reinterpret_cast<uintptr_t>(klass) >> 3) % s_executionClasses.size();
         for (size_t probe = 0; probe < s_executionClasses.size(); ++probe)
@@ -222,6 +230,13 @@ namespace {
             if (!entry)
             {
                 if (s_executionClassCount == kMaximumExecutionClasses) break;
+                // Record registration-path identity before publication, under
+                // the same short observation lock. No extra metadata access.
+                if(!s_executionRegistrationWitnesses.Register(slot,klass,witnessedSource))
+                {
+                    s_droppedClassObservations.fetch_add(1,std::memory_order_relaxed);
+                    return;
+                }
                 entry = klass;
                 ++s_executionClassCount;
                 // P1 registry-only publication revision (same observation lock).
