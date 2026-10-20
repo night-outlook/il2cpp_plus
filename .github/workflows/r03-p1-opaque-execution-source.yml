@@ -4,6 +4,7 @@ on:
     branches: ['codex/assembly-shadow-r01b-h1']
     paths:
       - 'libil2cpp/vm/AssemblyShadowOpaqueExecutionInventory*'
+      - 'libil2cpp/vm/AssemblyShadowExecutionRegistryRevision.h'
       - 'libil2cpp/vm/AssemblyShadow.cpp'
       - 'libil2cpp/vm/AssemblyShadow.h'
       - 'tools/r03/diagnostic_stream/opaque_inventory_fixture.cpp'
