@@ -84,6 +84,17 @@ def verify(native:Path)->str:
     if fixture.count(header)!=1 or fixture.count(include)!=1 or \
        any(('"'+name+'"') not in fixture for name in GROUPS):
         raise RuntimeError("Fixture source does not compile actual methods/case groups")
+    # The new inactive owned-name source is an additive, callerless method;
+    # strip only its exact include, emission and native API declaration.
+    nameHeader="#include \"AssemblyShadowOwnedPhysicalNames.h\""
+    nameInline="// P1 inactive owned names from physical enumerator matches only.\n#include \"AssemblyShadowOwnedPhysicalNamesSource.inl\"\n"
+    nameNamespace="namespace assembly_shadow_owned_physical_names { class Capture; struct Receipt; }\n"
+    nameDeclaration="    // P1 INACTIVE: copy display names synchronously for matched physical classes.\n    // No live class pointer survives; this is not an execution TypeKey.\n    static bool TryCaptureOwnedObservedPhysicalNames(\n        assembly_shadow_physical_membership::Scratch& membershipScratch,\n        assembly_shadow_owned_physical_names::Capture& names,\n        assembly_shadow_owned_physical_names::Receipt& receipt);\n"
+    if (cpp.count(nameHeader)!=1 or cpp.count(nameInline)!=1 or
+        api.count(nameNamespace)!=1 or api.count(nameDeclaration)!=1):
+        raise RuntimeError("Owned name capture source changed unexpectedly")
+    cpp=cpp.replace(nameHeader+"\n","").replace(nameInline,"")
+    api=api.replace(nameNamespace,"").replace(nameDeclaration,"")
     oldcpp=(cpp.replace(header+"\n","").replace(apiInclude+"\n","")
             .replace(inlBlock,""))
     oldapi=(api.replace(namespace,"").replace(declaration,""))

@@ -1,0 +1,86 @@
+// P1 INACTIVE. Included once by AssemblyShadow.cpp within the VM namespace.
+// No original diagnostic getter, managed method or Player code invokes this.
+bool AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(
+    assembly_shadow_physical_membership::Scratch& membershipScratch,
+    assembly_shadow_owned_physical_names::Capture& names,
+    assembly_shadow_owned_physical_names::Receipt& receipt)
+{
+    namespace physical=assembly_shadow_physical_membership;
+    namespace owned=assembly_shadow_owned_physical_names;
+    receipt=owned::Receipt{};
+    auto reject=[&](owned::Error why)->bool {
+        if(receipt.error==owned::Error::None)receipt.error=why;
+        receipt.namesCopiedFromMatchedEnumeratorCallbacks=false;
+        names.Revoke();
+        membershipScratch.Scrub();
+        return false;
+    };
+    if(!membershipScratch.Consume() || !names.Begin())
+        return reject(owned::Error::ReusedCapture);
+    assembly_shadow_metadata_lifetime::Gate::Reader admission(
+        assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate);
+    if(!admission)return reject(owned::Error::AdmissionUnavailable);
+    static_assert(std::tuple_size<decltype(s_executionClasses)>::value==physical::kSlots,
+                  "Observed registry and owned name source slot limits changed");
+    const ActiveSnapshot* activeBefore=s_active.load(std::memory_order_acquire);
+    const AssemblyShadowState stateBefore=s_state.load(std::memory_order_acquire);
+    {
+        ExecutionObservationLock lock;
+        if(!membershipScratch.Capture(s_executionClasses.data(),s_executionClasses.size(),
+            s_executionClassCount,s_executionRegistryRevision.Current(),
+            s_executionRegistrationWitnesses))
+            return reject(owned::Error::RegistryInvalid);
+    }
+    if(!membershipScratch.Unique())return reject(owned::Error::RegistryInvalid);
+    receipt.observedClasses=membershipScratch.Observed();
+    receipt.registryRevisionBefore=membershipScratch.Revision();
+    if(receipt.observedClasses)
+    {
+        struct Context {physical::Scratch* membership;owned::Capture* names;};
+        Context context{&membershipScratch,&names};
+        // Snapshot is prepared BEFORE taking g_MetadataLock. The callback
+        // borrows physical fields ONLY for an exact observed iterator match.
+        // It writes caller-owned fixed text and retains no Il2CppClass pointer.
+        os::FastAutoLock metadataLock(&g_MetadataLock);
+        il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
+            Context& context=*static_cast<Context*>(raw);
+            const auto event=context.membership->ObserveEnumeratedOwned(klass);
+            if(event!=physical::ObservationEvent::FirstMatch ||
+               !context.names->CollectingHealthy())return;
+            if(!klass->image || !klass->image->assembly ||
+               !klass->image->assembly->aname.name || !klass->name)
+            {
+                context.names->RejectInvalidSource();
+                return;
+            }
+            context.names->Add(klass->image->assembly->aname.name,
+                               klass->namespaze,klass->name);
+        },&context);
+    }
+    receipt.matchedClasses=membershipScratch.Matched();
+    if(!membershipScratch.EnumeratorHealthy())
+        return reject(owned::Error::EnumeratorIncomplete);
+    if(!names.CollectingHealthy())return reject(owned::Error::NameCaptureFailed);
+    bool sameRegistry=false;
+    {
+        ExecutionObservationLock lock;
+        sameRegistry=membershipScratch.SameRegistry(
+            s_executionClasses.data(),s_executionClasses.size(),
+            s_executionClassCount,s_executionRegistryRevision.Current(),
+            s_executionRegistrationWitnesses);
+        receipt.registryRevisionAfter=s_executionRegistryRevision.Current();
+    }
+    const ActiveSnapshot* activeAfter=s_active.load(std::memory_order_acquire);
+    const AssemblyShadowState stateAfter=s_state.load(std::memory_order_acquire);
+    if(!sameRegistry || activeBefore!=activeAfter || stateBefore!=stateAfter)
+        return reject(owned::Error::SourceChanged);
+    if(!membershipScratch.FullyMatched() ||
+       !names.Seal(membershipScratch.Observed()))
+        return reject(owned::Error::CountMismatch);
+    membershipScratch.Scrub();
+    receipt.ownedRows=names.Count();
+    receipt.ownedTextBytes=names.TextBytes();
+    // This is an owned *physical display name* subset, not an execution TypeKey.
+    receipt.namesCopiedFromMatchedEnumeratorCallbacks=true;
+    return true;
+}

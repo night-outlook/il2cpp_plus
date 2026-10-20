@@ -24,6 +24,7 @@ namespace assembly_shadow_frozen_execution_record { class Record; }
 namespace assembly_shadow_bounded_execution_empty_live { struct Receipt; }
 namespace assembly_shadow_opaque_execution { class Scratch; struct Receipt; }
 namespace assembly_shadow_physical_membership { class Scratch; struct Receipt; }
+namespace assembly_shadow_owned_physical_names { class Capture; struct Receipt; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -112,6 +113,12 @@ public:
     static bool TryAuditObservedPhysicalClassMembership(
         assembly_shadow_physical_membership::Scratch& scratch,
         assembly_shadow_physical_membership::Receipt& receipt);
+    // P1 INACTIVE: copy display names synchronously for matched physical classes.
+    // No live class pointer survives; this is not an execution TypeKey.
+    static bool TryCaptureOwnedObservedPhysicalNames(
+        assembly_shadow_physical_membership::Scratch& membershipScratch,
+        assembly_shadow_owned_physical_names::Capture& names,
+        assembly_shadow_owned_physical_names::Receipt& receipt);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();

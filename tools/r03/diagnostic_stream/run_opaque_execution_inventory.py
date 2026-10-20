@@ -116,6 +116,18 @@ def verify(native:Path)->str:
     cpp=(cpp.replace(physicalHeader+"\n","")
             .replace(physicalApi+"\n","").replace(physicalInclude,""))
     api=api.replace(physicalNamespace,"").replace(physicalDecl,"")
+    # The new inactive owned-name method is additive and must never mutate
+    # original getters or registration logic. Remove only approved includes,
+    # source definition and forward/declaration prior to older fingerprinting.
+    nameHeader="#include \"AssemblyShadowOwnedPhysicalNames.h\""
+    nameInline="// P1 inactive owned names from physical enumerator matches only.\n#include \"AssemblyShadowOwnedPhysicalNamesSource.inl\"\n"
+    nameNamespace="namespace assembly_shadow_owned_physical_names { class Capture; struct Receipt; }\n"
+    nameDeclaration="    // P1 INACTIVE: copy display names synchronously for matched physical classes.\n    // No live class pointer survives; this is not an execution TypeKey.\n    static bool TryCaptureOwnedObservedPhysicalNames(\n        assembly_shadow_physical_membership::Scratch& membershipScratch,\n        assembly_shadow_owned_physical_names::Capture& names,\n        assembly_shadow_owned_physical_names::Receipt& receipt);\n"
+    if (cpp.count(nameHeader)!=1 or cpp.count(nameInline)!=1 or
+        api.count(nameNamespace)!=1 or api.count(nameDeclaration)!=1):
+        raise RuntimeError("Owned physical name source changed unexpectedly")
+    cpp=cpp.replace(nameHeader+"\n","").replace(nameInline,"")
+    api=api.replace(nameNamespace,"").replace(nameDeclaration,"")
     # Strip only the reviewed witness source; retain the original guarded
     # publication/access code and exact original getter blobs.
     witnessDecl="    // P1 registration-path source witness, immutable after successful insert.\n    assembly_shadow_execution_witness::Table s_executionRegistrationWitnesses{};\n"

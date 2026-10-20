@@ -18,6 +18,7 @@ enum class Error:uint8_t {
     DuplicateObservedIdentity, EnumeratorIncomplete, UnmatchedObservedIdentity,
     SourceChanged
 };
+enum class ObservationEvent:uint8_t {Ignored,FirstMatch,DuplicateMatch,Invalid};
 class Scratch final
 {
     std::array<const void*,kSlots> identities_{};
@@ -64,29 +65,40 @@ public:
         }
         return true;
     }
-    // Called only from the synchronous il2cpp_class_for_each callback while
-    // g_MetadataLock is held; compare address values, never dereference them.
-    void ObserveEnumerated(const void* address) noexcept
+    // Classify a synchronous iterator callback without reading any class
+    // metadata. FirstMatch is the sole point at which a separate owned-name
+    // consumer may borrow fields while g_MetadataLock is held.
+    ObservationEvent ObserveEnumeratedOwned(const void* address) noexcept
     {
-        if(badEnumeration_)return;
+        if(badEnumeration_)return ObservationEvent::Invalid;
         if(!address||enumerated_==kMaximumEnumerated)
         {
-            badEnumeration_=true;return;
+            badEnumeration_=true;return ObservationEvent::Invalid;
         }
         ++enumerated_;
         size_t slot=(reinterpret_cast<uintptr_t>(address)>>3)%kSlots;
         for(size_t probe=0;probe<kSlots;++probe)
         {
             const void* current=identities_[slot];
-            if(!current)return;  // class exists in enumerator but not observed
+            if(!current)return ObservationEvent::Ignored;
             if(current==address)
             {
-                if(!seen_[slot]){seen_[slot]=1;++matched_;}
-                return;
+                if(!seen_[slot])
+                {
+                    seen_[slot]=1;++matched_;
+                    return ObservationEvent::FirstMatch;
+                }
+                return ObservationEvent::DuplicateMatch;
             }
             slot=(slot+1)%kSlots;
         }
         badEnumeration_=true;
+        return ObservationEvent::Invalid;
+    }
+    // Preserve the original opaque-membership API and counting semantics.
+    void ObserveEnumerated(const void* address) noexcept
+    {
+        (void)ObserveEnumeratedOwned(address);
     }
     template<class Pointer,class Witnesses>
     bool SameRegistry(const Pointer* slots,size_t length,size_t claimed,

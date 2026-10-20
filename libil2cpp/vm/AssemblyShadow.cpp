@@ -16,6 +16,7 @@
 #include "AssemblyShadowExecutionRegistrationWitness.h"
 #include "AssemblyShadowExecutionRegistryPublisher.h"
 #include "AssemblyShadowPhysicalMembership.h"
+#include "AssemblyShadowOwnedPhysicalNames.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -1574,6 +1575,8 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
 #include "AssemblyShadowOpaqueExecutionInventorySource.inl"
 // P1 inactive: compare opaque registry values to physical class enumeration only.
 #include "AssemblyShadowPhysicalMembershipSource.inl"
+// P1 inactive owned names from physical enumerator matches only.
+#include "AssemblyShadowOwnedPhysicalNamesSource.inl"
 
 AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
 {
