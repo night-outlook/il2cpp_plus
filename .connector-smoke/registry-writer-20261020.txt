@@ -1,0 +1,4 @@
+Isolated connector write/read smoke test.
+night-outlook/il2cpp_plus
+Base SHA: f0cb6f9f7a80c0601b5bc95c1a1cdda78a116e16
+No product code or evidence.
