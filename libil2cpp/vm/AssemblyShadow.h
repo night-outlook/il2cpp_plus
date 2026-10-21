@@ -25,6 +25,7 @@ namespace assembly_shadow_bounded_execution_empty_live { struct Receipt; }
 namespace assembly_shadow_opaque_execution { class Scratch; struct Receipt; }
 namespace assembly_shadow_physical_membership { class Scratch; struct Receipt; }
 namespace assembly_shadow_owned_physical_names { class Capture; struct Receipt; }
+namespace assembly_shadow_owned_physical_json { class Record; struct Receipt; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -119,6 +120,17 @@ public:
         assembly_shadow_physical_membership::Scratch& membershipScratch,
         assembly_shadow_owned_physical_names::Capture& names,
         assembly_shadow_owned_physical_names::Receipt& receipt);
+    // P1 INACTIVE: actual observed-class iterator -> caller-owned physical
+    // names -> noncanonical JSON. Existing native locks are released BEFORE
+    // formatting. Every output buffer must be prepared while healthy.
+    // Retains no class pointer and does NOT produce execution V1 TypeKeys.
+    static bool TryCaptureOwnedObservedPhysicalJson(
+        assembly_shadow_physical_membership::Scratch& membershipScratch,
+        assembly_shadow_owned_physical_names::Capture& names,
+        assembly_shadow_owned_physical_names::Receipt& namesReceipt,
+        assembly_shadow_owned_physical_json::Record& jsonOutput,
+        assembly_shadow_owned_physical_json::Receipt& jsonReceipt,
+        size_t maximumBytes);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();

@@ -67,6 +67,18 @@ def verify(native:Path)->str:
     header='#include "AssemblyShadowOpaqueExecutionInventory.h"'
     revisionHeader='#include "AssemblyShadowExecutionRegistryRevision.h"'
     witnessHeader='#include "AssemblyShadowExecutionRegistrationWitness.h"'
+    # The new inactive end-to-end serializer path is entirely additive.
+    # Strip only its exact reviewed CPP/API emissions before authenticating
+    # historical immutable getter/source fingerprints.
+    live_header="#include \"AssemblyShadowOwnedPhysicalNamesJson.h\"\n"
+    live_source="// P1 inactive owned JSON pipeline; all output bytes copied after VM lock release.\n#include \"AssemblyShadowOwnedPhysicalLiveJsonSource.inl\"\n"
+    live_forward="namespace assembly_shadow_owned_physical_json { class Record; struct Receipt; }\n"
+    live_declaration="    // P1 INACTIVE: actual observed-class iterator -> caller-owned physical\n    // names -> noncanonical JSON. Existing native locks are released BEFORE\n    // formatting. Every output buffer must be prepared while healthy.\n    // Retains no class pointer and does NOT produce execution V1 TypeKeys.\n    static bool TryCaptureOwnedObservedPhysicalJson(\n        assembly_shadow_physical_membership::Scratch& membershipScratch,\n        assembly_shadow_owned_physical_names::Capture& names,\n        assembly_shadow_owned_physical_names::Receipt& namesReceipt,\n        assembly_shadow_owned_physical_json::Record& jsonOutput,\n        assembly_shadow_owned_physical_json::Receipt& jsonReceipt,\n        size_t maximumBytes);\n"
+    if (cpp.count(live_header)!=1 or cpp.count(live_source)!=1 or
+        api.count(live_forward)!=1 or api.count(live_declaration)!=1):
+        raise RuntimeError("Owned physical live JSON source/API emission changed")
+    cpp=cpp.replace(live_header,"").replace(live_source,"")
+    api=api.replace(live_forward,"").replace(live_declaration,"")
     publisherHeader='#include "AssemblyShadowExecutionRegistryPublisher.h"'
     if cpp.count(include)!=1 or cpp.count(header)!=1 or cpp.count(revisionHeader)!=1 or cpp.count(witnessHeader)!=1 or cpp.count(publisherHeader)!=1 or \
        api.count("static bool TryCaptureOpaqueExecutionInventory(")!=1 or \

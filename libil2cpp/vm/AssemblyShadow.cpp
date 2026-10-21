@@ -17,6 +17,7 @@
 #include "AssemblyShadowExecutionRegistryPublisher.h"
 #include "AssemblyShadowPhysicalMembership.h"
 #include "AssemblyShadowOwnedPhysicalNames.h"
+#include "AssemblyShadowOwnedPhysicalNamesJson.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -1577,6 +1578,8 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
 #include "AssemblyShadowPhysicalMembershipSource.inl"
 // P1 inactive owned names from physical enumerator matches only.
 #include "AssemblyShadowOwnedPhysicalNamesSource.inl"
+// P1 inactive owned JSON pipeline; all output bytes copied after VM lock release.
+#include "AssemblyShadowOwnedPhysicalLiveJsonSource.inl"
 
 AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
 {

@@ -54,6 +54,18 @@ def verify(native:Path)->str:
     api=(native/API).read_text()
     source=(native/SOURCE).read_text()
     fixture=(native/FIXTURE).read_text()
+    # The new inactive end-to-end serializer path is entirely additive.
+    # Strip only its exact reviewed CPP/API emissions before authenticating
+    # historical immutable getter/source fingerprints.
+    live_header="#include \"AssemblyShadowOwnedPhysicalNamesJson.h\"\n"
+    live_source="// P1 inactive owned JSON pipeline; all output bytes copied after VM lock release.\n#include \"AssemblyShadowOwnedPhysicalLiveJsonSource.inl\"\n"
+    live_forward="namespace assembly_shadow_owned_physical_json { class Record; struct Receipt; }\n"
+    live_declaration="    // P1 INACTIVE: actual observed-class iterator -> caller-owned physical\n    // names -> noncanonical JSON. Existing native locks are released BEFORE\n    // formatting. Every output buffer must be prepared while healthy.\n    // Retains no class pointer and does NOT produce execution V1 TypeKeys.\n    static bool TryCaptureOwnedObservedPhysicalJson(\n        assembly_shadow_physical_membership::Scratch& membershipScratch,\n        assembly_shadow_owned_physical_names::Capture& names,\n        assembly_shadow_owned_physical_names::Receipt& namesReceipt,\n        assembly_shadow_owned_physical_json::Record& jsonOutput,\n        assembly_shadow_owned_physical_json::Receipt& jsonReceipt,\n        size_t maximumBytes);\n"
+    if (cpp.count(live_header)!=1 or cpp.count(live_source)!=1 or
+        api.count(live_forward)!=1 or api.count(live_declaration)!=1):
+        raise RuntimeError("Owned physical live JSON source/API emission changed")
+    cpp=cpp.replace(live_header,"").replace(live_source,"")
+    api=api.replace(live_forward,"").replace(live_declaration,"")
     include='#include "AssemblyShadowPhysicalMembershipSource.inl"'
     header='#include "AssemblyShadowPhysicalMembership.h"'
     apiInclude='#include "il2cpp-api.h"'

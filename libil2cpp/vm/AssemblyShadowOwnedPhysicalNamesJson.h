@@ -63,6 +63,9 @@ public:
     Record(Record&&)=delete;
     Record& operator=(Record&&)=delete;
     Error FirstError() const noexcept{return error_;}
+    // Only a fresh caller-allocated output may begin a live source pass.
+    // Refuse completed, writing and failed objects before entering VM capture.
+    bool Fresh() const noexcept{return stage_==Stage::New && error_==Error::None;}
     bool Complete() const noexcept{return stage_==Stage::Complete && error_==Error::None;}
     const char* Data() const noexcept{return Complete()?bytes_.data():nullptr;}
     size_t Bytes() const noexcept{return Complete()?used_:0;}
