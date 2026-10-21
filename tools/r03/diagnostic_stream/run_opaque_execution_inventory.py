@@ -67,6 +67,17 @@ def verify(native:Path)->str:
     header='#include "AssemblyShadowOpaqueExecutionInventory.h"'
     revisionHeader='#include "AssemblyShadowExecutionRegistryRevision.h"'
     witnessHeader='#include "AssemblyShadowExecutionRegistrationWitness.h"'
+    # New inactive bridge is strictly additive: strip ONLY its exact
+    # reviewed CPP/API bytes before authenticating prior/frozen blobs.
+    shape_header="#include \"AssemblyShadowObservedTypeShapeCensus.h\"\n"
+    shape_source="// P1 inactive, actual VM first-match source to a primitive shape-only census.\n#include \"AssemblyShadowObservedTypeShapeLiveSource.inl\"\n"
+    shape_forward="namespace assembly_shadow_observed_type_shape_census { struct Result; }\n"
+    shape_declaration="    // P1 INACTIVE: copy actual first-matched physical class header facts while\n    // metadata is admitted, then count shape categories after all VM locks\n    // are released. Returns only primitive aggregates; no live pointers,\n    // canonical execution TypeKeys, Player/managed API, or VM-wide epoch.\n    static bool TryCaptureObservedTypeShapeCensus(\n        assembly_shadow_physical_membership::Scratch& membershipScratch,\n        assembly_shadow_owned_physical_names::Capture& names,\n        assembly_shadow_owned_physical_names::Receipt& namesReceipt,\n        assembly_shadow_observed_type_shape_census::Result& censusResult);\n"
+    if (cpp.count(shape_header)!=1 or cpp.count(shape_source)!=1 or
+        api.count(shape_forward)!=1 or api.count(shape_declaration)!=1):
+        raise RuntimeError("Inactive live type-shape census CPP/API source changed")
+    cpp=cpp.replace(shape_header,"").replace(shape_source,"")
+    api=api.replace(shape_forward,"").replace(shape_declaration,"")
     # The new inactive end-to-end serializer path is entirely additive.
     # Strip only its exact reviewed CPP/API emissions before authenticating
     # historical immutable getter/source fingerprints.

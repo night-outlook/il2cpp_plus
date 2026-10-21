@@ -26,6 +26,7 @@ namespace assembly_shadow_opaque_execution { class Scratch; struct Receipt; }
 namespace assembly_shadow_physical_membership { class Scratch; struct Receipt; }
 namespace assembly_shadow_owned_physical_names { class Capture; struct Receipt; }
 namespace assembly_shadow_owned_physical_json { class Record; struct Receipt; }
+namespace assembly_shadow_observed_type_shape_census { struct Result; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -131,6 +132,15 @@ public:
         assembly_shadow_owned_physical_json::Record& jsonOutput,
         assembly_shadow_owned_physical_json::Receipt& jsonReceipt,
         size_t maximumBytes);
+    // P1 INACTIVE: copy actual first-matched physical class header facts while
+    // metadata is admitted, then count shape categories after all VM locks
+    // are released. Returns only primitive aggregates; no live pointers,
+    // canonical execution TypeKeys, Player/managed API, or VM-wide epoch.
+    static bool TryCaptureObservedTypeShapeCensus(
+        assembly_shadow_physical_membership::Scratch& membershipScratch,
+        assembly_shadow_owned_physical_names::Capture& names,
+        assembly_shadow_owned_physical_names::Receipt& namesReceipt,
+        assembly_shadow_observed_type_shape_census::Result& censusResult);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();

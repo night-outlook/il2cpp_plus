@@ -49,11 +49,20 @@ inline bool Fail(Result& output,Error why) noexcept {
 // A caller supplies an already complete copied source and exact typed receipt.
 // No borrowed VM pointer or field is accessed or retained. Each successful
 // call requires a fresh destination; caller owns both objects exclusively.
+inline bool Fresh(const Result& result) noexcept {
+    return result.error==Error::None &&
+           !result.sourceOwnedAndMatched &&
+           !result.firstMatchedClassHeaderBitsCopied &&
+           !result.census.completeObservedSubset &&
+           result.census.total==0 &&
+           result.candidateRegistrationRows==0 &&
+           result.activeShadowRegistrationRows==0 &&
+           result.registryRevision==0;
+}
 inline bool Build(const owned::Capture& capture,
                   const owned::Receipt& sourceReceipt,
                   Result& output) noexcept {
-    if(output.error!=Error::None || output.sourceOwnedAndMatched ||
-       output.firstMatchedClassHeaderBitsCopied || output.census.completeObservedSubset)
+    if(!Fresh(output))
         return Fail(output,Error::ReusedCensus);
     if(!capture.Complete())return Fail(output,Error::IncompleteCapture);
     const size_t rows=capture.Count();
