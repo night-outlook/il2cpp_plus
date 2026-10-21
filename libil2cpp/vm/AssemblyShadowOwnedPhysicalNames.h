@@ -10,6 +10,7 @@
 #include <cstring>
 #include <limits>
 #include "AssemblyShadowExecutionRegistrationWitness.h"
+#include "AssemblyShadowObservedTypeShape.h"
 
 namespace il2cpp { namespace vm { namespace assembly_shadow_owned_physical_names {
 
@@ -31,6 +32,7 @@ struct RowView {
     size_t registrySlot=kRegistrationSlots;
     assembly_shadow_execution_witness::Source registrationSource=
         assembly_shadow_execution_witness::Source::None;
+    assembly_shadow_observed_type_shape::RawEvidence observedShape{};
 };
 class Capture final {
     struct Span {uint32_t offset=0,bytes=0;};
@@ -39,6 +41,7 @@ class Capture final {
         uint16_t registrySlot=static_cast<uint16_t>(kRegistrationSlots);
         assembly_shadow_execution_witness::Source registrationSource=
             assembly_shadow_execution_witness::Source::None;
+        assembly_shadow_observed_type_shape::RawEvidence observedShape{};
     };
     enum class Stage:uint8_t {New, Collecting, Sealed, Failed};
     std::array<Row,kMaximumRows> rows_{};
@@ -95,7 +98,8 @@ public:
     }
     bool Add(size_t registrationSlot,
              assembly_shadow_execution_witness::Source registrationSource,
-             const char* assembly,const char* nameSpace,const char* simpleName) noexcept {
+             const char* assembly,const char* nameSpace,const char* simpleName,
+             assembly_shadow_observed_type_shape::RawEvidence observedShape={}) noexcept {
         if(stage_!=Stage::Collecting || firstError_!=Error::None)
             return Fail(Error::BadPhase);
         if(count_==kMaximumRows)return Fail(Error::TooManyRows);
@@ -111,6 +115,7 @@ public:
            !Append(simpleName,row.simpleName))return false;
         row.registrySlot=static_cast<uint16_t>(registrationSlot);
         row.registrationSource=registrationSource;
+        row.observedShape=observedShape;
         usedRegistrationSlots_[registrationSlot]=1;
         ++count_;
         return true;
@@ -136,6 +141,13 @@ public:
         out.simpleName={text_.data()+row.simpleName.offset,row.simpleName.bytes};
         out.registrySlot=row.registrySlot;
         out.registrationSource=row.registrationSource;
+        out.observedShape=row.observedShape;
+        return true;
+    }
+    bool AllObservedShapesFromMatchedCallbacks() const noexcept {
+        if(!Complete())return false;
+        for(size_t i=0;i<count_;++i)
+            if(!rows_[i].observedShape.observedFromMatchedPhysicalCallback)return false;
         return true;
     }
     bool RejectInvalidSource() noexcept{return Fail(Error::MissingName);}
@@ -158,6 +170,7 @@ struct Receipt {
     uint64_t registryRevisionBefore=0,registryRevisionAfter=0;
     bool namesCopiedFromMatchedEnumeratorCallbacks=false;
     bool allRowsBoundToObservedRegistry=false;
+    bool allObservedTypeShapeRowsFromMatchedCallbacks=false;
     bool classPointerOwnershipProven=false;
     bool metadataPointerLifetimeProven=false;
     bool completeExecutionTypeKeys=false;

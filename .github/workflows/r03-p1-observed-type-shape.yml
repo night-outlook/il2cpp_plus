@@ -1,0 +1,52 @@
+name: R03 P1 observed physical metadata shape census source
+on:
+  push:
+    branches: ['codex/assembly-shadow-r01b-h1']
+    paths:
+      - 'libil2cpp/vm/AssemblyShadowOwnedPhysicalNames.h'
+      - 'libil2cpp/vm/AssemblyShadowOwnedPhysicalNamesSource.inl'
+      - 'libil2cpp/vm/AssemblyShadowObservedTypeShape.h'
+      - 'libil2cpp/vm/AssemblyShadowObservedTypeShapeCensus.h'
+      - 'tools/r03/diagnostic_stream/run_observed_type_shape_census.py'
+      - 'tools/r03/diagnostic_stream/owned_type_shape_census_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/owned_physical_names_fixture.cpp'
+      - '.github/workflows/r03-p1-observed-type-shape.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: clang++
+          - os: ubuntu-24.04
+            cxx: g++
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    env:
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: native
+      - name: Compile actual VM source and typed primitive-shape census
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B "$GITHUB_WORKSPACE/native/tools/r03/diagnostic_stream/run_observed_type_shape_census.py" \
+            --native "$GITHUB_WORKSPACE/native" \
+            --output "$RUNNER_TEMP/p1-type-shape-${{ github.run_id }}-${{ github.run_attempt }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: p1-type-shape-${{ matrix.os }}-${{ matrix.cxx }}-${{ github.sha }}
+          path: ${{ runner.temp }}/p1-type-shape-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

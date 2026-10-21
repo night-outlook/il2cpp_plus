@@ -19,7 +19,19 @@
 
 struct Il2CppAssembly { struct {const char* name;} aname; };
 struct Il2CppImage {Il2CppAssembly* assembly;};
-struct Il2CppClass {Il2CppImage* image;const char* namespaze;const char* name;};
+static constexpr uint8_t IL2CPP_TYPE_VALUETYPE=0x11;
+static constexpr uint8_t IL2CPP_TYPE_CLASS=0x12;
+struct Il2CppClass {
+    Il2CppImage* image=nullptr;
+    const char* namespaze=nullptr;
+    const char* name=nullptr;
+    struct {uint8_t type=IL2CPP_TYPE_CLASS;} byval_arg{};
+    void* typeMetadataHandle=nullptr;
+    Il2CppClass* declaringType=nullptr;
+    void* generic_class=nullptr;
+    uint8_t rank=0;
+    bool is_generic=false;
+};
 namespace il2cpp {namespace vm {
 struct ActiveSnapshot{uint64_t generation;};
 enum class AssemblyShadowState {Disabled,Committed,Failed};
@@ -108,6 +120,7 @@ static void reset(){
   assemblies[i].aname.name="PhysicalAssembly";
   images[i].assembly=&assemblies[i];
   classes[i].image=&images[i];classes[i].name="Class";classes[i].namespaze="Namespace";
+  classes[i].typeMetadataHandle=&classes[i];
  }
  std::strcpy(mutableName,"MutableBefore");
  std::fill(std::begin(longName),std::end(longName),'Q'); longName[4097]='\0';

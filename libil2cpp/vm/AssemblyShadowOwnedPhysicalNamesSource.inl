@@ -7,11 +7,17 @@ bool AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(
 {
     namespace physical=assembly_shadow_physical_membership;
     namespace owned=assembly_shadow_owned_physical_names;
+    namespace shape=assembly_shadow_observed_type_shape;
+    // Source-owned typed constants must agree with the actual installed ABI.
+    static_assert(static_cast<uint8_t>(IL2CPP_TYPE_CLASS)==shape::kClassTypeCode &&
+                  static_cast<uint8_t>(IL2CPP_TYPE_VALUETYPE)==shape::kValueTypeCode,
+                  "Physical shape type codes differ from the pinned IL2CPP ABI");
     receipt=owned::Receipt{};
     auto reject=[&](owned::Error why)->bool {
         if(receipt.error==owned::Error::None)receipt.error=why;
         receipt.namesCopiedFromMatchedEnumeratorCallbacks=false;
         receipt.allRowsBoundToObservedRegistry=false;
+        receipt.allObservedTypeShapeRowsFromMatchedCallbacks=false;
         names.Revoke();
         membershipScratch.Scrub();
         return false;
@@ -64,9 +70,21 @@ bool AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(
                 context.names->RejectInvalidBinding();
                 return;
             }
+            // All these Il2CppClass fields are in its always-valid header.
+            // Read them ONLY at the matched callback while metadata lock
+            // and initial-session lifetime admission are both held. Copy
+            // primitive bits; never retain metadata/generic/class pointers.
+            shape::RawEvidence rawShape{};
+            rawShape.byvalTypeCode=static_cast<uint8_t>(klass->byval_arg.type);
+            rawShape.arrayRank=klass->rank;
+            rawShape.hasTypeMetadataHandle=klass->typeMetadataHandle!=nullptr;
+            rawShape.hasDeclaringType=klass->declaringType!=nullptr;
+            rawShape.hasConstructedGenericClass=klass->generic_class!=nullptr;
+            rawShape.isGenericDefinition=klass->is_generic!=0;
+            rawShape.observedFromMatchedPhysicalCallback=true;
             context.names->Add(registeredSlot,registeredSource,
                                klass->image->assembly->aname.name,
-                               klass->namespaze,klass->name);
+                               klass->namespaze,klass->name,rawShape);
         },&context);
     }
     receipt.matchedClasses=membershipScratch.Matched();
@@ -89,7 +107,10 @@ bool AssemblyShadow::TryCaptureOwnedObservedPhysicalNames(
     if(!membershipScratch.FullyMatched() ||
        !names.Seal(membershipScratch.Observed()))
         return reject(owned::Error::CountMismatch);
+    if(!names.AllObservedShapesFromMatchedCallbacks())
+        return reject(owned::Error::NameCaptureFailed);
     membershipScratch.Scrub();
+    receipt.allObservedTypeShapeRowsFromMatchedCallbacks=true;
     receipt.ownedRows=names.Count();
     receipt.ownedTextBytes=names.TextBytes();
     receipt.boundRegistrationRows=names.Count();
