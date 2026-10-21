@@ -19,6 +19,7 @@
 #include "AssemblyShadowOwnedPhysicalNames.h"
 #include "AssemblyShadowOwnedPhysicalNamesJson.h"
 #include "AssemblyShadowObservedTypeShapeCensus.h"
+#include "AssemblyShadowObservedTypeShapeJson.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -1583,6 +1584,8 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
 #include "AssemblyShadowOwnedPhysicalLiveJsonSource.inl"
 // P1 inactive, actual VM first-match source to a primitive shape-only census.
 #include "AssemblyShadowObservedTypeShapeLiveSource.inl"
+// P1 inactive genuine physical iterator to owned type-shape census JSON.
+#include "AssemblyShadowObservedTypeShapeJsonLiveSource.inl"
 
 AssemblyShadowError AssemblyShadow::GetDiagnosticsJson(std::string& json)
 {

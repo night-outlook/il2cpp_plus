@@ -27,6 +27,7 @@ namespace assembly_shadow_physical_membership { class Scratch; struct Receipt; }
 namespace assembly_shadow_owned_physical_names { class Capture; struct Receipt; }
 namespace assembly_shadow_owned_physical_json { class Record; struct Receipt; }
 namespace assembly_shadow_observed_type_shape_census { struct Result; }
+namespace assembly_shadow_observed_type_shape_json { class Record; struct Receipt; }
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 enum class AssemblyResolveContext { Normal, Staging, DiagnosticsPhysical };
@@ -141,6 +142,17 @@ public:
         assembly_shadow_owned_physical_names::Capture& names,
         assembly_shadow_owned_physical_names::Receipt& namesReceipt,
         assembly_shadow_observed_type_shape_census::Result& censusResult);
+    // P1 INACTIVE: one-shot genuine matched class source -> owned primitive
+    // shape census -> noncanonical JSON, after all original VM locks exit.
+    // Caller prepares exclusive buffers while healthy. Not execution V1.
+    static bool TryCaptureObservedTypeShapeJson(
+        assembly_shadow_physical_membership::Scratch& membershipScratch,
+        assembly_shadow_owned_physical_names::Capture& names,
+        assembly_shadow_owned_physical_names::Receipt& namesReceipt,
+        assembly_shadow_observed_type_shape_census::Result& censusResult,
+        assembly_shadow_observed_type_shape_json::Record& jsonOutput,
+        assembly_shadow_observed_type_shape_json::Receipt& jsonReceipt,
+        size_t maximumBytes);
     // Resolver hooks do not take the transaction lock. The immutable active
     // snapshot is release-published once and retained for process lifetime.
     static AssemblyResolveContext CurrentResolveContext();

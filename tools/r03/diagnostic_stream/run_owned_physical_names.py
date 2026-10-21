@@ -73,6 +73,20 @@ def verify(native:Path)->str:
     method=(native/METHOD).read_text()
     fixture=(native/FIXTURE).read_text()
     header=(native/HEADER).read_text()
+    # Exact additive VM→pointer-free census→JSON entry point. Strip only
+    # these four known CPP/API emissions, then enforce ALL original/frozen
+    # source Git blob fingerprint constants without rebaselining.
+    integrated_json_header="#include \"AssemblyShadowObservedTypeShapeJson.h\"\n"
+    integrated_json_include="// P1 inactive genuine physical iterator to owned type-shape census JSON.\n#include \"AssemblyShadowObservedTypeShapeJsonLiveSource.inl\"\n"
+    integrated_json_forward="namespace assembly_shadow_observed_type_shape_json { class Record; struct Receipt; }\n"
+    integrated_json_decl="    // P1 INACTIVE: one-shot genuine matched class source -> owned primitive\n    // shape census -> noncanonical JSON, after all original VM locks exit.\n    // Caller prepares exclusive buffers while healthy. Not execution V1.\n    static bool TryCaptureObservedTypeShapeJson(\n        assembly_shadow_physical_membership::Scratch& membershipScratch,\n        assembly_shadow_owned_physical_names::Capture& names,\n        assembly_shadow_owned_physical_names::Receipt& namesReceipt,\n        assembly_shadow_observed_type_shape_census::Result& censusResult,\n        assembly_shadow_observed_type_shape_json::Record& jsonOutput,\n        assembly_shadow_observed_type_shape_json::Receipt& jsonReceipt,\n        size_t maximumBytes);\n"
+    if (cpp.count(integrated_json_header)!=1 or
+        cpp.count(integrated_json_include)!=1 or
+        api.count(integrated_json_forward)!=1 or
+        api.count(integrated_json_decl)!=1):
+        raise RuntimeError("Inactive owned type-shape JSON VM bridge CPP/API emissions changed")
+    cpp=cpp.replace(integrated_json_header,"").replace(integrated_json_include,"")
+    api=api.replace(integrated_json_forward,"").replace(integrated_json_decl,"")
     # New inactive bridge is strictly additive: strip ONLY its exact
     # reviewed CPP/API bytes before authenticating prior/frozen blobs.
     shape_header="#include \"AssemblyShadowObservedTypeShapeCensus.h\"\n"
