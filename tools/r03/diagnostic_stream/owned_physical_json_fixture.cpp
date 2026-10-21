@@ -23,13 +23,15 @@ struct Session {
     names::Receipt sourceReceipt{};
     output::Record record;
     output::Receipt result{};
+    size_t addedRows=0;
     void Begin(){ require(source.Begin(),"source begin"); }
     void Add(size_t slot,witness::Source role,const char* assembly,
              const char* ns,const char* simple){
         require(source.Add(slot,role,assembly,ns,simple),"source add");
+        ++addedRows;
     }
     void Seal(uint64_t revision=7) {
-        require(source.Seal(source.Count()+0),"source seal");
+        require(source.Seal(addedRows),"source seal");
         sourceReceipt.observedClasses=source.Count();
         sourceReceipt.matchedClasses=source.Count();
         sourceReceipt.ownedRows=source.Count();
