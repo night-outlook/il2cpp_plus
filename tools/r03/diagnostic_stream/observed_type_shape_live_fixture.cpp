@@ -586,12 +586,16 @@ int main(){try{
      publish(&classes[0]);physicalEnumeration={&classes[0]};
      physical::Scratch scratch;owned::Capture names;owned::Receipt source{};
      census::Result result{};result.census.total=17;
+     source.namesCopiedFromMatchedEnumeratorCallbacks=true;
+     source.allObservedTypeShapeRowsFromMatchedCallbacks=true;
      require(!AssemblyShadow::TryCaptureObservedTypeShapeCensus(
          scratch,names,source,result),"stale output accepted");
      require(result.error==census::Error::ReusedCensus &&
              !result.census.total && !result.census.completeObservedSubset &&
-             iteratorCalls==0 && !names.Count()&&!scratch.Observed(),
-             "stale output reached iterator or leaked counts");
+             iteratorCalls==0 && !names.Count()&&!scratch.Observed() &&
+             !source.namesCopiedFromMatchedEnumeratorCallbacks &&
+             !source.allObservedTypeShapeRowsFromMatchedCallbacks,
+             "stale output retained an earlier successful source receipt");
      std::cout<<"PASS LIVE CENSUS stale-output-rejected-before-iterator\n";
  }
  reset();{
@@ -605,8 +609,10 @@ int main(){try{
         scratch,names,source,result),"reused census accepted");
      require(result.error==census::Error::ReusedCensus &&
              !result.census.total&&!result.census.completeObservedSubset &&
-             iteratorCalls==countBefore,
-             "reused successful census not revoked before iterator");
+             iteratorCalls==countBefore &&
+             !source.namesCopiedFromMatchedEnumeratorCallbacks &&
+             !source.allObservedTypeShapeRowsFromMatchedCallbacks,
+             "reused successful census retained source success or iterated again");
      std::cout<<"PASS LIVE CENSUS reused-success-revoked-before-iterator\n";
  }
  std::cout<<"P1 LIVE TYPE SHAPE CENSUS HOST PASS\n";

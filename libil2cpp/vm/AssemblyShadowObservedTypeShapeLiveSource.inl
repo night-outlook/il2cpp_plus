@@ -9,6 +9,8 @@ bool AssemblyShadow::TryCaptureObservedTypeShapeCensus(
     assembly_shadow_observed_type_shape_census::Result& censusResult)
 {
     namespace shapes=assembly_shadow_observed_type_shape_census;
+    // A rejected early call must not leave an older successful source receipt.
+    namesReceipt=assembly_shadow_owned_physical_names::Receipt{};
     // Refuse stale or partly populated output before running the VM iterator.
     // Existing one-use capture and scratch will also fail their own admission.
     if(!shapes::Fresh(censusResult))

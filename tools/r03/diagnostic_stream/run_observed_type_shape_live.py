@@ -69,6 +69,7 @@ def verify_source(native:Path)->dict:
         raise RuntimeError("Actual inactive VM census source or API declaration missing")
     required=(
       "shapes::Fresh(censusResult)",
+      "namesReceipt=assembly_shadow_owned_physical_names::Receipt{};",
       "TryCaptureOwnedObservedPhysicalNames(membershipScratch,names,namesReceipt)",
       "shapes::Build(names,namesReceipt,censusResult)",
       "names.Revoke();",
