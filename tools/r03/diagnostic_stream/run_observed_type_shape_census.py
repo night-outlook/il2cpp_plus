@@ -45,7 +45,7 @@ SHAPE_GROUPS=(
  "reused-census-revokes-prior-success",
  "missing-physical-source-cannot-certify-shape",
 )
-EXPECTED=("PASS "+n for n in NAME_GROUPS)+("PASS SHAPE "+n for n in SHAPE_GROUPS)
+EXPECTED=tuple("PASS "+n for n in NAME_GROUPS)+tuple("PASS SHAPE "+n for n in SHAPE_GROUPS)
 
 def source_contract(native:Path)->dict:
     # Reuse previous strict historical Native VM CPP/API reconstruction; its
