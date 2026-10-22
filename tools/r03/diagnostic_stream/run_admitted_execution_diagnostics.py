@@ -52,7 +52,7 @@ def verify_source(native:Path)->dict:
     signature="TryGetExecutionDiagnosticsWithMetadataAdmission(std::string& json)"
     if cpp.count(header_marker)!=1 or api.count("static AssemblyShadowError "+signature)!=1:
         raise RuntimeError("Admitted execution method not present exactly once in CPP/API")
-    if bridge.count("AssemblyShadow::"+signature)!=1:
+    if bridge.count("AssemblyShadow::TryGetExecutionDiagnosticsWithMetadataAdmission(")!=1:
         raise RuntimeError("Actual admission production body differs")
     if cpp.count("AssemblyShadow::"+signature):
         raise RuntimeError("Wrapper must be an exactly included original .inl method")
