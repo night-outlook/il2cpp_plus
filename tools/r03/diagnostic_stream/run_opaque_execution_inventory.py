@@ -67,6 +67,14 @@ def verify(native:Path)->str:
     header='#include "AssemblyShadowOpaqueExecutionInventory.h"'
     revisionHeader='#include "AssemblyShadowExecutionRegistryRevision.h"'
     witnessHeader='#include "AssemblyShadowExecutionRegistrationWitness.h"'
+    # New P1 admission wrapper is inactive and additive. Remove ONLY the
+    # exact declaration/CPP include before the frozen getter fingerprint gate.
+    admitted_decl="    // P1 INACTIVE: initial metadata-lifetime reader encloses the unchanged\n    // legacy getter. This does not prove class pointer origin, canonical\n    // execution TypeKeys, coherent VM epoch or Player behavior.\n    static AssemblyShadowError TryGetExecutionDiagnosticsWithMetadataAdmission(std::string& json);\n"
+    admitted_include="// P1 inactive reader around the original (unmodified) V1 getter.\n#include \"AssemblyShadowAdmittedExecutionDiagnosticsSource.inl\"\n"
+    if api.count(admitted_decl)!=1 or cpp.count(admitted_include)!=1:
+        raise RuntimeError("Inactive admitted getter CPP/API additions changed")
+    api=api.replace(admitted_decl,"")
+    cpp=cpp.replace(admitted_include,"")
     # Exact additive VM→pointer-free census→JSON entry point. Strip only
     # these four known CPP/API emissions, then enforce ALL original/frozen
     # source Git blob fingerprint constants without rebaselining.

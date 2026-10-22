@@ -68,6 +68,10 @@ public:
     static AssemblyShadowError GetDiagnosticsJson(std::string& json);
     static AssemblyShadowError GetTypeResolutionInfo(const Il2CppType* type, std::string& json);
     static AssemblyShadowError GetExecutionDiagnosticsJson(std::string& json);
+    // P1 INACTIVE: initial metadata-lifetime reader encloses the unchanged
+    // legacy getter. This does not prove class pointer origin, canonical
+    // execution TypeKeys, coherent VM epoch or Player behavior.
+    static AssemblyShadowError TryGetExecutionDiagnosticsWithMetadataAdmission(std::string& json);
     // Icall exception boundary: seal a mutating operation that unwound through
     // an unexpected failure. This path does not allocate or acquire VM locks.
     static AssemblyShadowError ReportUnexpectedFailure();

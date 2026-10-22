@@ -1848,6 +1848,9 @@ AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& jso
     return AssemblyShadowError::Success;
 }
 
+// P1 inactive reader around the original (unmodified) V1 getter.
+#include "AssemblyShadowAdmittedExecutionDiagnosticsSource.inl"
+
 const Il2CppAssembly* AssemblyShadow::ResolveAssembly(const Il2CppAssembly* assembly)
 {
     const ActiveSnapshot* active = s_active.load(std::memory_order_acquire);
