@@ -1,0 +1,6 @@
+Temporary GitHub Connector write/read-back smoke test.
+Repository: night-outlook/il2cpp_plus
+Feature branch: codex/assembly-shadow-r01b-h1
+Base commit: e1e5be67641f18c4a5b1d5fb35429a6d15aa2edb
+Marker: owner-bootstrap-e4d739
+This file must not be merged or used as validation evidence.
