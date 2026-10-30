@@ -1,0 +1,70 @@
+name: R03 Unity 2022 C++11 source-host compatibility
+on:
+  push:
+    branches: ['codex/assembly-shadow-r01b-h1']
+    paths:
+      - 'libil2cpp/vm/AssemblyShadowDiagnosticWriter.h'
+      - 'libil2cpp/vm/AssemblyShadowBoundedGeneralComposer.h'
+      - 'libil2cpp/vm/AssemblyShadowFrozenExecutionRecord.h'
+      - 'libil2cpp/vm/AssemblyShadowExecutionRegistrationWitness.h'
+      - 'libil2cpp/vm/AssemblyShadowOwnedPhysicalNames.h'
+      - 'libil2cpp/vm/AssemblyShadowBoundedGeneralLiveSource.inl'
+      - 'libil2cpp/vm/AssemblyShadowBoundedExecutionEmptyLiveSource.inl'
+      - 'tools/r03/diagnostic_stream/cxx11_unity_compat_fixture.cpp'
+      - '.github/workflows/r03-cxx11-unity-compat-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cxx11-compat:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, cxx: clang++}
+          - {os: ubuntu-24.04, cxx: g++}
+          - {os: macos-15, cxx: clang++}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadow*
+            tools/r03/diagnostic_stream/cxx11_unity_compat_fixture.cpp
+            tools/r03/diagnostic_stream/bounded_general_composer_fixture.cpp
+            tools/r03/diagnostic_stream/bounded_general_live_fixture.cpp
+            tools/r03/diagnostic_stream/owned_physical_names_fixture.cpp
+            tools/r03/diagnostic_stream/empty_live_fixture
+      - name: Actual production C++11 headers and inactive live-source mocks
+        shell: bash
+        env:
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -euo pipefail
+          "$CXX" --version
+          for std in c++11 c++17; do
+            for profile in 0 1; do
+              for source in \
+                tools/r03/diagnostic_stream/cxx11_unity_compat_fixture.cpp \
+                tools/r03/diagnostic_stream/bounded_general_composer_fixture.cpp \
+                tools/r03/diagnostic_stream/bounded_general_live_fixture.cpp \
+                tools/r03/diagnostic_stream/owned_physical_names_fixture.cpp \
+                tools/r03/diagnostic_stream/empty_live_fixture/fixture.cpp; do
+                echo "SYNTACTIC_HOST_SOURCE standard=$std feature=$profile source=$source"
+                "$CXX" -std="$std" -fsyntax-only -Wall -Wextra -Werror -pedantic -pthread \
+                  -DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW="$profile" \
+                  -Ilibil2cpp/vm -Itools/r03/diagnostic_stream/empty_live_fixture "$source"
+              done
+            done
+          done
+          git diff --check
+          git diff --exit-code
+      - name: Explicit evidence boundary
+        shell: bash
+        run: |
+          echo 'Source/host C++11/C++17 syntax only, actual production headers/mock consumers.'
+          echo 'NOT real Unity C++ compilation, IL2CPP linking, Editor build, or Player.'
+          echo 'R03Accepted=false, ReadyForHumanReviewGate=false.'
