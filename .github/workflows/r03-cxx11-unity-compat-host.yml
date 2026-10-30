@@ -52,7 +52,6 @@ jobs:
             for profile in 0 1; do
               for source in \
                 tools/r03/diagnostic_stream/cxx11_unity_compat_fixture.cpp \
-                tools/r03/diagnostic_stream/bounded_general_composer_fixture.cpp \
                 tools/r03/diagnostic_stream/bounded_general_live_fixture.cpp \
                 tools/r03/diagnostic_stream/owned_physical_names_fixture.cpp \
                 tools/r03/diagnostic_stream/empty_live_fixture/fixture.cpp; do
@@ -61,6 +60,16 @@ jobs:
                   -DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW="$profile" \
                   -I"$RUNNER_TEMP" -Ilibil2cpp/vm -Itools/r03/diagnostic_stream/empty_live_fixture "$source"
               done
+              # Historical composer host fixture itself uses std::make_unique
+              # (C++14), so compile that fixture only under its real C++17
+              # fixture contract; the production composer header is compiled
+              # separately above under both C++11 and C++17.
+              if [ "$std" = c++17 ]; then
+                "$CXX" -std=c++17 -fsyntax-only -Wall -Wextra -Werror -pedantic -pthread \
+                  -DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW="$profile" \
+                  -I"$RUNNER_TEMP" -Ilibil2cpp/vm \
+                  tools/r03/diagnostic_stream/bounded_general_composer_fixture.cpp
+              fi
             done
           done
           git diff --check
