@@ -29,7 +29,7 @@ CURRENT_HASH = "4829a3ae7b9b0df57d054738f99d940b4ad7644a364df0502c9976469819d372
 # Record the complete file blob/hash for provenance, never silently ignore it.
 SOURCE_BLOBS = {
     "libil2cpp/vm/AssemblyShadowExecutionSerializer.h": "3a0e7b1cc25bdeb16d0f341b67715b3433f04689",
-    "libil2cpp/vm/AssemblyShadowDiagnosticWriter.h": "9dee4c9ea6febe4a919d1c7eb8faf2ad00b8a8e5",
+    "libil2cpp/vm/AssemblyShadowDiagnosticWriter.h": "edef7c2f37978e65c02a8d2008886c6c4af8ae20",
 }
 FROZEN_BLOBS = {
     "test_diagnostic_size.py": "2a60eecdd3e9de7ae03556495d683cbdb52930e2",
