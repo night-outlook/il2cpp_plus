@@ -45,6 +45,9 @@ jobs:
         run: |
           set -euo pipefail
           "$CXX" --version
+          # Standalone host mocks supply only the generated Unity config include.
+          # Actual Unity SDK config/ABI must still be verified by Local.
+          printf '#pragma once\n' > "$RUNNER_TEMP/il2cpp-config.h"
           for std in c++11 c++17; do
             for profile in 0 1; do
               for source in \
@@ -56,7 +59,7 @@ jobs:
                 echo "SYNTACTIC_HOST_SOURCE standard=$std feature=$profile source=$source"
                 "$CXX" -std="$std" -fsyntax-only -Wall -Wextra -Werror -pedantic -pthread \
                   -DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW="$profile" \
-                  -Ilibil2cpp/vm -Itools/r03/diagnostic_stream/empty_live_fixture "$source"
+                  -I"$RUNNER_TEMP" -Ilibil2cpp/vm -Itools/r03/diagnostic_stream/empty_live_fixture "$source"
               done
             done
           done
