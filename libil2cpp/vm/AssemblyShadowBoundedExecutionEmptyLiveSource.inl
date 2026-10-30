@@ -69,10 +69,12 @@ bool AssemblyShadow::TryCaptureBoundedEmptyExecutionLive(
     receipt.activeGenerationAfter=collected.generation;
     if(!before.Equal(collected))
         return live::Fail(receipt,live::Error::ObservedSourceChange,output);
-    if(!output.Begin({static_cast<int32_t>(before.state),
-                      assembly_shadow_diagnostic::Quoted(
-                          AssemblyShadowDiagnostics::StateName(before.state)),
-                      before.generation},observed,0))
+    frozen::Identity identity{};
+    identity.stateCode=static_cast<int32_t>(before.state);
+    identity.state=assembly_shadow_diagnostic::Quoted(
+        AssemblyShadowDiagnostics::StateName(before.state));
+    identity.generation=before.generation;
+    if(!output.Begin(identity,observed,0))
         return live::Fail(receipt,live::Error::BeginFailed,output);
     if(!output.Freeze())
         return live::Fail(receipt,live::Error::FreezeFailed,output);

@@ -23,7 +23,9 @@ public:
            (source!=Source::Candidate && source!=Source::ActiveShadow) ||
            slots_[slot].identity || slots_[slot].source!=Source::None)
             return false;
-        slots_[slot]={identity,source};
+        // Entry has in-class initializers: explicit member writes work in C++11.
+        slots_[slot].identity=identity;
+        slots_[slot].source=source;
         return true;
     }
     bool Matches(size_t slot,const void* identity,Source& result) const noexcept

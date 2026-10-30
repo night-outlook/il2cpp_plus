@@ -110,9 +110,11 @@ bool AssemblyShadow::TryCaptureBoundedGeneralLive(
         return live::Fail(receipt,live::Error::ObservedSourceChange,output);
 
     composer::Inputs input{};
-    input.header={true,
-        static_cast<int32_t>(hybridclr::g_assemblyShadowStartupCandidateSchemaVersion),
-        assembly_shadow_diagnostic::Quoted(before.early?"EarlyTracking":"ConfigureOnly")};
+    input.header.enabled=true;
+    input.header.startupCandidateSchemaVersion=
+        static_cast<int32_t>(hybridclr::g_assemblyShadowStartupCandidateSchemaVersion);
+    input.header.startupObservationMode=
+        assembly_shadow_diagnostic::Quoted(before.early?"EarlyTracking":"ConfigureOnly");
     input.startupCandidateNames=scratch.names.data();
     input.startupCandidateCount=scratch.count;
     input.transaction=sources.transaction;

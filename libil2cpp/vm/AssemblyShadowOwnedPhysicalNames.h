@@ -136,9 +136,14 @@ public:
         out=RowView{};
         if(!Complete()||index>=count_)return false;
         const Row& row=rows_[index];
-        out.physicalAssemblyName={text_.data()+row.assembly.offset,row.assembly.bytes};
-        out.nameSpace={text_.data()+row.nameSpace.offset,row.nameSpace.bytes};
-        out.simpleName={text_.data()+row.simpleName.offset,row.simpleName.bytes};
+        // TextView's default member initializers make assignment-from-braces
+        // ill-formed in C++11. Keep the same exact owned data/length pairs.
+        out.physicalAssemblyName.data=text_.data()+row.assembly.offset;
+        out.physicalAssemblyName.bytes=row.assembly.bytes;
+        out.nameSpace.data=text_.data()+row.nameSpace.offset;
+        out.nameSpace.bytes=row.nameSpace.bytes;
+        out.simpleName.data=text_.data()+row.simpleName.offset;
+        out.simpleName.bytes=row.simpleName.bytes;
         out.registrySlot=row.registrySlot;
         out.registrationSource=row.registrationSource;
         out.observedShape=row.observedShape;

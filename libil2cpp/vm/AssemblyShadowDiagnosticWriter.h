@@ -49,13 +49,21 @@ enum class WriteError : uint8_t { None, InvalidInput, ByteLimit, SinkFailure, Re
 // A true return means the synchronous callback consumed every byte. A false
 // return invalidates the entire emission; unknown partial sink writes cannot
 // be counted as a complete field. Callback must not retain the scratch pointer.
-using SinkWrite = bool (*)(void*, const char*, size_t) noexcept;
+// C++11 does not admit noexcept as part of a function pointer type (C++17 does).
+// Callback implementations remain noexcept, and Writer::write remains noexcept;
+// a callback failure is terminal to this bounded writer.
+using SinkWrite = bool (*)(void*, const char*, size_t);
 struct Sink { void* context; SinkWrite write; };
 struct WriteResult
 {
     WriteError error = WriteError::None;
     size_t bytesAccepted = 0; // Successful callback bytes, NOT exact input length on failure.
     bool complete = false;
+    // Explicit value constructor preserves all existing typed error receipts
+    // under Unity's C++11 compiler (NSDMI structs are not C++11 aggregates).
+    WriteResult() noexcept = default;
+    WriteResult(WriteError e, size_t bytes, bool done) noexcept
+        : error(e), bytesAccepted(bytes), complete(done) {}
 };
 
 // No owned storage or dynamic allocation. A formatter may continue visiting

@@ -113,11 +113,18 @@ inline bool Compose(const Inputs& input,frozen::Capture& output,Receipt& receipt
     for(size_t i=0;i<input.startupCandidateCount;++i)
         if(!output.AddStartupCandidate(input.startupCandidateNames[i]))
             return Fail(receipt,Error::OutputFailed,&output);
-    frozen::Transaction frozenStatus{
-        status.state,status.lastError,status.detail,status.baselineBuildId,
-        status.patchId,status.generation,status.retainedBytes,
-        status.expected,status.staged
-    };
+    // The destination types use default member initializers; construct then
+    // populate explicitly for the Unity C++11 native compiler.
+    frozen::Transaction frozenStatus{};
+    frozenStatus.state=status.state;
+    frozenStatus.lastError=status.lastError;
+    frozenStatus.detail=status.detail;
+    frozenStatus.baselineBuildId=status.baselineBuildId;
+    frozenStatus.patchId=status.patchId;
+    frozenStatus.generation=status.generation;
+    frozenStatus.retainedBytes=status.retainedBytes;
+    frozenStatus.expected=status.expected;
+    frozenStatus.staged=status.staged;
     if(!output.EndStartupCandidates(frozenStatus))
         return Fail(receipt,Error::OutputFailed,&output);
 
@@ -158,9 +165,15 @@ inline bool Compose(const Inputs& input,frozen::Capture& output,Receipt& receipt
         inventory::AssemblyView row{};
         if(!transaction.GetClosure(i,row))
             return Fail(receipt,Error::MissingOwnedRow,&output);
-        if(!output.AddAssembly({row.name,row.mvid,row.skeletonBuilt,
-                 row.runtimeMetadataInitialized,row.published,
-                 row.moduleInitializerAttempted,row.moduleInitializerRan}))
+        frozen::AssemblyRow owned{};
+        owned.name=row.name;
+        owned.mvid=row.mvid;
+        owned.skeletonBuilt=row.skeletonBuilt;
+        owned.runtimeMetadataInitialized=row.runtimeMetadataInitialized;
+        owned.published=row.published;
+        owned.moduleInitializerAttempted=row.moduleInitializerAttempted;
+        owned.moduleInitializerRan=row.moduleInitializerRan;
+        if(!output.AddAssembly(owned))
             return Fail(receipt,Error::OutputFailed,&output);
     }
     if(!output.EndAssemblies())
@@ -170,8 +183,13 @@ inline bool Compose(const Inputs& input,frozen::Capture& output,Receipt& receipt
         inventory::EventView row{};
         if(!transaction.GetEvent(i,row))
             return Fail(receipt,Error::MissingOwnedRow,&output);
-        if(!output.AddEvent({row.sequence,row.generation,row.stagedCount,
-                             row.kind,row.name}))
+        frozen::EventRow owned{};
+        owned.sequence=row.sequence;
+        owned.generation=row.generation;
+        owned.stagedCount=row.stagedCount;
+        owned.kind=row.kind;
+        owned.name=row.name;
+        if(!output.AddEvent(owned))
             return Fail(receipt,Error::OutputFailed,&output);
     }
     if(!output.EndEvents())
@@ -182,8 +200,14 @@ inline bool Compose(const Inputs& input,frozen::Capture& output,Receipt& receipt
     {
         first_use::Row row{};
         if(!uses.Get(i,row))continue; // Missing first-use is no JSON row.
-        if(!output.AddBaselineUse({row.name,row.detail,row.type,
-                                   row.kind,row.thread,row.timestamp}))
+        frozen::UseRow owned{};
+        owned.name=row.name;
+        owned.detail=row.detail;
+        owned.type=row.type;
+        owned.kind=row.kind;
+        owned.thread=row.thread;
+        owned.timestamp=row.timestamp;
+        if(!output.AddBaselineUse(owned))
             return Fail(receipt,Error::OutputFailed,&output);
         ++emittedUses;
     }
@@ -198,7 +222,10 @@ inline bool Compose(const Inputs& input,frozen::Capture& output,Receipt& receipt
         physical::Row row{};
         if(!assemblies.Get(i,row))
             return Fail(receipt,Error::MissingOwnedRow,&output);
-        if(!output.AddOrdinaryAssembly({{row.name,row.bytes},row.interpreter}))
+        frozen::OrdinaryAssemblyRow owned{};
+        owned.name=QuotedText{row.name,row.bytes};
+        owned.isInterpreter=row.interpreter;
+        if(!output.AddOrdinaryAssembly(owned))
             return Fail(receipt,Error::OutputFailed,&output);
     }
     if(!output.EndOrdinaryAssemblies(typeRows.ClassEnumerationGeneration()))
@@ -208,10 +235,13 @@ inline bool Compose(const Inputs& input,frozen::Capture& output,Receipt& receipt
         classes::ClassView row{};
         if(!typeRows.Get(i,row))
             return Fail(receipt,Error::MissingOwnedRow,&output);
-        if(!output.AddOrdinaryClass({
-             {row.assemblyName,row.assemblyNameBytes},
-             {row.typeName,row.typeNameBytes},row.isInterpreter,
-             row.isConstructedGeneric,row.usesStagedMetadata}))
+        frozen::OrdinaryClassRow owned{};
+        owned.assemblyName=QuotedText{row.assemblyName,row.assemblyNameBytes};
+        owned.typeName=QuotedText{row.typeName,row.typeNameBytes};
+        owned.isInterpreter=row.isInterpreter;
+        owned.isConstructedGeneric=row.isConstructedGeneric;
+        owned.usesStagedMetadata=row.usesStagedMetadata;
+        if(!output.AddOrdinaryClass(owned))
             return Fail(receipt,Error::OutputFailed,&output);
     }
     if(!output.Freeze())
