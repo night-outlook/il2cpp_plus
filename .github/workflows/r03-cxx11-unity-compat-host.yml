@@ -75,13 +75,9 @@ jobs:
                   -DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW="$profile" \
                   -I"$RUNNER_TEMP" -Ilibil2cpp/vm \
                   tools/r03/diagnostic_stream/owned_physical_names_fixture.cpp
-                # This historical mock uses C++17 inline variables and generic
-                # lambdas. Actual production Record and Identity are checked
-                # under C++11 by cxx11_unity_compat_fixture.cpp above.
-                "$CXX" -std=c++17 -fsyntax-only -Wall -Wextra -Werror -pedantic -pthread \
-                  -DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW="$profile" \
-                  -I"$RUNNER_TEMP" -Ilibil2cpp/vm -Itools/r03/diagnostic_stream/empty_live_fixture \
-                  tools/r03/diagnostic_stream/empty_live_fixture/fixture.cpp
+                # The unchanged empty-live mock substitutes VM types and is
+                # compiled in its original dedicated C++17 workflow, not with
+                # these actual production headers from a second search root.
               fi
             done
           done
