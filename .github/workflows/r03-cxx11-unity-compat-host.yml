@@ -56,11 +56,11 @@ jobs:
               for source in \
                 tools/r03/diagnostic_stream/cxx11_unity_compat_fixture.cpp \
                 tools/r03/diagnostic_stream/bounded_general_live_fixture.cpp \
-                tools/r03/diagnostic_stream/owned_physical_names_fixture.cpp \
-                tools/r03/diagnostic_stream/empty_live_fixture/fixture.cpp; do
+                 tools/r03/diagnostic_stream/empty_live_fixture/fixture.cpp; do
                 echo "SYNTACTIC_HOST_SOURCE standard=$std feature=$profile source=$source"
                 "$CXX" -std="$std" -fsyntax-only -Wall -Wextra -Werror -pedantic -pthread \
                   -DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW="$profile" \
+                  -Wno-unused-const-variable \
                   -I"$RUNNER_TEMP" -Ilibil2cpp/vm -Itools/r03/diagnostic_stream/empty_live_fixture "$source"
               done
               # Historical composer host fixture itself uses std::make_unique
@@ -72,6 +72,10 @@ jobs:
                   -DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW="$profile" \
                   -I"$RUNNER_TEMP" -Ilibil2cpp/vm \
                   tools/r03/diagnostic_stream/bounded_general_composer_fixture.cpp
+                "$CXX" -std=c++17 -fsyntax-only -Wall -Wextra -Werror -pedantic -pthread \
+                  -DHYBRIDCLR_ENABLE_ASSEMBLY_SHADOW="$profile" \
+                  -I"$RUNNER_TEMP" -Ilibil2cpp/vm \
+                  tools/r03/diagnostic_stream/owned_physical_names_fixture.cpp
               fi
             done
           done
