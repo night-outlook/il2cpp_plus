@@ -47,7 +47,7 @@ REQUIRED=(
  'for(const Il2CppClass* klass:s_executionClasses)',
  'if(before.count!=0)',
  'Snapshot::TryCaptureCurrent(observed,receipt.countersBefore)',
- 'output.Begin({',
+ 'output.Begin(identity,observed,0)',
  'output.Freeze()',
  'Snapshot::TryCaptureCurrent(finishedCounters,receipt.countersAfter)',
  'live::Equivalent(observed,finishedCounters)',
