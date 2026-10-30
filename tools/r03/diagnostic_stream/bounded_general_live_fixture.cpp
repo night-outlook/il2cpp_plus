@@ -149,7 +149,14 @@ struct Fixture
     std::unique_ptr<live::Scratch> scratch{new live::Scratch()};
     live::Receipt receipt{};
     live::Sources Sources()
-    {return {transaction.get(),firstUses.get(),physical.get(),classes.get()};}
+    {
+        live::Sources sources{};
+        sources.transaction=transaction.get();
+        sources.firstUses=firstUses.get();
+        sources.ordinaryAssemblies=physical.get();
+        sources.ordinaryClasses=classes.get();
+        return sources;
+    }
     bool Run()
     {
         return AssemblyShadow::TryCaptureBoundedGeneralLive(
