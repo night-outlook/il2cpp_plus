@@ -11,6 +11,9 @@ on:
       - 'libil2cpp/vm/AssemblyShadowBoundedGeneralLiveSource.inl'
       - 'libil2cpp/vm/AssemblyShadowBoundedExecutionEmptyLiveSource.inl'
       - 'tools/r03/diagnostic_stream/cxx11_unity_compat_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/bounded_general_live_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/owned_physical_names_fixture.cpp'
+      - 'tools/r03/diagnostic_stream/empty_live_fixture/fixture.cpp'
       - '.github/workflows/r03-cxx11-unity-compat-host.yml'
   workflow_dispatch:
 permissions:
