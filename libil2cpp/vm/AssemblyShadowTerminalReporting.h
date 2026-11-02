@@ -18,6 +18,13 @@
 #include <cstring>
 #include <cstdlib>
 
+// An isolated R03 Unity Player may request a real native Unity owner quit
+// after its exact unhandled sentinel is reported. No managed business method
+// is invoked. Production builds never link or call this test-only callback.
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+extern "C" void R03_IR_OnNativeEngineReportCompleted(const Il2CppException* error);
+#endif
+
 namespace il2cpp { namespace vm { namespace assembly_shadow_reporting {
 
 inline std::atomic<uint64_t>& HandledCounter()
@@ -161,6 +168,12 @@ inline bool TryHandle(const MethodInfo* method, void* instance, void** arguments
     // recursively re-enters ScriptingInvocation (the E stack-overflow defect).
     result = FixedHandledResult();
     CompletedCounter().fetch_add(1, std::memory_order_release);
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+    // Preserve the real, unbounded completed counter. Only the disposable
+    // Player's exact-sentinel witness can request a native Unity owner quit.
+    ::R03_IR_OnNativeEngineReportCompleted(
+        arguments ? static_cast<const Il2CppException*>(arguments[0]) : nullptr);
+#endif
     return true;
 }
 
