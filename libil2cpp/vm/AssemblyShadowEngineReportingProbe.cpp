@@ -6,6 +6,7 @@
 #if HYBRIDCLR_R03_RUNTIME_PROBE
 #include "vm/AssemblyShadow.h"
 #include "vm/AssemblyShadowTerminalReporting.h"
+#include "vm/InternalCalls.h"
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -18,6 +19,14 @@
 namespace {
 std::atomic<int32_t> s_engineLoggerCalls{0};
 std::atomic<bool> s_engineWitnessArmed{false};
+// Prepared from the real Unity native icall while healthy. This is NOT an
+// exception to the post-terminal managed method guard, and not a production
+// replacement for Unity owner lifecycle policy.
+using OwnerQuit = void (*)(int32_t);
+OwnerQuit s_ownerQuit = nullptr;
+char s_expectedSentinel[64] = {};
+std::atomic<bool> s_ownerQuitRequested{false};
+std::atomic<int32_t> s_ownerQuitCalls{0};
 bool Hex(const char* text, size_t size)
 {
     if (!text || std::strlen(text) != size) return false;
@@ -33,6 +42,40 @@ bool Identifier(const char* text)
                (*text >= '0' && *text <= '9') || *text == '-' || *text == '_')) return false;
     return true;
 }
+}
+
+// Called from the native exact Unity unhandled-report path only after its
+// completed count advances. No subsequent Unity-managed callback is admitted.
+extern "C" IL2CPP_EXPORT void R03_IR_OnNativeEngineReportCompleted(
+    const Il2CppException* error)
+{
+    if (!s_engineWitnessArmed.load(std::memory_order_acquire) ||
+        !error || !error->message || !s_ownerQuit)
+        return;
+    const Il2CppString* message = error->message;
+    const size_t expected = std::strlen(s_expectedSentinel);
+    if (message->length != static_cast<int32_t>(expected)) return;
+    for (size_t index = 0; index < expected; ++index)
+        if (static_cast<uint16_t>(message->chars[index]) !=
+            static_cast<unsigned char>(s_expectedSentinel[index]))
+            return;
+    if (s_ownerQuitRequested.exchange(true, std::memory_order_acq_rel))
+        return; // Not a counter limit; the underlying reporting stays observable.
+    s_ownerQuitCalls.fetch_add(1, std::memory_order_release);
+    std::fprintf(stderr, "[R03EngineOwnerQuit] source=UnityNativeIcall once=1 sentinelMatched=true\n");
+    std::fflush(stderr);
+    try
+    {
+        // UnityCsReference: Application.Quit(int) is a native FreeFunction.
+        // We resolve it while healthy and invoke that native owner request
+        // directly here. This never invokes Application.Quit's managed body.
+        s_ownerQuit(0);
+    }
+    catch (...)
+    {
+        std::fputs("[R03EngineOwnerQuit] nativeQuitThrew=true\n", stderr);
+        std::fflush(stderr);
+    }
 }
 
 extern "C" IL2CPP_EXPORT void R03_IR_EngineLoggerCalled()
@@ -56,7 +99,17 @@ extern "C" IL2CPP_EXPORT int32_t R03_IR_ArmEngineWitness(
         !Identifier(caseId) || s_engineLoggerCalls.load() != 1) return -1;
     AssemblyShadowState initial;
     if (AssemblyShadow::GetState(initial) != AssemblyShadowError::Success ||
-        initial != AssemblyShadowState::Committed || s_engineWitnessArmed.exchange(true)) return -2;
+        initial != AssemblyShadowState::Committed ||
+        s_engineWitnessArmed.load(std::memory_order_acquire)) return -2;
+    // Resolve the actual 2022 Player's native callback before terminal
+    // publication; a missing binding is a blocked test, never a fake quit.
+    const auto nativeQuit = il2cpp::vm::InternalCalls::Resolve(
+        "UnityEngine.Application::Quit(System.Int32)");
+    if (!nativeQuit) return -7;
+    s_ownerQuit = reinterpret_cast<OwnerQuit>(nativeQuit);
+    if (std::snprintf(s_expectedSentinel, sizeof(s_expectedSentinel),
+                      "R03_ENGINE_UNHANDLED_%s", run) != 53) return -8;
+    if (s_engineWitnessArmed.exchange(true, std::memory_order_acq_rel)) return -2;
     // No overwrite/following an output symlink. Parent/source isolation is also
     // verified by the host before the disposable Player is launched.
     const int fd = ::open(output, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
@@ -87,16 +140,21 @@ extern "C" IL2CPP_EXPORT int32_t R03_IR_ArmEngineWitness(
                 AssemblyShadow::GetState(state);
                 std::string recovery;
                 const auto recoveryCode = AssemblyShadow::GetRecoveryInfoJson(recovery);
+                const bool ownerQuit = s_ownerQuitRequested.load(std::memory_order_acquire);
+                const int32_t ownerQuitCalls = s_ownerQuitCalls.load(std::memory_order_acquire);
                 const bool valid = observed && completed <= 64 && calls == 1 &&
+                    ownerQuit && ownerQuitCalls == 1 &&
                     state == AssemblyShadowState::FailedAfterCommit && recoveryCode == AssemblyShadowError::Success;
                 const int written = std::fprintf(stream,
                     "{\"schemaVersion\":1,\"kind\":\"R03IREngineReportingV1\",\"result\":\"ObservedNotAccepted\","
                     "\"runId\":\"%s\",\"caseId\":\"%s\",\"requestSha256\":\"%s\",\"processId\":%d,"
                     "\"initialState\":6,\"finalState\":%d,\"completedReports\":%llu,"
+                    "\"ownerQuitRequested\":%s,\"ownerQuitNativeCalls\":%d,"
                     "\"preManagedLoggerCalls\":1,\"finalManagedLoggerCalls\":%d,\"timedOut\":%s,"
                     "\"observationMilliseconds\":500,\"recovery\":%s,\"runtimeAcceptance\":false}\n",
                     runCopy, caseCopy, shaCopy, static_cast<int>(::getpid()), static_cast<int32_t>(state),
-                    static_cast<unsigned long long>(completed), calls, observed ? "false" : "true",
+                    static_cast<unsigned long long>(completed), ownerQuit ? "true" : "false",
+                    ownerQuitCalls, calls, observed ? "false" : "true",
                     recovery.empty() ? "null" : recovery.c_str());
                 const bool flushed = written > 0 && std::fflush(stream) == 0 && ::fsync(fd) == 0;
                 const bool closed = std::fclose(stream) == 0;
