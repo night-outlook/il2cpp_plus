@@ -33,8 +33,16 @@ def main():
         main_source = r'''
 #include "stub.h"
 #define IL2CPP_EXPORT
+#define LIBIL2CPP_CODEGEN_API
+using Il2CppMethodPointer = void (*)();
 #include "PROBE_PATH"
 #include <cassert>
+static int mockQuitCalls=0;
+static void MockQuit(int32_t) { ++mockQuitCalls; }
+Il2CppMethodPointer il2cpp::vm::InternalCalls::Resolve(const char* name) {
+ assert(std::strcmp(name, "UnityEngine.Application::Quit(System.Int32)")==0);
+ return reinterpret_cast<Il2CppMethodPointer>(&MockQuit);
+}
 int main(int argc, char** argv) {
  assert(argc == 3);
  started=true; // Observer is armed only after the mock transaction commits.
@@ -50,6 +58,17 @@ int main(int argc, char** argv) {
  assert(R03_IR_ArmEngineWitness(argv[1],run,"test",sha)==1);
  denied=true;
  if(!std::strcmp(argv[2],"logger")) R03_IR_EngineLoggerCalled();
+ Il2CppString sentinel{};
+ const char* prefix="R03_ENGINE_UNHANDLED_";
+ const std::string exact=std::string(prefix)+run;
+ sentinel.length=static_cast<int32_t>(exact.size());
+ for(size_t i=0;i<exact.size();++i) sentinel.chars[i]=static_cast<unsigned char>(exact[i]);
+ Il2CppException error{};
+ error.message=&sentinel;
+ R03_IR_OnNativeEngineReportCompleted(&error);
+ assert(mockQuitCalls==1);
+ R03_IR_OnNativeEngineReportCompleted(&error);
+ assert(mockQuitCalls==1); // same sentinel cannot request two owner quits
  il2cpp::vm::assembly_shadow_reporting::CompletedCounter().fetch_add(1,std::memory_order_release);
  for(;;) std::this_thread::sleep_for(std::chrono::seconds(1));
 }
