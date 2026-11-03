@@ -23,6 +23,10 @@
 // is invoked. Production builds never link or call this test-only callback.
 #if HYBRIDCLR_R03_RUNTIME_PROBE
 extern "C" void R03_IR_OnNativeEngineReportCompleted(const Il2CppException* error);
+// Test-only native state owned by the exact verified unhandled sentinel.
+// These functions never execute a managed Application or user callback.
+extern "C" int32_t R03_IR_NativeOwnerDecisionPending() noexcept;
+extern "C" void R03_IR_NativeOwnerDecisionObserved(int32_t kind) noexcept;
 #endif
 
 namespace il2cpp { namespace vm { namespace assembly_shadow_reporting {
@@ -103,6 +107,59 @@ inline bool IsExactEngineReport(const MethodInfo* method, const void* instance)
     return PhysicalClassType(method->parameters[0], Image::GetCorlib(), "System", "Exception") &&
         PhysicalClassType(method->parameters[1], physical->image, "UnityEngine", "Object");
 }
+
+
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+// Return kinds: 1 = Unity quit authorization, 2 = Unity quit notification.
+// The exact metadata match is intentionally separate from the native owner
+// token: a matching name alone may never bypass post-terminal execution.
+// UnityCsReference 2022.3.62f2 defines both as private static methods.
+inline int32_t ClassifyNativeOwnerDecision(const MethodInfo* method, const void* instance)
+{
+    if (instance || !method || !method->name || !method->klass ||
+        !method->klass->image || !method->klass->name ||
+        !method->klass->namespaze ||
+        std::strcmp(method->klass->name, "Application") ||
+        std::strcmp(method->klass->namespaze, "UnityEngine") ||
+        method->is_inflated || method->is_generic || method->klass->generic_class ||
+        !(method->flags & METHOD_ATTRIBUTE_STATIC) || method->parameters_count != 0 ||
+        !method->return_type || method->return_type->byref)
+        return 0;
+    const bool wants = !std::strcmp(method->name, "Internal_ApplicationWantsToQuit");
+    const bool quitting = !std::strcmp(method->name, "Internal_ApplicationQuit");
+    if (!wants && !quitting) return 0;
+    if (wants && (method->return_type->type != IL2CPP_TYPE_BOOLEAN ||
+                  !method->return_type->valuetype)) return 0;
+    if (quitting && method->return_type->type != IL2CPP_TYPE_VOID) return 0;
+    const Il2CppAssembly* physical =
+        MetadataCache::GetAotAssemblyByNamePhysical("UnityEngine.CoreModule");
+    if (!physical || !physical->image || method->klass->image != physical->image ||
+        method->klass->image->assembly != physical ||
+        AssemblyShadow::IsCandidate(physical) ||
+        AssemblyShadow::IsShadowedBaseline(physical) ||
+        AssemblyShadow::IsActiveShadow(physical)) return 0;
+    return wants ? 1 : 2;
+}
+
+inline bool TryHandleNativeOwnerDecision(const MethodInfo* method, void* instance,
+    Il2CppObject*& result)
+{
+    // Production and feature-OFF builds cannot reach this code. A terminal
+    // state and one original-sentinel-backed native owner request are both
+    // required; even Unity callback metadata cannot authorize it alone.
+    if (R03_IR_NativeOwnerDecisionPending() != 1) return false;
+    const int32_t kind = ClassifyNativeOwnerDecision(method, instance);
+    if (!kind) return false;
+    AssemblyShadowState state;
+    if (AssemblyShadow::GetState(state) != AssemblyShadowError::Success ||
+        state != AssemblyShadowState::FailedAfterCommit) return false;
+    // The Boolean object was pinned in the healthy bootstrap. No allocation,
+    // class initialization, or managed subscription/cancellation is allowed.
+    result = kind == 1 ? FixedHandledResult() : nullptr;
+    R03_IR_NativeOwnerDecisionObserved(kind);
+    return true;
+}
+#endif // HYBRIDCLR_R03_RUNTIME_PROBE
 
 inline void WriteMessage(const Il2CppException* error) noexcept
 {
