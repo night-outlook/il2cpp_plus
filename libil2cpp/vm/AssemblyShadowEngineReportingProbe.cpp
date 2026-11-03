@@ -115,8 +115,12 @@ bool WriteReport(bool normalExit) noexcept
 }
 void NormalExitReport() noexcept
 {
-    if (s_engineWitnessArmed.load(std::memory_order_acquire))
-        WriteReport(true);
+    if (!s_engineWitnessArmed.load(std::memory_order_acquire))
+        return;
+    const bool written = WriteReport(true);
+    std::fprintf(stderr, "[R03EngineOwnerExit] nativeAtexit=true rawFlushed=%s\n",
+                 written ? "true" : "false");
+    std::fflush(stderr);
 }
 bool Hex(const char* text, size_t size)
 {
