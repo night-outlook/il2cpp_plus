@@ -68,7 +68,6 @@ void CaptureOriginalFailure() noexcept
     }
     catch (...) { /* An unavailable witness cannot authenticate the exit. */ }
 }
-#endif
 // A normal C runtime exit invokes this registered callback; std::_Exit does
 // not. It is evidence of process termination, not proof of full Unity teardown.
 bool WriteReport(bool normalExit) noexcept
@@ -122,6 +121,7 @@ void NormalExitReport() noexcept
                  written ? "true" : "false");
     std::fflush(stderr);
 }
+#endif // HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 bool Hex(const char* text, size_t size)
 {
     if (!text || std::strlen(text) != size) return false;
