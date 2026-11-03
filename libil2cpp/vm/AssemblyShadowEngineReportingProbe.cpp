@@ -31,6 +31,8 @@ OwnerQuit s_ownerQuit = nullptr;
 char s_expectedSentinel[64] = {};
 std::atomic<bool> s_ownerQuitRequested{false};
 std::atomic<int32_t> s_ownerQuitCalls{0};
+std::atomic<int32_t> s_ownerWantsToQuitNativeResponses{0};
+std::atomic<int32_t> s_ownerApplicationQuitNativeNotifications{0};
 
 std::atomic<bool> s_ownerQuitReturned{false};
 std::atomic<uint64_t> s_reportsBefore{0};
@@ -92,6 +94,7 @@ bool WriteReport(bool normalExit) noexcept
         "\"runId\":\"%s\",\"caseId\":\"%s\",\"requestSha256\":\"%s\",\"processId\":%d,"
         "\"initialState\":6,\"finalState\":%d,\"completedReports\":%llu,"
         "\"ownerQuitRequested\":%s,\"ownerQuitNativeCalls\":%d,\"ownerQuitReturned\":%s,"
+        "\"ownerWantsToQuitNativeResponses\":%d,\"ownerApplicationQuitNativeNotifications\":%d,"
         "\"preManagedLoggerCalls\":1,\"finalManagedLoggerCalls\":%d,"
         "\"normalExitHookObserved\":%s,\"witnessExitMode\":\"%s\","
         "\"observationLimitMilliseconds\":500,\"observationElapsedMilliseconds\":%lld,"
@@ -100,6 +103,8 @@ bool WriteReport(bool normalExit) noexcept
         s_terminalState.load(std::memory_order_acquire),
         static_cast<unsigned long long>(completed), requested ? "true" : "false",
         calls, s_ownerQuitReturned.load(std::memory_order_acquire) ? "true" : "false",
+        s_ownerWantsToQuitNativeResponses.load(std::memory_order_acquire),
+        s_ownerApplicationQuitNativeNotifications.load(std::memory_order_acquire),
         logCalls, normalExit ? "true" : "false",
         normalExit ? "NativeAtexit" : "WatchdogForcedExit",
         static_cast<long long>(elapsed), timedOut ? "true" : "false",
@@ -175,6 +180,44 @@ extern "C" IL2CPP_EXPORT void R03_IR_OnNativeEngineReportCompleted(
         std::fputs("[R03EngineOwnerQuit] nativeQuitThrew=true\n", stderr);
         std::fflush(stderr);
     }
+}
+
+// Only the already-armed exact-sentinel owner quit is eligible. The
+// genuine first failure must be retained before Unity asks for a decision.
+extern "C" IL2CPP_EXPORT int32_t R03_IR_NativeOwnerDecisionPending() noexcept
+{
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    return s_engineWitnessArmed.load(std::memory_order_acquire) &&
+           s_ownerQuitRequested.load(std::memory_order_acquire) &&
+           s_ownerQuitCalls.load(std::memory_order_acquire) == 1 &&
+           s_recoveryReady.load(std::memory_order_acquire) &&
+           s_reportWriter.load(std::memory_order_acquire) == 0 ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+extern "C" IL2CPP_EXPORT void R03_IR_NativeOwnerDecisionObserved(int32_t kind) noexcept
+{
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    if (kind == 1)
+    {
+        const int32_t previous =
+            s_ownerWantsToQuitNativeResponses.fetch_add(1, std::memory_order_acq_rel);
+        if (previous == 0)
+            std::fputs("[R03EngineOwnerDecision] method=Internal_ApplicationWantsToQuit response=true managedBodyExecuted=false\n", stderr);
+    }
+    else if (kind == 2)
+    {
+        const int32_t previous =
+            s_ownerApplicationQuitNativeNotifications.fetch_add(1, std::memory_order_acq_rel);
+        if (previous == 0)
+            std::fputs("[R03EngineOwnerDecision] method=Internal_ApplicationQuit response=void managedBodyExecuted=false\n", stderr);
+    }
+    std::fflush(stderr);
+#else
+    (void)kind;
+#endif
 }
 
 extern "C" IL2CPP_EXPORT void R03_IR_EngineLoggerCalled()
