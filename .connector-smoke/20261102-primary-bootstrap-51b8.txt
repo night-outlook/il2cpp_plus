@@ -1,0 +1,6 @@
+Disposable GitHub Connector write smoke test.
+Repository: night-outlook/il2cpp_plus
+Base ref: codex/assembly-shadow-r01b-h1
+Base commit: 2c899ece8cf241887b14040bab0a73d7c854d2bf
+Smoke branch: codex/assembly-shadow-smoke-20261102-primary-bootstrap-51b8
+Do not merge. Safe to delete branch after verification.
