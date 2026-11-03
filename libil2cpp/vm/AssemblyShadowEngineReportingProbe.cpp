@@ -5,6 +5,9 @@
 #include "il2cpp-config.h"
 #if HYBRIDCLR_R03_RUNTIME_PROBE
 #include "vm/AssemblyShadow.h"
+// Complete Il2CppException/Il2CppString types are required in the OFF build too.
+// TerminalReporting.h includes this only when the feature is enabled.
+#include "il2cpp-object-internals.h"
 #include "vm/AssemblyShadowTerminalReporting.h"
 #include "vm/InternalCalls.h"
 #include <atomic>
@@ -13,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include <string>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -27,6 +31,93 @@ OwnerQuit s_ownerQuit = nullptr;
 char s_expectedSentinel[64] = {};
 std::atomic<bool> s_ownerQuitRequested{false};
 std::atomic<int32_t> s_ownerQuitCalls{0};
+
+std::atomic<bool> s_ownerQuitReturned{false};
+std::atomic<uint64_t> s_reportsBefore{0};
+std::atomic<int64_t> s_firstSentinelNs{0};
+std::atomic<bool> s_recoveryReady{false};
+std::atomic<int32_t> s_terminalState{0};
+std::string s_originalRecovery;
+std::atomic<int> s_reportWriter{0};
+FILE* s_reportStream = nullptr;
+int s_reportFd = -1;
+char s_runCopy[33] = {};
+char s_caseCopy[96] = {};
+char s_shaCopy[65] = {};
+int64_t NowNs() noexcept
+{
+    using namespace std::chrono;
+    return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+}
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+void CaptureOriginalFailure() noexcept
+{
+    try
+    {
+        il2cpp::vm::AssemblyShadowState state;
+        std::string recovery;
+        const auto stateResult = il2cpp::vm::AssemblyShadow::GetState(state);
+        const auto recoveryResult = il2cpp::vm::AssemblyShadow::GetRecoveryInfoJson(recovery);
+        if (stateResult != il2cpp::vm::AssemblyShadowError::Success ||
+            recoveryResult != il2cpp::vm::AssemblyShadowError::Success ||
+            state != il2cpp::vm::AssemblyShadowState::FailedAfterCommit ||
+            recovery.empty()) return;
+        s_originalRecovery = recovery;
+        s_terminalState.store(static_cast<int32_t>(state), std::memory_order_release);
+        s_recoveryReady.store(true, std::memory_order_release);
+    }
+    catch (...) { /* An unavailable witness cannot authenticate the exit. */ }
+}
+#endif
+// A normal C runtime exit invokes this registered callback; std::_Exit does
+// not. It is evidence of process termination, not proof of full Unity teardown.
+bool WriteReport(bool normalExit) noexcept
+{
+    int expected = 0;
+    if (!s_reportWriter.compare_exchange_strong(expected, 1, std::memory_order_acq_rel))
+        return false;
+    if (!s_reportStream || s_reportFd < 0) return false;
+    const int64_t first = s_firstSentinelNs.load(std::memory_order_acquire);
+    const int64_t elapsed = first > 0 ? (NowNs() - first) / 1000000 : -1;
+    const uint64_t completed =
+        il2cpp::vm::assembly_shadow_reporting::CompletedCounter().load(std::memory_order_acquire) -
+        s_reportsBefore.load(std::memory_order_acquire);
+    const bool requested = s_ownerQuitRequested.load(std::memory_order_acquire);
+    const int32_t calls = s_ownerQuitCalls.load(std::memory_order_acquire);
+    const int32_t logCalls = s_engineLoggerCalls.load(std::memory_order_acquire);
+    const bool recoveryReady = s_recoveryReady.load(std::memory_order_acquire);
+    const bool inTime = first > 0 && elapsed >= 0 && elapsed <= 500;
+    const bool timedOut = !normalExit || !inTime;
+    const int written = std::fprintf(s_reportStream,
+        "{\"schemaVersion\":2,\"kind\":\"R03IREngineReportingV2\",\"result\":\"ObservedNotAccepted\","
+        "\"runId\":\"%s\",\"caseId\":\"%s\",\"requestSha256\":\"%s\",\"processId\":%d,"
+        "\"initialState\":6,\"finalState\":%d,\"completedReports\":%llu,"
+        "\"ownerQuitRequested\":%s,\"ownerQuitNativeCalls\":%d,\"ownerQuitReturned\":%s,"
+        "\"preManagedLoggerCalls\":1,\"finalManagedLoggerCalls\":%d,"
+        "\"normalExitHookObserved\":%s,\"witnessExitMode\":\"%s\","
+        "\"observationLimitMilliseconds\":500,\"observationElapsedMilliseconds\":%lld,"
+        "\"timedOut\":%s,\"recovery\":%s,\"runtimeAcceptance\":false}\n",
+        s_runCopy, s_caseCopy, s_shaCopy, static_cast<int>(::getpid()),
+        s_terminalState.load(std::memory_order_acquire),
+        static_cast<unsigned long long>(completed), requested ? "true" : "false",
+        calls, s_ownerQuitReturned.load(std::memory_order_acquire) ? "true" : "false",
+        logCalls, normalExit ? "true" : "false",
+        normalExit ? "NativeAtexit" : "WatchdogForcedExit",
+        static_cast<long long>(elapsed), timedOut ? "true" : "false",
+        recoveryReady ? s_originalRecovery.c_str() : "null");
+    const bool flushed = written > 0 && std::fflush(s_reportStream) == 0 &&
+                         ::fsync(s_reportFd) == 0;
+    const bool closed = std::fclose(s_reportStream) == 0;
+    s_reportStream = nullptr;
+    s_reportFd = -1;
+    s_reportWriter.store(2, std::memory_order_release);
+    return flushed && closed;
+}
+void NormalExitReport() noexcept
+{
+    if (s_engineWitnessArmed.load(std::memory_order_acquire))
+        WriteReport(true);
+}
 bool Hex(const char* text, size_t size)
 {
     if (!text || std::strlen(text) != size) return false;
@@ -45,7 +136,7 @@ bool Identifier(const char* text)
 }
 
 // Called from the native exact Unity unhandled-report path only after its
-// completed count advances. No subsequent Unity-managed callback is admitted.
+// completed count advances. All ordinary managed callbacks remain denied.
 extern "C" IL2CPP_EXPORT void R03_IR_OnNativeEngineReportCompleted(
     const Il2CppException* error)
 {
@@ -60,16 +151,20 @@ extern "C" IL2CPP_EXPORT void R03_IR_OnNativeEngineReportCompleted(
             static_cast<unsigned char>(s_expectedSentinel[index]))
             return;
     if (s_ownerQuitRequested.exchange(true, std::memory_order_acq_rel))
-        return; // Not a counter limit; the underlying reporting stays observable.
+        return; // The underlying report counter is never capped.
+    s_firstSentinelNs.store(NowNs(), std::memory_order_release);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    CaptureOriginalFailure();
+#endif
     s_ownerQuitCalls.fetch_add(1, std::memory_order_release);
     std::fprintf(stderr, "[R03EngineOwnerQuit] source=UnityNativeIcall once=1 sentinelMatched=true\n");
     std::fflush(stderr);
     try
     {
-        // UnityCsReference: Application.Quit(int) is a native FreeFunction.
-        // We resolve it while healthy and invoke that native owner request
-        // directly here. This never invokes Application.Quit's managed body.
+        // Resolve while healthy, call only the native Unity owner request.
+        // An icall return is NOT process-exit acknowledgement.
         s_ownerQuit(0);
+        s_ownerQuitReturned.store(true, std::memory_order_release);
     }
     catch (...)
     {
@@ -101,70 +196,72 @@ extern "C" IL2CPP_EXPORT int32_t R03_IR_ArmEngineWitness(
     if (AssemblyShadow::GetState(initial) != AssemblyShadowError::Success ||
         initial != AssemblyShadowState::Committed ||
         s_engineWitnessArmed.load(std::memory_order_acquire)) return -2;
-    // Resolve the actual 2022 Player's native callback before terminal
-    // publication; a missing binding is a blocked test, never a fake quit.
+    // Resolve the exact Player icall while healthy, not after terminal failure.
     const auto nativeQuit = il2cpp::vm::InternalCalls::Resolve(
         "UnityEngine.Application::Quit(System.Int32)");
     if (!nativeQuit) return -7;
     s_ownerQuit = reinterpret_cast<OwnerQuit>(nativeQuit);
     if (std::snprintf(s_expectedSentinel, sizeof(s_expectedSentinel),
                       "R03_ENGINE_UNHANDLED_%s", run) != 53) return -8;
-    if (s_engineWitnessArmed.exchange(true, std::memory_order_acq_rel)) return -2;
-    // No overwrite/following an output symlink. Parent/source isolation is also
-    // verified by the host before the disposable Player is launched.
     const int fd = ::open(output, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
     if (fd < 0) return -3;
     FILE* stream = ::fdopen(fd, "w");
     if (!stream) { ::close(fd); return -4; }
-    char runCopy[33], caseCopy[96], shaCopy[65];
-    std::memcpy(runCopy, run, 33);
-    std::strcpy(caseCopy, caseId);
-    std::memcpy(shaCopy, requestSha, 65);
-    const uint64_t before = assembly_shadow_reporting::CompletedCounter().load(std::memory_order_acquire);
+    s_reportStream = stream;
+    s_reportFd = fd;
+    std::memcpy(s_runCopy, run, 33);
+    std::strcpy(s_caseCopy, caseId);
+    std::memcpy(s_shaCopy, requestSha, 65);
+    s_reportsBefore.store(assembly_shadow_reporting::CompletedCounter().load(
+        std::memory_order_acquire), std::memory_order_release);
+    // Unlike the former observer's std::_Exit(0), only a normal process exit
+    // can publish a positive exit-provenance signal. The native watchdog is
+    // failure-only and keeps a complete raw diagnostic even on timeout.
+    if (std::atexit(NormalExitReport) != 0)
+    {
+        std::fclose(stream);
+        s_reportStream = nullptr;
+        s_reportFd = -1;
+        return -9;
+    }
+    s_engineWitnessArmed.store(true, std::memory_order_release);
     try
     {
-        std::thread([stream, fd, before, runCopy, caseCopy, shaCopy]() noexcept {
+        std::thread([]() noexcept {
             try
             {
+                const uint64_t before = s_reportsBefore.load(std::memory_order_acquire);
                 const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
                 while (assembly_shadow_reporting::CompletedCounter().load(std::memory_order_acquire) == before &&
                        std::chrono::steady_clock::now() < deadline)
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                const bool observed = assembly_shadow_reporting::CompletedCounter().load(std::memory_order_acquire) > before;
-                // Detect immediate engine re-entry/stack failure after reporting;
-                // this bounded observation is not a production-duration SLA.
-                if (observed) std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                const uint64_t completed = assembly_shadow_reporting::CompletedCounter().load(std::memory_order_acquire) - before;
-                const int32_t calls = s_engineLoggerCalls.load(std::memory_order_acquire);
-                AssemblyShadowState state;
-                AssemblyShadow::GetState(state);
-                std::string recovery;
-                const auto recoveryCode = AssemblyShadow::GetRecoveryInfoJson(recovery);
-                const bool ownerQuit = s_ownerQuitRequested.load(std::memory_order_acquire);
-                const int32_t ownerQuitCalls = s_ownerQuitCalls.load(std::memory_order_acquire);
-                const bool valid = observed && completed <= 64 && calls == 1 &&
-                    ownerQuit && ownerQuitCalls == 1 &&
-                    state == AssemblyShadowState::FailedAfterCommit && recoveryCode == AssemblyShadowError::Success;
-                const int written = std::fprintf(stream,
-                    "{\"schemaVersion\":1,\"kind\":\"R03IREngineReportingV1\",\"result\":\"ObservedNotAccepted\","
-                    "\"runId\":\"%s\",\"caseId\":\"%s\",\"requestSha256\":\"%s\",\"processId\":%d,"
-                    "\"initialState\":6,\"finalState\":%d,\"completedReports\":%llu,"
-                    "\"ownerQuitRequested\":%s,\"ownerQuitNativeCalls\":%d,"
-                    "\"preManagedLoggerCalls\":1,\"finalManagedLoggerCalls\":%d,\"timedOut\":%s,"
-                    "\"observationMilliseconds\":500,\"recovery\":%s,\"runtimeAcceptance\":false}\n",
-                    runCopy, caseCopy, shaCopy, static_cast<int>(::getpid()), static_cast<int32_t>(state),
-                    static_cast<unsigned long long>(completed), ownerQuit ? "true" : "false",
-                    ownerQuitCalls, calls, observed ? "false" : "true",
-                    recovery.empty() ? "null" : recovery.c_str());
-                const bool flushed = written > 0 && std::fflush(stream) == 0 && ::fsync(fd) == 0;
-                const bool closed = std::fclose(stream) == 0;
-                std::_Exit(valid && flushed && closed ? 0 : 71);
+                const bool observed =
+                    assembly_shadow_reporting::CompletedCounter().load(std::memory_order_acquire) > before;
+                if (observed)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                // A normal Unity-owner shutdown would already have reached
+                // NormalExitReport. A watchdog must NEVER award success.
+                if (s_reportWriter.load(std::memory_order_acquire) == 0)
+                    WriteReport(false);
+                std::_Exit(71);
             }
-            catch (...) { std::fputs("[R03EngineWitness] native observer failed\n", stderr); std::fflush(stderr); std::_Exit(72); }
+            catch (...)
+            {
+                std::fputs("[R03EngineWitness] native observer failed\n", stderr);
+                std::fflush(stderr);
+                std::_Exit(72);
+            }
         }).detach();
         return 1;
     }
-    catch (...) { std::fclose(stream); return -5; }
+    catch (...)
+    {
+        s_engineWitnessArmed.store(false, std::memory_order_release);
+        std::fclose(stream);
+        s_reportStream = nullptr;
+        s_reportFd = -1;
+        return -5;
+    }
 #else
     (void)output; (void)run; (void)caseId; (void)requestSha;
     return -6;
