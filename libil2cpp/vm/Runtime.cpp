@@ -634,6 +634,13 @@ namespace vm
             // A terminal native diagnostic transport is not managed business
             // execution. No handler or subscriber body is allowed by this path.
             Il2CppObject* terminalReport = nullptr;
+#if HYBRIDCLR_R03_RUNTIME_PROBE
+            // One terminal sentinel's native Unity owner quit is not a
+            // managed callback. Handle only the two exact 2022 Player quit
+            // lifecycle signatures and leave every other guard untouched.
+            if (assembly_shadow_reporting::TryHandleNativeOwnerDecision(method, obj, terminalReport))
+                return terminalReport;
+#endif
             if (assembly_shadow_reporting::TryHandle(method, obj, params, terminalReport))
                 return terminalReport;
             // Unity caches callback MethodInfo pointers (for example
