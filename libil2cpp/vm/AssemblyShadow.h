@@ -2,6 +2,7 @@
 
 #include "il2cpp-config.h"
 #include "AssemblyShadowTypes.h"
+#include "AssemblyShadowFirstFailureV2.h"
 
 #include <stddef.h>
 #include <string>
@@ -60,6 +61,14 @@ public:
     static AssemblyShadowError ReserveMetadataBudget(const std::vector<uint64_t>& sizes, int32_t profileVersion);
     static AssemblyShadowError GetMetadataCapacityJson(const std::vector<uint64_t>& sizes, std::string& json);
     static AssemblyShadowError GetRecoveryInfoJson(std::string& json);
+#if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
+    // B1 native-first-error read-only source: no metadata, locks, allocation
+    // or I/O. Empty/Invalid means no usable immutable first-error record.
+    // Does not establish a coherent whole-VM epoch or V2 file transport.
+    static assembly_shadow_first_failure_v2::State FirstFailureV2Status() noexcept;
+    static bool TryReadFirstFailureV2(
+        assembly_shadow_first_failure_v2::Snapshot& output) noexcept;
+#endif
     static AssemblyShadowError ValidateTransaction();
     static AssemblyShadowError CommitTransaction();
     static AssemblyShadowError AbortTransaction();
