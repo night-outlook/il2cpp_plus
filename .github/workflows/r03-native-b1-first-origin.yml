@@ -1,0 +1,73 @@
+name: R03 native B1 first-origin host source
+on:
+  push:
+    branches: ['codex/assembly-shadow-r01b-h1']
+    paths:
+      - 'libil2cpp/vm/AssemblyShadowFirstFailureV2.h'
+      - 'libil2cpp/vm/AssemblyShadowFirstFailureV2Host.cpp'
+      - 'libil2cpp/vm/AssemblyShadow.cpp'
+      - 'libil2cpp/vm/AssemblyShadow.h'
+      - '.github/workflows/r03-native-b1-first-origin.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  first-origin-host:
+    runs-on: \${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /libil2cpp/vm/AssemblyShadowFirstFailureV2.h
+            /libil2cpp/vm/AssemblyShadowFirstFailureV2Host.cpp
+            /libil2cpp/vm/AssemblyShadow.cpp
+            /libil2cpp/vm/AssemblyShadow.h
+      - name: Actual host C++11 and C++17 first-error tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          source=libil2cpp/vm/AssemblyShadowFirstFailureV2Host.cpp
+          dir="$RUNNER_TEMP/r03-b1"
+          mkdir -p "$dir"
+          compilers=()
+          if command -v clang++ >/dev/null; then compilers+=(clang++); fi
+          if command -v g++ >/dev/null; then compilers+=(g++); fi
+          test "\${#compilers[@]}" -ge 1
+          for cxx in "\${compilers[@]}"; do
+            for std in c++11 c++17; do
+              exe="$dir/\${cxx}-\${std}"
+              "$cxx" -std="$std" -O1 -Wall -Wextra -Werror -pedantic -pthread "$source" -o "$exe"
+              "$exe" > "$exe.json"
+              python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["result"]=="PassedCxx11HostSource_NotVmOrUnity"; assert r["nativeOriginIntegratedSource"] and all(r[k] is False for k in ("nativeOriginObservedInPlayer","nativeV2TransportImplemented","wholeVmEpochAuthenticated","runtimeAcceptance","R03Accepted","H2Passed")); print(r["result"])' "$exe.json"
+            done
+          done
+      - name: Source-only native producer mapping
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('libil2cpp/vm/AssemblyShadow.cpp').read_text()
+          h=Path('libil2cpp/vm/AssemblyShadow.h').read_text()
+          required=(
+            's_firstFailureV2.TryFreeze(static_cast<int32_t>(error), origin,',
+            'Origin::InterpreterInitializer',
+            'Origin::TransactionTerminal',
+            'Origin::LateBaselineUse',
+            'Origin::ReferenceViolation',
+            'Origin::UnexpectedFailure',
+            'AssemblyShadow::TryReadFirstFailureV2',
+            'AssemblyShadow::FirstFailureV2Status',
+          )
+          for needle in required:
+              assert needle in s, needle
+          assert 'static bool TryReadFirstFailureV2(' in h
+          print('B1 source symbols present; not a complete VM build.')
+          PY
+          test -z "$(git status --porcelain)"
