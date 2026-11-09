@@ -13,7 +13,7 @@ permissions:
   contents: read
 jobs:
   first-origin-host:
-    runs-on: \${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,10 +39,10 @@ jobs:
           compilers=()
           if command -v clang++ >/dev/null; then compilers+=(clang++); fi
           if command -v g++ >/dev/null; then compilers+=(g++); fi
-          test "\${#compilers[@]}" -ge 1
-          for cxx in "\${compilers[@]}"; do
+          test "${#compilers[@]}" -ge 1
+          for cxx in "${compilers[@]}"; do
             for std in c++11 c++17; do
-              exe="$dir/\${cxx}-\${std}"
+              exe="$dir/${cxx}-${std}"
               "$cxx" -std="$std" -O1 -Wall -Wextra -Werror -pedantic -pthread "$source" -o "$exe"
               "$exe" > "$exe.json"
               python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["result"]=="PassedCxx11HostSource_NotVmOrUnity"; assert r["nativeOriginIntegratedSource"] and all(r[k] is False for k in ("nativeOriginObservedInPlayer","nativeV2TransportImplemented","wholeVmEpochAuthenticated","runtimeAcceptance","R03Accepted","H2Passed")); print(r["result"])' "$exe.json"
