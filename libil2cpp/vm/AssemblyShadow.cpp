@@ -20,6 +20,7 @@
 #include "AssemblyShadowOwnedPhysicalNamesJson.h"
 #include "AssemblyShadowObservedTypeShapeCensus.h"
 #include "AssemblyShadowObservedTypeShapeJson.h"
+#include "AssemblyShadowFirstFailureV2.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -162,6 +163,9 @@ namespace {
     std::atomic<const std::string*> s_referenceViolationDetail{nullptr}; // One immutable process-lifetime failure.
     struct TypeFailure { AssemblyShadowError error; std::string detail; };
     std::atomic<const TypeFailure*> s_typeFailure{nullptr};
+    // Actual VM failure producers publish into this process-lifetime B1 record.
+    // Independent event families have no global atomic ordering or VM epoch.
+    assembly_shadow_first_failure_v2::FirstErrorV2 s_firstFailureV2;
     std::atomic_flag s_usageLock = ATOMIC_FLAG_INIT;
     uint64_t s_usageGeneration = 0;
     assembly_shadow_r02::ObservationCounter<assembly_shadow_r02::Metric::MethodChecks> s_methodChecks;
@@ -241,7 +245,8 @@ namespace {
         s_droppedClassObservations.fetch_add(1,std::memory_order_relaxed);
     }
 
-    void RecordFirstGuardFailure(AssemblyShadowError error, const std::string& detail)
+    void RecordFirstGuardFailure(AssemblyShadowError error, const std::string& detail,
+        assembly_shadow_first_failure_v2::Origin origin = assembly_shadow_first_failure_v2::Origin::Guard)
     {
         if (s_typeFailure.load(std::memory_order_acquire)) return;
         std::unique_ptr<TypeFailure> failure(new TypeFailure{error, detail});
@@ -249,6 +254,11 @@ namespace {
         if (s_typeFailure.compare_exchange_strong(expected, failure.get(), std::memory_order_acq_rel))
         {
             failure.release();
+            // Bind the B1 record to the winner of the EXISTING V1 type-failure
+            // publication. An unsuccessful guard writer must not capture a
+            // different "first" error before the original CAS is resolved.
+            s_firstFailureV2.TryFreeze(static_cast<int32_t>(error), origin,
+                detail.data(), detail.size());
             // First-writer-only native evidence; no managed ToString/logger.
             // Original recovery facts stay immutable. Never infer a Player PASS
             // from this line; it is an originating failure diagnostic only.
@@ -506,7 +516,18 @@ namespace {
             (state == AssemblyShadowState::Failed || state == AssemblyShadowState::FailedAfterCommit ||
              error == AssemblyShadowError::InternalError || code < 0 || code > 24))
         {
-            transaction.recoveryTerminalError = error == AssemblyShadowError::Success ? AssemblyShadowError::InternalError : error;
+            const AssemblyShadowError firstError = error == AssemblyShadowError::Success
+                ? AssemblyShadowError::InternalError : error;
+            // This is the original terminal result under the transaction mutex,
+            // not a later GetRecoveryInfoJson observation. Copy before assigning
+            // the string; invalid/empty/overlong details fail closed in B1.
+            s_firstFailureV2.TryFreeze(static_cast<int32_t>(firstError),
+                firstError == AssemblyShadowError::ModuleInitializerFailed &&
+                    state == AssemblyShadowState::FailedAfterCommit
+                    ? assembly_shadow_first_failure_v2::Origin::InterpreterInitializer
+                    : assembly_shadow_first_failure_v2::Origin::TransactionTerminal,
+                detail.data(), detail.size());
+            transaction.recoveryTerminalError = firstError;
             transaction.recoveryTerminalDetail = detail;
         }
         if (error == AssemblyShadowError::BaselineAlreadyUsed && !s_active.load(std::memory_order_acquire))
@@ -715,7 +736,8 @@ namespace {
         std::string detail = ReferenceDetail(requester, provider, index, site);
         // One process-lifetime first failure across reference and type guards.
         // A later guard must not replace the diagnosis that sealed this process.
-        RecordFirstGuardFailure(AssemblyShadowError::ReferenceEscapesClosure, detail);
+        RecordFirstGuardFailure(AssemblyShadowError::ReferenceEscapesClosure, detail,
+            assembly_shadow_first_failure_v2::Origin::ReferenceViolation);
         // Allocate only on failure, outside VM/usage locks. Retain one complete
         // record, not a per-lookup event stream or a truncated dependency path.
         std::unique_ptr<std::string> retained(new std::string(detail));
@@ -1118,6 +1140,17 @@ AssemblyShadowError AssemblyShadow::GetRecoveryInfoJson(std::string& json)
         << ",\"baselineEligibilityRequiresStartupValidation\":" << decision.requireStartupValidation << '}';
     json = out.str();
     return AssemblyShadowError::Success;
+}
+
+assembly_shadow_first_failure_v2::State AssemblyShadow::FirstFailureV2Status() noexcept
+{
+    return s_firstFailureV2.status();
+}
+
+bool AssemblyShadow::TryReadFirstFailureV2(
+    assembly_shadow_first_failure_v2::Snapshot& output) noexcept
+{
+    return s_firstFailureV2.Read(output);
 }
 
 AssemblyShadowError AssemblyShadow::ValidateTransaction()
@@ -1946,9 +1979,16 @@ void AssemblyShadow::RecordBaselineUse(const Il2CppAssembly* assembly, BaselineU
         }
     }
     if (late)
-        FailTypeResolution(AssemblyShadowError::BaselineAlreadyUsed, std::string("ShadowBaselineUse Assembly=") + assembly->aname.name +
+    {
+        // Preserve the exact original V1 detail and tag THIS producing baseline
+        // event before the normal failure path records the same guard code.
+        const std::string lateDetail = std::string("ShadowBaselineUse Assembly=") + assembly->aname.name +
             " Type=" + (klass ? AssemblyShadowTypeKey::Format(&klass->byval_arg) : "<assembly>") +
-            " Kind=" + AssemblyShadowDiagnostics::UseKindName(kind) + " Site=" + (detail ? detail : ""));
+            " Kind=" + AssemblyShadowDiagnostics::UseKindName(kind) + " Site=" + (detail ? detail : "");
+        RecordFirstGuardFailure(AssemblyShadowError::BaselineAlreadyUsed, lateDetail,
+            assembly_shadow_first_failure_v2::Origin::LateBaselineUse);
+        FailTypeResolution(AssemblyShadowError::BaselineAlreadyUsed, lateDetail);
+    }
 }
 
 bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* site) noexcept
@@ -2058,6 +2098,10 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
     catch (...)
     {
         // Even allocation failure cannot permit the caller to execute.
+        static const char failureReason[] = "Method guard diagnostic construction failed.";
+        s_firstFailureV2.TryFreeze(static_cast<int32_t>(AssemblyShadowError::InternalError),
+            assembly_shadow_first_failure_v2::Origin::UnexpectedFailure,
+            failureReason, sizeof failureReason - 1);
         s_unexpectedFailure.store(true, std::memory_order_release);
     }
     s_state.store(s_active.load(std::memory_order_acquire) ? AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
@@ -2192,6 +2236,10 @@ AssemblyShadowError AssemblyShadow::GetTypeResolutionInfo(const Il2CppType* type
 
 AssemblyShadowError AssemblyShadow::ReportUnexpectedFailure()
 {
+    static const char firstReason[] = "Unexpected native mutation failure requires restart.";
+    s_firstFailureV2.TryFreeze(static_cast<int32_t>(AssemblyShadowError::InternalError),
+        assembly_shadow_first_failure_v2::Origin::UnexpectedFailure,
+        firstReason, sizeof firstReason - 1);
     s_unexpectedFailure.store(true, std::memory_order_release);
     s_state.store(s_active.load(std::memory_order_acquire) ? AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
         std::memory_order_release);
