@@ -4,7 +4,7 @@ on:
     branches: ['codex/assembly-shadow-r01b-h1']
     paths:
       - 'libil2cpp/vm/AssemblyShadowFirstFailureV2.h'
-      - 'libil2cpp/vm/AssemblyShadowFirstFailureV2Host.cpp'
+      - 'NativeHostTests/AssemblyShadowFirstFailureV2Host.cpp'
       - 'libil2cpp/vm/AssemblyShadow.cpp'
       - 'libil2cpp/vm/AssemblyShadow.h'
       - '.github/workflows/r03-native-b1-first-origin.yml'
@@ -26,14 +26,16 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /libil2cpp/vm/AssemblyShadowFirstFailureV2.h
-            /libil2cpp/vm/AssemblyShadowFirstFailureV2Host.cpp
+            /NativeHostTests/AssemblyShadowFirstFailureV2Host.cpp
             /libil2cpp/vm/AssemblyShadow.cpp
             /libil2cpp/vm/AssemblyShadow.h
       - name: Actual host C++11 and C++17 first-error tests
         shell: bash
         run: |
           set -euo pipefail
-          source=libil2cpp/vm/AssemblyShadowFirstFailureV2Host.cpp
+          test ! -e libil2cpp/vm/AssemblyShadowFirstFailureV2Host.cpp
+          test ! -L libil2cpp/vm/AssemblyShadowFirstFailureV2Host.cpp
+          source=NativeHostTests/AssemblyShadowFirstFailureV2Host.cpp
           dir="$RUNNER_TEMP/r03-b1"
           mkdir -p "$dir"
           compilers=()
