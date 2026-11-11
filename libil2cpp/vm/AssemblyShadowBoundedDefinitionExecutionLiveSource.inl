@@ -181,6 +181,13 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 if(!count(ns,nsBytes) || !count(name.second,nameBytes)) {
                     c.error=live::Error::TypeKeyFailed;return;
                 }
+                // Physical AOT TypeDef ownership does not authorize a
+                // dynamically encoded generic-container index. The -1
+                // sentinel is the only admitted negative "no container".
+                if(def->genericContainerIndex!=kGenericContainerIndexInvalid &&
+                   hybridclr::metadata::IsInterpreterIndex(def->genericContainerIndex)) {
+                    c.error=live::Error::UnsupportedMetadataAncestry;return;
+                }
                 const auto container=GlobalMetadata::GetGenericContainerFromIndex(
                     def->genericContainerIndex);
                 parts[depth].nameSpace={ns,nsBytes};
