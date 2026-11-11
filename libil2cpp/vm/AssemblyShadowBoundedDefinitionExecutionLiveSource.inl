@@ -44,15 +44,29 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         return reject(live::Error::UnsupportedTypeShape);
     receipt.activeGenerationBefore=activeBefore?activeBefore->generation:0;
 
-    bool capturedRegistry=false;
+    // Two source-pinned independent membership scans: the first discovers
+    // physical images only from matched observed class headers. The second
+    // copies class rows after that complete owner inventory is available.
+    physical::Scratch discovery;
+    if(!discovery.Consume())return reject(live::Error::InvalidRegistry);
+    struct DiscoveryCleanup {
+        physical::Scratch& scratch;
+        ~DiscoveryCleanup() noexcept{scratch.Scrub();}
+    } discoveryCleanup{discovery};
+    bool capturedRegistry=false, capturedDiscovery=false;
     {
         ExecutionObservationLock lock;
         capturedRegistry=membership.Capture(s_executionClasses.data(),s_executionClasses.size(),
              s_executionClassCount,s_executionRegistryRevision.Current(),
              s_executionRegistrationWitnesses);
+        capturedDiscovery=discovery.Capture(s_executionClasses.data(),s_executionClasses.size(),
+             s_executionClassCount,s_executionRegistryRevision.Current(),
+             s_executionRegistrationWitnesses);
     }
-    if(!capturedRegistry)return reject(live::Error::InvalidRegistry);
-    if(!membership.Unique())return reject(live::Error::DuplicateRegistration);
+    if(!capturedRegistry||!capturedDiscovery)
+        return reject(live::Error::InvalidRegistry);
+    if(!membership.Unique()||!discovery.Unique())
+        return reject(live::Error::DuplicateRegistration);
     receipt.registered=membership.Observed();
     receipt.registryRevisionBefore=membership.Revision();
     if(!receipt.registered)return reject(live::Error::InvalidRegistry);
@@ -71,6 +85,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         const ActiveSnapshot* active;
         live::Error error=live::Error::None;
         size_t lookups=0, rejected=0;
+        assembly_shadow_observed_images::Inventory<64>* images=nullptr;
+        bool usedCrossImageArgument=false;
     };
     Context context{};
     context.membership=&membership;
@@ -83,6 +99,49 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     // no global no-allocation claim is made for the source collection.
     {
         os::FastAutoLock metadataLock(&g_MetadataLock);
+        assembly_shadow_observed_images::Inventory<64> imageInventory;
+        context.images=&imageInventory;
+        // Physical iterator #1 is observation-only: no output rows and no
+        // metadata handles are retained. A class is dereferenced only after
+        // it matches one of the authenticated observed registry identities.
+        // The inventory is destroyed before this metadata lock is released.
+        struct DiscoveryContext {
+            physical::Scratch* matched;
+            assembly_shadow_observed_images::Inventory<64>* images;
+            live::Error error=live::Error::None;
+        } inventoryContext{};
+        inventoryContext.matched=&discovery;
+        inventoryContext.images=&imageInventory;
+        il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
+            DiscoveryContext& d=*static_cast<DiscoveryContext*>(raw);
+            if(d.error!=live::Error::None)return;
+            const auto event=d.matched->ObserveEnumeratedOwned(klass);
+            if(event==physical::ObservationEvent::DuplicateMatch ||
+               event==physical::ObservationEvent::Invalid) {
+                d.error=live::Error::BadPhysicalEnumeration;return;
+            }
+            if(event!=physical::ObservationEvent::FirstMatch)return;
+            if(!klass || !klass->image) {
+                d.error=live::Error::InvalidTypeIdentity;return;
+            }
+            const Il2CppImage* img=klass->image;
+            if(!img->assembly || !img->assembly->aname.name ||
+               hybridclr::metadata::IsInterpreterIndex(img->token) ||
+               !img->typeCount || img->typeCount>live::kMaximumAotImageTypes) {
+                d.error=live::Error::UnsupportedImage;return;
+            }
+            if(!d.images->AddFromMatchedCallback(img))
+                d.error=live::Error::PhysicalImageLimit;
+        },&inventoryContext);
+        if(inventoryContext.error!=live::Error::None)
+            return reject(inventoryContext.error);
+        if(!discovery.EnumeratorHealthy() || !discovery.FullyMatched() ||
+           !imageInventory.Healthy() || !imageInventory.Count())
+            return reject(live::Error::UnmatchedClass);
+        receipt.admittedPhysicalImages=imageInventory.Count();
+        // Physical iterator #2 consumes *the same* matched registry under
+        // the same metadata lock. It can use the complete bounded image list
+        // even if the corresponding physical class appears later in order.
         il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
             Context& c=*static_cast<Context*>(raw);
             if(c.error!=live::Error::None)return;
