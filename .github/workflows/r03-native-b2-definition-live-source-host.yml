@@ -40,6 +40,7 @@ jobs:
           clang++ --version
           SRC="NativeHostTests/AssemblyShadowBoundedDefinitionExecutionSourceMock.cpp"
           shasum -a 256 libil2cpp/vm/AssemblyShadow.cpp libil2cpp/vm/AssemblyShadow.h
+          grep -Fqx '#include "vm/GlobalMetadataFileInternals.h"' libil2cpp/vm/AssemblyShadow.cpp
           shasum -a 256 "$SRC" \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h \
@@ -68,7 +69,7 @@ jobs:
           assert j['kind']=='R03B2ActualNativeSourceMock'
           assert j['result']=='PassedActualInlWithMockedVmOnly'
           assert j['buildFlavor']==sys.argv[2]
-          assert j['cases']>=17 and j['assertions']>=118
+          assert j['cases']>=20 and j['assertions']>=158
           assert j['realUnity'] is False
           assert j['physicalClassProvenInRealPlayer'] is False
           assert j['fullCanonicalTypeKeys'] is False
