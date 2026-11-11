@@ -298,7 +298,9 @@ enum class Mode {
     Good, GenericDefinition, StagedGenericContainer,
     GenericSameImage, GenericNestedArgument, GenericArgumentMissingOwner,
     CrossImageGeneric, CrossImageGenericUnobserved,
-    CrossImageGenericAmbiguous, CrossImageInterpreter,
+    CrossImageGenericNotRegistered, CrossImageGenericAmbiguous,
+    CrossImageInterpreter, RegisteredAotChanged,
+    RegisteredAotOverflow, RegisteredAotInvalidOwner,
     CrossImageNestedArgument,
     GenericWrongArity, GenericTooManyArguments,
     GenericQualifiedArgument, GenericConstructedArgument,
@@ -324,6 +326,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_executionRegistrationWitnesses=Table{};
     g_emitPhysical=true;g_duplicate=false;
     g_physicalPasses=0;g_dropSecondPass=false;
+    g_rawAssemblies.fill(nullptr);g_rawCount=0;g_rawVisits=0;
+    g_dropRegisteredOnSecond=false;
+    g_rawAssemblies[g_rawCount++]=&fixture.assembly;
     g_changeRevision=false;g_changeCounter=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
@@ -373,7 +378,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
     }
     if(mode==Mode::CrossImageGeneric ||
        mode==Mode::CrossImageGenericUnobserved ||
+       mode==Mode::CrossImageGenericNotRegistered ||
        mode==Mode::CrossImageGenericAmbiguous ||
+       mode==Mode::RegisteredAotChanged ||
        mode==Mode::CrossImageInterpreter ||
        mode==Mode::CrossImageNestedArgument) {
         fixture.def.genericContainerIndex=0;
@@ -382,6 +389,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
         fixture.klass.generic_class=&fixture.genericClass;
         fixture.other.image=&fixture.supportImage;
         g_otherPhysical=&fixture.other;
+        if(mode!=Mode::CrossImageGenericNotRegistered)
+            g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
+        if(mode==Mode::RegisteredAotChanged)
+            g_dropRegisteredOnSecond=true;
         g_reversePhysicalCallbacks=true;
         if(mode==Mode::CrossImageGenericUnobserved)
             g_otherPhysical=nullptr; // No actual matched callback owner
@@ -405,6 +416,18 @@ static void Exercise(Mode mode,src::Error expectedError) {
         g_reversePhysicalCallbacks=true;
     }
     if(mode==Mode::BadImageOwner)fixture.image.handles[0]=nullptr;
+    if(mode==Mode::RegisteredAotInvalidOwner)
+        fixture.image.assembly=nullptr;
+    if(mode==Mode::RegisteredAotOverflow) {
+        for(size_t i=0;i<1025;++i) {
+            g_extraAssemblies[i].aname.name="Extra";
+            g_extraAssemblies[i].token=1;
+            g_extraAssemblies[i].image=&g_extraImages[i];
+            g_extraImages[i].assembly=&g_extraAssemblies[i];
+            g_extraImages[i].typeCount=1;
+            g_rawAssemblies[g_rawCount++]=&g_extraAssemblies[i];
+        }
+    }
     if(mode==Mode::ConstructedGeneric)
         fixture.klass.generic_class=&fixture.genericClass;
     if(mode==Mode::NestedType || mode==Mode::WrongNestedOwner ||
