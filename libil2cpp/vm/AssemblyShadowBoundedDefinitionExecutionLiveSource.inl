@@ -435,6 +435,10 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 c.error=live::Error::RowsFailed;return;
             }
         },&context);
+        // The borrowed image inventory is destroyed (and scrubbed) while
+        // g_MetadataLock is still held. Never retain even its address in the
+        // callback context after the physical enumeration finishes.
+        context.images=nullptr;
     }
 
     receipt.metadataLookups=context.lookups;
