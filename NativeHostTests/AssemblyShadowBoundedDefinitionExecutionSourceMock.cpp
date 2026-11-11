@@ -328,10 +328,15 @@ int main(){
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
     Exercise(Mode::Good,src::Error::NoMetadataAdmission);
     assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.CloseAndDrain();
+#if IL2CPP_DEBUG
+    const char* flavor="debug";
+#else
+    const char* flavor="release";
+#endif
     std::printf("{\"kind\":\"R03B2ActualNativeSourceMock\","
         "\"result\":\"PassedActualInlWithMockedVmOnly\","
-        "\"cases\":%d,\"assertions\":%d,\"realUnity\":false,"
+        "\"buildFlavor\":\"%s\",\"cases\":%d,\"assertions\":%d,\"realUnity\":false,"
         "\"physicalClassProvenInRealPlayer\":false,"
         "\"fullCanonicalTypeKeys\":false,\"nativeV2TransportImplemented\":false,"
-        "\"runtimeAcceptance\":false,\"R03Accepted\":false}\n",cases,assertions);
+        "\"runtimeAcceptance\":false,\"R03Accepted\":false}\n",flavor,cases,assertions);
 }
