@@ -389,7 +389,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!receipt.coherentVmEpochProven && !receipt.runtimeAcceptance);
         const std::string body(record->Data(),record->Bytes());
         const char* key=(mode==Mode::GenericDefinition ||
-                         mode==Mode::GenericSameImage)
+                         mode==Mode::GenericSameImage ||
+                         mode==Mode::GenericNestedArgument)
             ? "type(7:methods/4:Demo/4:Hero@2)"
             : mode==Mode::NestedType
                 ? "type(7:methods/4:Demo/5:Outer@0/4:Demo/4:Hero@0)"
