@@ -6,6 +6,7 @@
 // No registered Il2CppClass* escapes the synchronous physical enumerator.
 #include "AssemblyShadowOwnedExecutionRows.h"
 #include "AssemblyShadowPhysicalMembership.h"
+#include "AssemblyShadowObservedPhysicalImages.h"
 #include "AssemblyShadowFrozenExecutionRecord.h"
 #include "AssemblyShadowMetadataLifetime.h"
 #include <cstddef>
@@ -23,7 +24,8 @@ enum class Error : uint8_t {
     SourceChanged, UnsupportedImage, UnsupportedTypeShape,
     UnsupportedMetadataAncestry, InvalidTypeIdentity, TypeKeyFailed,
     RowsFailed, CounterUnavailable, CounterChanged, FrozenRecordFailed,
-    SourceOutsideBudget
+    SourceOutsideBudget, PhysicalImageLimit, UnadmittedMetadataOwner,
+    AmbiguousMetadataOwner
 };
 
 // Bounded source limit: deliberately caps metadata-owner handle lookups per
@@ -35,6 +37,8 @@ struct Receipt {
     Error error = Error::None;
     size_t registered=0, physicallyMatched=0, serializedRows=0;
     size_t ownedBytes=0, metadataLookups=0, rejectedUnsupported=0;
+    size_t admittedPhysicalImages=0;
+    bool usedCrossImageArgument=false;
     uint64_t registryRevisionBefore=0, registryRevisionAfter=0;
     uint64_t activeGenerationBefore=0, activeGenerationAfter=0;
     uint32_t admittedMetadataEpoch=0;
@@ -60,6 +64,7 @@ inline bool Reject(Receipt& receipt,Error reason,
     if(receipt.error==Error::None)receipt.error=reason;
     receipt.callbackPhysicalMembershipProven=false;
     receipt.restrictedTypeDefSubsetProven=false;
+    receipt.usedCrossImageArgument=false;
     receipt.observedRegistryAndCounterFenceStable=false;
     receipt.completeArbitraryTypeKeys=false;
     receipt.completeExecutionDiagnostics=false;
