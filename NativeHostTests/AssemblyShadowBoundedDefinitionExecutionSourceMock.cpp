@@ -20,6 +20,7 @@ static constexpr int kTypeIndexInvalid=-1;
 static constexpr int kGenericContainerIndexInvalid=-1;
 static constexpr int IL2CPP_TYPE_CLASS=18;
 static constexpr int IL2CPP_TYPE_VALUETYPE=17;
+static constexpr int IL2CPP_TYPE_GENERICINST=21;
 
 struct Il2CppAssembly { struct {const char* name=nullptr;} aname; bool interpreter=false; };
 struct Il2CppTypeDefinition {
@@ -35,10 +36,28 @@ struct Il2CppImage {
     uint32_t typeCount=0;
     void* handles[8]{};
 };
+struct Il2CppGenericClass;
 struct Il2CppType {
     int type=IL2CPP_TYPE_CLASS;
-    struct {void* typeHandle=nullptr;} data;
+    union Data {
+        void* typeHandle;
+        const Il2CppType* type;
+        Il2CppGenericClass* generic_class;
+        Data() noexcept:typeHandle(nullptr){}
+    } data;
     int attrs=0,num_mods=0,byref=0,pinned=0;
+};
+struct Il2CppGenericInst {
+    uint32_t type_argc=0;
+    const Il2CppType** type_argv=nullptr;
+};
+struct Il2CppGenericContext {
+    const Il2CppGenericInst* class_inst=nullptr;
+    const Il2CppGenericInst* method_inst=nullptr;
+};
+struct Il2CppGenericClass {
+    const Il2CppType* type=nullptr;
+    Il2CppGenericContext context{};
 };
 struct Il2CppClass {
     Il2CppImage* image=nullptr;
@@ -46,7 +65,7 @@ struct Il2CppClass {
     const char* namespaze=nullptr;
     const char* name=nullptr;
     int rank=0;
-    void* generic_class=nullptr;
+    Il2CppGenericClass* generic_class=nullptr;
     void* declaringType=nullptr;
     Il2CppType byval_arg{};
     int32_t cctor_started=0,cctor_finished_or_no_cctor=0;
@@ -191,6 +210,10 @@ struct Fixture {
     Il2CppTypeDefinition outer{};
     Il2CppTypeDefinition secondary{};
     Il2CppType declaring{};
+    Il2CppType genericBase{},genericArg1{},genericArg2{};
+    const Il2CppType* genericArgv[2]{};
+    Il2CppGenericInst genericInstance{};
+    Il2CppGenericClass genericClass{};
     Il2CppImage image{};
     Il2CppClass klass{};
     Il2CppClass other{};
@@ -201,6 +224,16 @@ struct Fixture {
         outer.ns="Demo";outer.name="Outer";
         secondary.ns="Demo";secondary.name="Friend";
         declaring.data.typeHandle=&outer;
+        genericBase.type=IL2CPP_TYPE_CLASS;
+        genericBase.data.typeHandle=&def;
+        genericArg1.data.typeHandle=&secondary;
+        genericArg2.data.typeHandle=&secondary;
+        genericArgv[0]=&genericArg1;
+        genericArgv[1]=&genericArg2;
+        genericInstance.type_argc=2;
+        genericInstance.type_argv=genericArgv;
+        genericClass.type=&genericBase;
+        genericClass.context.class_inst=&genericInstance;
         image.assembly=&assembly;image.token=0;image.typeCount=1;
         image.handles[0]=&def;
         klass.image=&image;klass.typeMetadataHandle=&def;
@@ -218,6 +251,9 @@ struct Fixture {
 };
 enum class Mode {
     Good, GenericDefinition, StagedGenericContainer,
+    GenericSameImage, GenericArgumentMissingOwner, GenericWrongArity,
+    GenericQualifiedArgument, GenericConstructedArgument,
+    GenericMissingArguments, GenericBadMethodContext, GenericWrongBase,
     TwoClassesReversedPhysicalCallback,
     BadImageOwner, ConstructedGeneric,
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
@@ -243,6 +279,31 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_state.store(AssemblyShadowState::Committed);
     g_physical=&fixture.klass;
     if(mode==Mode::GenericDefinition)fixture.def.genericContainerIndex=0;
+    if(mode==Mode::GenericSameImage || mode==Mode::GenericArgumentMissingOwner ||
+       mode==Mode::GenericWrongArity || mode==Mode::GenericQualifiedArgument ||
+       mode==Mode::GenericConstructedArgument || mode==Mode::GenericMissingArguments ||
+       mode==Mode::GenericBadMethodContext || mode==Mode::GenericWrongBase) {
+        fixture.def.genericContainerIndex=0;
+        fixture.image.typeCount=2;
+        fixture.image.handles[1]=&fixture.secondary;
+        fixture.klass.byval_arg.type=IL2CPP_TYPE_GENERICINST;
+        fixture.klass.byval_arg.data.generic_class=&fixture.genericClass;
+        fixture.klass.generic_class=&fixture.genericClass;
+        if(mode==Mode::GenericArgumentMissingOwner)
+            fixture.image.handles[1]=nullptr;
+        if(mode==Mode::GenericWrongArity)
+            fixture.genericInstance.type_argc=1;
+        if(mode==Mode::GenericQualifiedArgument)
+            fixture.genericArg1.byref=1;
+        if(mode==Mode::GenericConstructedArgument)
+            fixture.genericArg1.type=IL2CPP_TYPE_GENERICINST;
+        if(mode==Mode::GenericMissingArguments)
+            fixture.genericInstance.type_argv=nullptr;
+        if(mode==Mode::GenericBadMethodContext)
+            fixture.genericClass.context.method_inst=&fixture.genericInstance;
+        if(mode==Mode::GenericWrongBase)
+            fixture.genericBase.data.typeHandle=&fixture.secondary;
+    }
     if(mode==Mode::StagedGenericContainer)fixture.def.genericContainerIndex=-2;
     if(mode==Mode::TwoClassesReversedPhysicalCallback) {
         fixture.image.typeCount=2;
@@ -251,7 +312,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         g_reversePhysicalCallbacks=true;
     }
     if(mode==Mode::BadImageOwner)fixture.image.handles[0]=nullptr;
-    if(mode==Mode::ConstructedGeneric)fixture.klass.generic_class=&fixture.def;
+    if(mode==Mode::ConstructedGeneric)
+        fixture.klass.generic_class=&fixture.genericClass;
     if(mode==Mode::NestedType || mode==Mode::WrongNestedOwner ||
        mode==Mode::CyclicNested || mode==Mode::InvalidDeclaringShape ||
        mode==Mode::StagedNestedIndex) {
