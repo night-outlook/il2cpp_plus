@@ -1,5 +1,12 @@
 # Native-only host tests
 
+## R03 B2 owned canonical composite TypeKey increment (2026-11-11)
+
+The **inactive** native path can now recursively compose the pinned `FormatType` grammar for an observed AOT `GENERICINST` whose argument tree contains independently owner-verified physical `CLASS/VALUETYPE` TypeDefs, nested `GENERICINST`, `SZARRAY`, `PTR`, multidimensional `ARRAY` with signed dimension lists, and native `qualified(attrs,num_mods,byref,pinned,...)` shapes. Maximum nesting depth is 8; arguments per generic <=16, array dimension entries <=32 per list, owned key bytes <=4096 and metadata-owner lookups <=65536. Only proven registered physical AOT leaves are admitted. Primitive arguments, VAR/MVAR, unresolved owners, non-ASCII assembly folding, postterminal class state, complete field14/15 semantics, full V2 transport and Unity build acceptance are **not proven**.
+
+`AssemblyShadowOwnedCompositeTypeKey.h` is a C++11 allocation-free owned composer; `NativeHostTests/AssemblyShadowOwnedCompositeTypeKeyHost.cpp` covers canonical byte spelling, signed array bounds, nested composition, one-time ownership, hard limits and no protected allocations. `AssemblyShadowBoundedDefinitionExecutionSourceMock.cpp` uses the **actual** inactive `.inl` against a fake VM to exercise the new argument shapes and receipt flags; it is not a production ABI test. Both host drivers must stay outside `libil2cpp/vm`. The unmodified original V1 getters are the future byte-parity reference. The new read-only receipt reports which supported composite forms were observed, but every source rejection revokes the claimed flags. `WEB_TO_LOCAL` remains CLOSED / NO EXECUTION until the complete native field contract is proven.
+
+
 This directory is outside `libil2cpp` so the Unity/IL2CPP vendor source installation and automatic native compilation cannot collect standalone `main()` or global `operator new/delete` test drivers. `AssemblyShadowFirstFailureV2Host.cpp` is compiled explicitly by `.github/workflows/r03-native-b1-first-origin.yml` with C++11/C++17. Do not move it into `libil2cpp`, glob it into production build sources, or link its allocation overrides into a Player. The VM implementation remains in `libil2cpp/vm/AssemblyShadowFirstFailureV2.h` and `AssemblyShadow.cpp`.
 
 Source-only CI is not a substitute for checking the real Unity Bee compile DAG and defined symbols in the linked `GameAssembly` during Local Validation.
