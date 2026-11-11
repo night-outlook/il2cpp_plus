@@ -36,6 +36,9 @@
 #include "vm/Image.h"
 #include "vm/MetadataCache.h"
 #include "vm/GlobalMetadata.h"
+// B2 restricted physical TypeDef source reads Il2CppTypeDefinition members;
+// GlobalMetadata.h alone only forward-declares this file-format type.
+#include "vm/GlobalMetadataFileInternals.h"
 #include "vm/MetadataLock.h"
 #include "os/Atomic.h"
 #include "hybridclr/metadata/Assembly.h"
