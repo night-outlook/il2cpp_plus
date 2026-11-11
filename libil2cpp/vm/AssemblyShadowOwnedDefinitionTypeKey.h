@@ -126,6 +126,69 @@ public:
             if(!Put(Lower(rawAssembly.data[start+i])))return false;
         state_=State::Open;return true;
     }
+    // The caller passes the original AssemblyShadowName::ViewName slice,
+    // then the original AssemblyShadowName::NextFolded callback. Keeping the
+    // callback at the VM boundary avoids a duplicate/incorrect Unicode table.
+    // UTF-16 folded code units are re-encoded into bounded UTF-8; the byte
+    // length prefix is computed AFTER folding, exactly as canonical V1.
+    // No borrowed input or output survives this synchronous invocation.
+    template<class NextFolded>
+    bool BeginCanonicalFolded(ByteView canonicalAssembly,
+            bool physicalMetadataDefinition,
+            bool hasTypeQualifiers,bool isConstructedGeneric,
+            NextFolded nextFolded) noexcept {
+        if(state_!=State::Fresh)return Fail(Error::Reused);
+        if(!physicalMetadataDefinition||hasTypeQualifiers||isConstructedGeneric)
+            return Fail(Error::UnsupportedShape);
+        if(!canonicalAssembly.data||!canonicalAssembly.size)
+            return Fail(Error::MissingSource);
+        if(Aliases(canonicalAssembly))return Fail(Error::Alias);
+        if(canonicalAssembly.size>kCapacity)return Fail(Error::Capacity);
+        char folded[kCapacity]{};
+        size_t length=0;
+        const char* cursor=canonicalAssembly.data;
+        const char* end=canonicalAssembly.data+canonicalAssembly.size;
+        while(cursor!=end) {
+            const char* prior=cursor;
+            uint16_t first=0,second=0;
+            if(!nextFolded(cursor,end,first,second)||
+               cursor<=prior||cursor>end)
+                return Fail(Error::InvalidUtf8);
+            uint32_t scalar=first;
+            if(first>=0xd800u&&first<=0xdbffu) {
+                if(second<0xdc00u||second>0xdfffu)
+                    return Fail(Error::InvalidUtf8);
+                scalar=0x10000u+((first-0xd800u)<<10)+(second-0xdc00u);
+            } else if((first>=0xdc00u&&first<=0xdfffu)||second!=0u||
+                      first==0u)
+                return Fail(Error::InvalidUtf8);
+            char encoded[4]{};
+            size_t count=0;
+            if(scalar<0x80u)
+                encoded[count++]=static_cast<char>(scalar);
+            else if(scalar<0x800u) {
+                encoded[count++]=static_cast<char>(0xc0u|(scalar>>6));
+                encoded[count++]=static_cast<char>(0x80u|(scalar&0x3fu));
+            } else if(scalar<0x10000u) {
+                encoded[count++]=static_cast<char>(0xe0u|(scalar>>12));
+                encoded[count++]=static_cast<char>(0x80u|((scalar>>6)&0x3fu));
+                encoded[count++]=static_cast<char>(0x80u|(scalar&0x3fu));
+            } else if(scalar<=0x10ffffu) {
+                encoded[count++]=static_cast<char>(0xf0u|(scalar>>18));
+                encoded[count++]=static_cast<char>(0x80u|((scalar>>12)&0x3fu));
+                encoded[count++]=static_cast<char>(0x80u|((scalar>>6)&0x3fu));
+                encoded[count++]=static_cast<char>(0x80u|(scalar&0x3fu));
+            } else return Fail(Error::InvalidUtf8);
+            if(count>kCapacity-length)return Fail(Error::Capacity);
+            std::memcpy(folded+length,encoded,count);
+            length+=count;
+        }
+        if(!length)return Fail(Error::InvalidAssembly);
+        if(!Put("type(",5)||!Number(length)||!Put(':')||
+           !Put(folded,length))return false;
+        state_=State::Open;
+        return true;
+    }
     // Outermost to innermost definition. Arity is the verified metadata
     // definition container count, not a constructed generic argument.
     bool AddDeclaration(ByteView nameSpace,ByteView name,uint32_t arity) noexcept {
