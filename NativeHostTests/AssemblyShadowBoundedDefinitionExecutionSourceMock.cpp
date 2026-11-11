@@ -102,6 +102,7 @@ namespace assembly_shadow_metadata_lifetime {
 static int g_MetadataLock=0;
 static bool g_emitPhysical=true, g_duplicate=false;
 static bool g_changeRevision=false, g_changeCounter=false;
+static bool g_publishB1DuringEnumeration=false, g_midB1Published=false;
 static Il2CppClass* g_physical=nullptr;
 static Il2CppGenericContainer g_container{};
 static Il2CppType* g_declaringType=nullptr;
@@ -133,6 +134,12 @@ static bool Interpreter(const Il2CppAssembly* owner){return owner->interpreter;}
 static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* context){
     if(g_emitPhysical)callback(g_physical,context);
     if(g_duplicate && g_emitPhysical)callback(g_physical,context);
+    if(g_publishB1DuringEnumeration) {
+        static const char firstReason[]="mid-capture native B1 first error";
+        g_midB1Published=s_firstFailureV2.TryFreeze(
+            19,assembly_shadow_first_failure_v2::Origin::InterpreterInitializer,
+            firstReason,sizeof firstReason-1);
+    }
     if(g_changeRevision)s_executionRegistryRevision.Advance();
     if(g_changeCounter)
         assembly_shadow_r02::ObservationCounters::Add(
@@ -196,6 +203,7 @@ enum class Mode {
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
     StagedNestedIndex,
     UnsupportedImage, SourceChanged, CounterChanged,
+    TerminalDuringCapture,
     MissingEnumeration, DuplicateEnumeration, BadAssembly
 };
 
@@ -208,6 +216,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_executionRegistrationWitnesses=Table{};
     g_emitPhysical=true;g_duplicate=false;
     g_changeRevision=false;g_changeCounter=false;
+    g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
     s_active.store(&fixture.active);
     s_state.store(AssemblyShadowState::Committed);
@@ -234,6 +243,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::UnsupportedImage)fixture.image.typeCount=8193;
     if(mode==Mode::SourceChanged)g_changeRevision=true;
     if(mode==Mode::CounterChanged)g_changeCounter=true;
+    if(mode==Mode::TerminalDuringCapture)g_publishB1DuringEnumeration=true;
     if(mode==Mode::MissingEnumeration)g_emitPhysical=false;
     if(mode==Mode::DuplicateEnumeration)g_duplicate=true;
     if(mode==Mode::BadAssembly)fixture.assembly.aname.name="B\xC3\xA9";
@@ -296,12 +306,13 @@ int main(){
     Exercise(Mode::MissingEnumeration,src::Error::UnmatchedClass);
     Exercise(Mode::DuplicateEnumeration,src::Error::BadPhysicalEnumeration);
     Exercise(Mode::BadAssembly,src::Error::TypeKeyFailed);
-    // A previously published native terminal error must never authorize a
-    // postterminal metadata-collecting field15 source.
-    static const char originalReason[]="frozen original first failure";
-    Check(s_firstFailureV2.TryFreeze(
-        19,assembly_shadow_first_failure_v2::Origin::InterpreterInitializer,
-        originalReason,sizeof originalReason-1));
+    // Original B1 producer can publish a first terminal error independently
+    // while the metadata callback is executing. Reject the full result even
+    // if the execution-registry and R02 revisions did not change.
+    Exercise(Mode::TerminalDuringCapture,src::Error::SourceChanged);
+    Check(g_midB1Published);
+    // A previously published native first failure stays terminal forever;
+    // do not reconstruct a source field after it was frozen.
     Exercise(Mode::Good,src::Error::UnsupportedTypeShape);
     assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.CloseAndDrain();
     // A stale registry from an old initial runtime epoch cannot be re-admitted
