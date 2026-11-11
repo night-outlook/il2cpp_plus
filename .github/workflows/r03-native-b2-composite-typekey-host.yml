@@ -1,0 +1,67 @@
+name: R03 B2 pure composite TypeKey C++11/17 (NOT Unity)
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - .github/workflows/r03-native-b2-composite-typekey-host.yml
+      - libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
+      - libil2cpp/vm/AssemblyShadowOwnedConstructedTypeKey.h
+      - libil2cpp/vm/AssemblyShadowOwnedCompositeTypeKey.h
+      - libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h
+      - NativeHostTests/AssemblyShadowOwnedCompositeTypeKeyHost.cpp
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pure-composite-typekey:
+    runs-on: ${{ matrix.os }}
+    name: C++ composite ${{ matrix.os }} ${{ matrix.std }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        std: [c++11, c++17]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            libil2cpp/vm
+            NativeHostTests
+      - name: Strict and sanitized Release/Debug host cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Source commit $(git rev-parse HEAD)"
+          SRC=NativeHostTests/AssemblyShadowOwnedCompositeTypeKeyHost.cpp
+          mkdir -p "$RUNNER_TEMP/r03-b2-composite"
+          for buildFlavor in release debug; do
+            for profile in strict sanitized; do
+              flags=(-std=${{ matrix.std }} -O1 -g -Wall -Wextra -Werror -pedantic -pthread)
+              if [ "$profile" = sanitized ]; then
+                flags+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
+              fi
+              if [ "$buildFlavor" = debug ]; then
+                flags+=(-DIL2CPP_DEBUG=1)
+              fi
+              exe="$RUNNER_TEMP/r03-b2-composite/$buildFlavor-$profile"
+              clang++ "${flags[@]}" -Ilibil2cpp "$SRC" -o "$exe"
+              ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+              UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+                "$exe" > "$exe.json"
+              cat "$exe.json"
+              python3 -B - "$exe.json" <<'PY'
+          import json,sys
+          record=json.load(open(sys.argv[1],encoding="utf8"))
+          assert record["kind"]=="R03B2OwnedCompositeTypeKeyHost"
+          assert record["result"]=="PassedPureComposer_NotVmSource"
+          assert record["cases"]==3 and record["assertions"]>=45
+          assert record["protectedAllocations"]==0
+          for blocked in ("realUnity","sourceLifetimeProven",
+                          "fullCanonicalTypeKeys","nativeV2TransportImplemented",
+                          "runtimeAcceptance"):
+              assert record[blocked] is False
+          PY
+            done
+          done
