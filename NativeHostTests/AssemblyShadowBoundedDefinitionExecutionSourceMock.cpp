@@ -125,6 +125,7 @@ public:
         return p ? p->type_argc : 0;
     }
     static const Il2CppType* GetIl2CppTypeFromIndex(int index){
+        if(index<0)std::abort(); // source MUST reject staged ancestry first
         return index==3 ? g_declaringType : nullptr;
     }
 };
@@ -193,6 +194,7 @@ struct Fixture {
 enum class Mode {
     Good, GenericDefinition, BadImageOwner, ConstructedGeneric,
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
+    StagedNestedIndex,
     UnsupportedImage, SourceChanged, CounterChanged,
     MissingEnumeration, DuplicateEnumeration, BadAssembly
 };
@@ -214,7 +216,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::BadImageOwner)fixture.image.handles[0]=nullptr;
     if(mode==Mode::ConstructedGeneric)fixture.klass.generic_class=&fixture.def;
     if(mode==Mode::NestedType || mode==Mode::WrongNestedOwner ||
-       mode==Mode::CyclicNested || mode==Mode::InvalidDeclaringShape) {
+       mode==Mode::CyclicNested || mode==Mode::InvalidDeclaringShape ||
+       mode==Mode::StagedNestedIndex) {
         fixture.def.declaringTypeIndex=3;
         fixture.klass.declaringType=&fixture.outer;
         if(mode==Mode::NestedType) {
@@ -225,6 +228,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
             fixture.declaring.data.typeHandle=&fixture.def;
         if(mode==Mode::InvalidDeclaringShape)
             fixture.declaring.type=42;
+        if(mode==Mode::StagedNestedIndex)
+            fixture.def.declaringTypeIndex=-2;
     }
     if(mode==Mode::UnsupportedImage)fixture.image.typeCount=8193;
     if(mode==Mode::SourceChanged)g_changeRevision=true;
@@ -284,6 +289,7 @@ int main(){
     Exercise(Mode::WrongNestedOwner,src::Error::UnsupportedMetadataAncestry);
     Exercise(Mode::CyclicNested,src::Error::UnsupportedMetadataAncestry);
     Exercise(Mode::InvalidDeclaringShape,src::Error::UnsupportedMetadataAncestry);
+    Exercise(Mode::StagedNestedIndex,src::Error::UnsupportedMetadataAncestry);
     Exercise(Mode::UnsupportedImage,src::Error::UnsupportedImage);
     Exercise(Mode::SourceChanged,src::Error::SourceChanged);
     Exercise(Mode::CounterChanged,src::Error::CounterChanged);
