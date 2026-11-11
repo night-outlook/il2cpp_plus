@@ -1,10 +1,13 @@
 // R03 B2 INACTIVE: restricted, actual VM physical TypeDef -> owned class
 // rows -> original frozen execution/R02 record. Included ONCE by
 // AssemblyShadow.cpp inside il2cpp::vm; NEVER called by a Player or V1 getter.
-// Nested physical metadata definitions are admitted only with a complete,
-// independently owner-checked ancestor chain. Constructed/non-AOT/non-ASCII
-// assembly/qualified cases reject. Neither successful capture nor an
-// unchanged R02/registry read fence proves a global VM epoch or full V2.
+// Nested physical metadata definitions require an owner-checked ancestry.
+// Limited constructed GENERICINST is admitted only if every AOT TypeDef arg
+// belongs to a bounded image discovered from a matched observed class in the
+// same initial-session metadata-lock scope. Unmatched/cross-epoch images,
+// recursive/open/qualified/array and non-ASCII assembly forms reject.
+// Neither two enumerations nor unchanged R02/registry fences prove an
+// atomic VM epoch or complete V2 execution diagnostics.
 bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     assembly_shadow_physical_membership::Scratch& membership,
     ::r03_b2_owned_execution_rows::Rows& rows,
