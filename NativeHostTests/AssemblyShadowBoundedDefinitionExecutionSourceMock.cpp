@@ -443,7 +443,7 @@ int main(){
     Exercise(Mode::GenericDefinition,src::Error::None);
     Exercise(Mode::GenericSameImage,src::Error::None);
     Exercise(Mode::GenericNestedArgument,src::Error::None);
-    Exercise(Mode::GenericArgumentMissingOwner,src::Error::InvalidTypeIdentity);
+    Exercise(Mode::GenericArgumentMissingOwner,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::GenericWrongArity,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericTooManyArguments,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericQualifiedArgument,src::Error::UnsupportedTypeShape);
@@ -454,10 +454,10 @@ int main(){
     Exercise(Mode::GenericWrongBase,src::Error::UnsupportedTypeShape);
     Exercise(Mode::StagedGenericContainer,src::Error::UnsupportedMetadataAncestry);
     Exercise(Mode::TwoClassesReversedPhysicalCallback,src::Error::None);
-    Exercise(Mode::BadImageOwner,src::Error::InvalidTypeIdentity);
+    Exercise(Mode::BadImageOwner,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::ConstructedGeneric,src::Error::UnsupportedTypeShape);
     Exercise(Mode::NestedType,src::Error::None);
-    Exercise(Mode::WrongNestedOwner,src::Error::UnsupportedMetadataAncestry);
+    Exercise(Mode::WrongNestedOwner,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::CyclicNested,src::Error::UnsupportedMetadataAncestry);
     Exercise(Mode::InvalidDeclaringShape,src::Error::UnsupportedMetadataAncestry);
     Exercise(Mode::StagedNestedIndex,src::Error::UnsupportedMetadataAncestry);
