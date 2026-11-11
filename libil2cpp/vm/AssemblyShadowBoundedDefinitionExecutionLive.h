@@ -33,14 +33,18 @@ enum class Error : uint8_t {
 // Bounded source limit: deliberately caps metadata-owner handle lookups per
 // class and per capture while holding g_MetadataLock. Not a performance claim.
 static constexpr size_t kMaximumAotImageTypes = 8192;
+static constexpr size_t kMaximumRegisteredAotImages = 1024;
 static constexpr size_t kMaximumTotalMetadataLookups = 65536;
 
 struct Receipt {
     Error error = Error::None;
     size_t registered=0, physicallyMatched=0, serializedRows=0;
     size_t ownedBytes=0, metadataLookups=0, rejectedUnsupported=0;
-    size_t admittedPhysicalImages=0;
+    size_t admittedPhysicalImages=0; // matched observed class images
+    size_t registeredPhysicalAotImages=0; // separate raw Assembly table
+    bool registeredImageSetStable=false; // two lock-scoped snapshots only
     bool usedCrossImageArgument=false;
+    bool usedUnobservedAotArgumentImage=false;
     uint64_t registryRevisionBefore=0, registryRevisionAfter=0;
     uint64_t activeGenerationBefore=0, activeGenerationAfter=0;
     uint32_t admittedMetadataEpoch=0;
@@ -67,6 +71,8 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.callbackPhysicalMembershipProven=false;
     receipt.restrictedTypeDefSubsetProven=false;
     receipt.usedCrossImageArgument=false;
+    receipt.usedUnobservedAotArgumentImage=false;
+    receipt.registeredImageSetStable=false;
     receipt.observedRegistryAndCounterFenceStable=false;
     receipt.completeArbitraryTypeKeys=false;
     receipt.completeExecutionDiagnostics=false;
