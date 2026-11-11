@@ -94,6 +94,12 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         assembly_shadow_observed_images::Inventory<64>* observedImages=nullptr;
         bool usedCrossImageArgument=false;
         bool usedUnobservedAotArgumentImage=false;
+        bool usedNestedGenericArgument=false;
+        bool usedPointerArgument=false;
+        bool usedSzArrayArgument=false;
+        bool usedMdArrayArgument=false;
+        bool usedQualifiedArgument=false;
+        size_t compositeNodesVisited=0,maximumCompositeDepth=0;
     };
     Context context{};
     context.membership=&membership;
@@ -424,7 +430,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                             composite_key::Capture& destination,
                             size_t depth) {
                     if(!value||depth>MaximumDepth)return Fail();
+                    ++context.compositeNodesVisited;
+                    if(depth>context.maximumCompositeDepth)
+                        context.maximumCompositeDepth=depth;
                     if(value->attrs||value->num_mods||value->byref||value->pinned) {
+                        context.usedQualifiedArgument=true;
                         composite_key::Capture core;
                         // Qualifiers are wrapped around this same original
                         // metadata node, not appended to its leaf.
@@ -460,6 +470,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                             return true;
                         }
                         case IL2CPP_TYPE_GENERICINST: {
+                            context.usedNestedGenericArgument=true;
                             const Il2CppGenericClass* g=value->data.generic_class;
                             if(!g||!g->type||
                                (g->type->type!=IL2CPP_TYPE_CLASS &&
@@ -497,6 +508,10 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                         }
                         case IL2CPP_TYPE_PTR:
                         case IL2CPP_TYPE_SZARRAY: {
+                            if(value->type==IL2CPP_TYPE_PTR)
+                                context.usedPointerArgument=true;
+                            else
+                                context.usedSzArrayArgument=true;
                             composite_key::Capture child;
                             if(!Format(value->data.type,child,depth+1))
                                 return false;
@@ -507,6 +522,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                             return true;
                         }
                         case IL2CPP_TYPE_ARRAY: {
+                            context.usedMdArrayArgument=true;
                             const Il2CppArrayType* array=value->data.array;
                             if(!array||!array->rank ||
                                (array->numsizes&&!array->sizes) ||
@@ -609,6 +625,13 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.rejectedUnsupported=context.rejected;
     receipt.usedCrossImageArgument=context.usedCrossImageArgument;
     receipt.usedUnobservedAotArgumentImage=context.usedUnobservedAotArgumentImage;
+    receipt.usedNestedGenericArgument=context.usedNestedGenericArgument;
+    receipt.usedPointerArgument=context.usedPointerArgument;
+    receipt.usedSzArrayArgument=context.usedSzArrayArgument;
+    receipt.usedMdArrayArgument=context.usedMdArrayArgument;
+    receipt.usedQualifiedArgument=context.usedQualifiedArgument;
+    receipt.compositeNodesVisited=context.compositeNodesVisited;
+    receipt.maximumCompositeDepth=context.maximumCompositeDepth;
     receipt.physicallyMatched=membership.Matched();
     if(context.error!=live::Error::None)return reject(context.error);
     if(!membership.EnumeratorHealthy() || !membership.FullyMatched() ||
