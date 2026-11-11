@@ -485,7 +485,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         // not a VM-wide epoch, ABA barrier or class-cctor mutation lock.
         assembly_shadow_observed_images::Inventory<
             live::kMaximumRegisteredAotImages> registeredAfter;
-        AotRegistrySink afterSink{&registeredAfter};
+        AotRegistrySink afterSink{};
+        afterSink.inventory=&registeredAfter;
         if(!Assembly::TryVisitRegisteredAotImages(readAotRegistry,&afterSink) ||
            !registeredAfter.SameOrderedImageSet(registeredAotImages))
             return reject(live::Error::SourceChanged);
