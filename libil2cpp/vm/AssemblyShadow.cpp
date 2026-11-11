@@ -10,6 +10,7 @@
 #include "AssemblyShadowBoundedFirstUseCapture.h"
 #include "AssemblyShadowBoundedGeneralLive.h"
 #include "AssemblyShadowBoundedExecutionEmptyLive.h"
+#include "AssemblyShadowBoundedDefinitionExecutionLive.h"
 #include "AssemblyShadowObservationMemo.h"
 #include "AssemblyShadowOpaqueExecutionInventory.h"
 #include "AssemblyShadowExecutionRegistryRevision.h"
@@ -34,6 +35,7 @@
 #include "vm/Exception.h"
 #include "vm/Image.h"
 #include "vm/MetadataCache.h"
+#include "vm/GlobalMetadata.h"
 #include "vm/MetadataLock.h"
 #include "os/Atomic.h"
 #include "hybridclr/metadata/Assembly.h"
@@ -1607,6 +1609,9 @@ bool AssemblyShadow::TryCaptureBoundedFirstUses(
 #include "AssemblyShadowBoundedGeneralLiveSource.inl"
 // P1 inactive execution R02 source; exact bounded zero-class subset only.
 #include "AssemblyShadowBoundedExecutionEmptyLiveSource.inl"
+// R03 B2 inactive: actual physical AOT TypeDef callbacks -> restricted
+// source-owned class rows + genuine frozen execution/R02 field bytes.
+#include "AssemblyShadowBoundedDefinitionExecutionLiveSource.inl"
 // P1 inactive opaque execution observation inventory. No class dereference.
 #include "AssemblyShadowOpaqueExecutionInventorySource.inl"
 // P1 inactive: compare opaque registry values to physical class enumeration only.
