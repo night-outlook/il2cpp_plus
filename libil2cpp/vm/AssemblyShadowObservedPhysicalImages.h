@@ -1,7 +1,9 @@
 #pragma once
-// R03 B2 INACTIVE: bounded borrowed-image inventory, populated only from
-// physically matched observed-class callbacks under the metadata lock and
-// initial-session Reader. It does NOT authenticate an arbitrary image address.
+// R03 B2 INACTIVE: bounded borrowed-image inventory populated either by
+// physically matched observed-class callbacks OR by the separately guarded
+// original Assembly.cpp registered-AOT physical assembly visitor. Both
+// origins require the metadata lock and initial-session Reader. Passing an
+// arbitrary image address directly never authenticates its origin.
 // Lifetime: the entire object must remain inside the same metadata-lock scope.
 // The destructor scrubs all image pointers; never expose this inventory to a
 // Player, a transaction thread, or a postterminal source.
