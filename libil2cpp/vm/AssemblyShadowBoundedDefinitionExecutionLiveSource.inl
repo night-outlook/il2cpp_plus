@@ -412,7 +412,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 decltype(buildDefinition)& makeDefinition;
                 Context& context;
                 const Il2CppImage* sourceImage;
-                static constexpr size_t MaximumDepth=8;
+                enum { MaximumDepth=8 };
 
                 bool Fail() {
                     ++context.rejected;
