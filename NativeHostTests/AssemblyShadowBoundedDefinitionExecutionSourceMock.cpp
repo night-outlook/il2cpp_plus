@@ -277,6 +277,14 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(body.find("\"logicalAssembly\":\"Methods\"")!=std::string::npos);
         Check(body.find("\"r02\":{\"schemaVersion\":1")!=std::string::npos);
         Check(body.find("\"cctorStarted\":true")!=std::string::npos);
+        Check(body.find("\"staticStorageAvailable\":true")!=std::string::npos);
+#if IL2CPP_DEBUG
+        Check(body.find("\"pointerDetailsAvailable\":true")!=std::string::npos);
+        Check(body.find("\"staticStoragePointer\":\"0x")!=std::string::npos);
+#else
+        Check(body.find("\"pointerDetailsAvailable\":false")!=std::string::npos);
+        Check(body.find("\"staticStoragePointer\":\"\"")!=std::string::npos);
+#endif
     } else {
         Check(!success && receipt.error==expectedError);
         Check(!record->Complete() && record->Data()==nullptr);
