@@ -83,7 +83,7 @@ jobs:
           assert j['kind']=='R03B2ActualNativeSourceMock'
           assert j['result']=='PassedActualInlWithMockedVmOnly'
           assert j['buildFlavor']==sys.argv[2]
-          assert j['cases']>=52 and j['assertions']>=486
+          assert j['cases']>=50 and j['assertions']>=640
           assert j['realUnity'] is False
           assert j['physicalClassProvenInRealPlayer'] is False
           assert j['fullCanonicalTypeKeys'] is False
