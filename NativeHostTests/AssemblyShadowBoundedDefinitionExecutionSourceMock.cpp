@@ -199,7 +199,11 @@ static void Register(Il2CppClass* klass) {
 }} // il2cpp::vm
 
 static int assertions=0,cases=0;
-static void Check(bool value){++assertions;if(!value)std::abort();}
+static void Check(bool value){
+    ++assertions;
+    if(!value){std::fprintf(stderr,"R03 B2 native mock assertion failed: #%d\\n",assertions);
+               std::abort();}
+}
 using namespace il2cpp::vm;
 namespace src=il2cpp::vm::assembly_shadow_bounded_definition_execution;
 namespace rows=::r03_b2_owned_execution_rows;
@@ -349,6 +353,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
     src::Receipt receipt{};
     const bool success=AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         membership,*owned,*record,receipt);
+    if(success!=(expectedError==src::Error::None) || receipt.error!=expectedError)
+        std::fprintf(stderr,"R03 B2 mode=%d actualSuccess=%d actualError=%u expectedError=%u\\n",
+            static_cast<int>(mode),static_cast<int>(success),
+            static_cast<unsigned>(receipt.error),static_cast<unsigned>(expectedError));
     if(expectedError==src::Error::None) {
         Check(success && receipt.error==src::Error::None);
         Check(receipt.registered==expectedRows &&
@@ -364,7 +372,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!receipt.completeExecutionDiagnostics);
         Check(!receipt.coherentVmEpochProven && !receipt.runtimeAcceptance);
         const std::string body(record->Data(),record->Bytes());
-        const char* key=(mode==Mode::GenericDefinition)
+        const char* key=(mode==Mode::GenericDefinition ||
+                         mode==Mode::GenericSameImage)
             ? "type(7:methods/4:Demo/4:Hero@2)"
             : mode==Mode::NestedType
                 ? "type(7:methods/4:Demo/5:Outer@0/4:Demo/4:Hero@0)"
