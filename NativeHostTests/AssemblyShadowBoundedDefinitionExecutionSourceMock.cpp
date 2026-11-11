@@ -16,6 +16,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "AssemblyShadowFoldedNameMock.h"
 
 static constexpr int kTypeIndexInvalid=-1;
 static constexpr int kGenericContainerIndexInvalid=-1;
@@ -342,6 +343,8 @@ enum class Mode {
     GenericMissingArguments, GenericMissingContext,
     GenericBadMethodContext, GenericWrongBase,
     TwoClassesReversedPhysicalCallback,
+    UnicodeAssembly, UnicodePathVersionAssembly, UnicodeSupplementaryAssembly,
+    InvalidUnicodeOverlong, InvalidUnicodeSurrogate,
     BadImageOwner, ConstructedGeneric,
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
     StagedNestedIndex,
@@ -540,7 +543,16 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::MissingEnumeration)g_emitPhysical=false;
     if(mode==Mode::MissingSecondPass)g_dropSecondPass=true;
     if(mode==Mode::DuplicateEnumeration)g_duplicate=true;
-    if(mode==Mode::BadAssembly)fixture.assembly.aname.name="B\xC3\xA9";
+    if(mode==Mode::UnicodeAssembly)
+        fixture.assembly.aname.name="M\xC3\x89THODS";
+    if(mode==Mode::UnicodePathVersionAssembly)
+        fixture.assembly.aname.name="C:\\Pkg\\M\xC3\x89THODS.DLL, Version=2";
+    if(mode==Mode::UnicodeSupplementaryAssembly)
+        fixture.assembly.aname.name="X\xF0\x9F\x98\x80";
+    if(mode==Mode::InvalidUnicodeOverlong || mode==Mode::BadAssembly)
+        fixture.assembly.aname.name="B\xC0\xAF";
+    if(mode==Mode::InvalidUnicodeSurrogate)
+        fixture.assembly.aname.name="B\xED\xA0\x80";
     Register(&fixture.klass);
     if(mode==Mode::TwoClassesReversedPhysicalCallback ||
        mode==Mode::CrossImageGeneric ||
@@ -578,6 +590,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.admittedMetadataEpoch==1);
         Check(receipt.registeredImageSetStable);
         Check(receipt.registeredPhysicalAotImages>=receipt.admittedPhysicalImages);
+        const bool unicode=(mode==Mode::UnicodeAssembly ||
+            mode==Mode::UnicodePathVersionAssembly ||
+            mode==Mode::UnicodeSupplementaryAssembly);
+        Check(receipt.usedUnicodeAssemblyFold==unicode);
         const bool nestedGeneric=(mode==Mode::GenericConstructedArgument);
         const bool pointerArgument=(mode==Mode::GenericPointerArgument ||
                                     mode==Mode::GenericQualifiedPointerArgument);
@@ -622,6 +638,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
                          mode==Mode::CrossImageNestedArgument ||
                          mode==Mode::CrossImageGenericUnobserved)
             ? "type(7:methods/4:Demo/4:Hero@2)"
+            : mode==Mode::UnicodeAssembly ||
+              mode==Mode::UnicodePathVersionAssembly
+                ? "type(8:m\xC3\xA9thods/4:Demo/4:Hero@0)"
+                : mode==Mode::UnicodeSupplementaryAssembly
+                    ? "type(5:x\xF0\x9F\x98\x80/4:Demo/4:Hero@0)"
             : mode==Mode::NestedType
                 ? "type(7:methods/4:Demo/5:Outer@0/4:Demo/4:Hero@0)"
                 : "type(7:methods/4:Demo/4:Hero@0)";
@@ -690,6 +711,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!record->Complete() && record->Data()==nullptr);
         Check(!owned->Complete() && owned->Count()==0);
         Check(!receipt.callbackPhysicalMembershipProven);
+        Check(!receipt.usedUnicodeAssemblyFold);
         Check(!receipt.usedNestedGenericArgument &&
               !receipt.usedPointerArgument && !receipt.usedSzArrayArgument &&
               !receipt.usedMdArrayArgument && !receipt.usedQualifiedArgument);
@@ -725,6 +747,11 @@ int main(){
     g_container.type_argc=2;
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
     Exercise(Mode::Good,src::Error::None);
+    Exercise(Mode::UnicodeAssembly,src::Error::None);
+    Exercise(Mode::UnicodePathVersionAssembly,src::Error::None);
+    Exercise(Mode::UnicodeSupplementaryAssembly,src::Error::None);
+    Exercise(Mode::InvalidUnicodeOverlong,src::Error::TypeKeyFailed);
+    Exercise(Mode::InvalidUnicodeSurrogate,src::Error::TypeKeyFailed);
     Exercise(Mode::GenericDefinition,src::Error::None);
     Exercise(Mode::GenericSameImage,src::Error::None);
     Exercise(Mode::GenericNestedArgument,src::Error::None);
