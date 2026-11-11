@@ -34,6 +34,23 @@ public:
         if(used_==Capacity)return Fail(Error::Capacity);
         entries_[used_++]=image;return true;
     }
+    // Registered physical assemblies are authenticated by Assembly.cpp
+    // while s_assemblyLock is held. A consumer MUST NOT call this with an
+    // arbitrary image pointer outside that callback.
+    bool AddFromRegisteredAssembly(const void* image) noexcept {
+        return AddFromMatchedCallback(image);
+    }
+    bool Contains(const void* image) const noexcept {
+        if(!Healthy()||!image)return false;
+        for(size_t i=0;i<used_;++i)if(entries_[i]==image)return true;
+        return false;
+    }
+    bool SameOrderedImageSet(const Inventory& other) const noexcept {
+        if(!Healthy()||!other.Healthy()||used_!=other.used_)return false;
+        for(size_t i=0;i<used_;++i)
+            if(entries_[i]!=other.entries_[i])return false;
+        return true;
+    }
     template<class Image>
     const Image* Get(size_t index) const noexcept {
         return first_==Error::None && index<used_
