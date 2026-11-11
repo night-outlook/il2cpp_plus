@@ -104,6 +104,7 @@ static bool g_emitPhysical=true, g_duplicate=false;
 static bool g_changeRevision=false, g_changeCounter=false;
 static Il2CppClass* g_physical=nullptr;
 static Il2CppGenericContainer g_container{};
+static Il2CppType* g_declaringType=nullptr;
 
 class MetadataCache {
 public:
@@ -122,6 +123,9 @@ public:
     }
     static uint32_t GetGenericContainerCount(Il2CppGenericContainer* p){
         return p ? p->type_argc : 0;
+    }
+    static const Il2CppType* GetIl2CppTypeFromIndex(int index){
+        return index==3 ? g_declaringType : nullptr;
     }
 };
 static bool Interpreter(const Il2CppAssembly* owner){return owner->interpreter;}
@@ -166,12 +170,16 @@ namespace rows=::r03_b2_owned_execution_rows;
 struct Fixture {
     Il2CppAssembly assembly{};
     Il2CppTypeDefinition def{};
+    Il2CppTypeDefinition outer{};
+    Il2CppType declaring{};
     Il2CppImage image{};
     Il2CppClass klass{};
     ActiveSnapshot active{};
     Fixture() {
         assembly.aname.name="Methods";
         def.ns="Demo";def.name="Hero";
+        outer.ns="Demo";outer.name="Outer";
+        declaring.data.typeHandle=&outer;
         image.assembly=&assembly;image.token=0;image.typeCount=1;
         image.handles[0]=&def;
         klass.image=&image;klass.typeMetadataHandle=&def;
@@ -184,7 +192,8 @@ struct Fixture {
 };
 enum class Mode {
     Good, GenericDefinition, BadImageOwner, ConstructedGeneric,
-    NestedType, UnsupportedImage, SourceChanged, CounterChanged,
+    NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
+    UnsupportedImage, SourceChanged, CounterChanged,
     MissingEnumeration, DuplicateEnumeration, BadAssembly
 };
 
@@ -197,13 +206,26 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_executionRegistrationWitnesses=Table{};
     g_emitPhysical=true;g_duplicate=false;
     g_changeRevision=false;g_changeCounter=false;
+    g_declaringType=&fixture.declaring;
     s_active.store(&fixture.active);
     s_state.store(AssemblyShadowState::Committed);
     g_physical=&fixture.klass;
     if(mode==Mode::GenericDefinition)fixture.def.genericContainerIndex=0;
     if(mode==Mode::BadImageOwner)fixture.image.handles[0]=nullptr;
     if(mode==Mode::ConstructedGeneric)fixture.klass.generic_class=&fixture.def;
-    if(mode==Mode::NestedType)fixture.def.declaringTypeIndex=3;
+    if(mode==Mode::NestedType || mode==Mode::WrongNestedOwner ||
+       mode==Mode::CyclicNested || mode==Mode::InvalidDeclaringShape) {
+        fixture.def.declaringTypeIndex=3;
+        fixture.klass.declaringType=&fixture.outer;
+        if(mode==Mode::NestedType) {
+            fixture.image.typeCount=2;
+            fixture.image.handles[1]=&fixture.outer;
+        }
+        if(mode==Mode::CyclicNested)
+            fixture.declaring.data.typeHandle=&fixture.def;
+        if(mode==Mode::InvalidDeclaringShape)
+            fixture.declaring.type=42;
+    }
     if(mode==Mode::UnsupportedImage)fixture.image.typeCount=8193;
     if(mode==Mode::SourceChanged)g_changeRevision=true;
     if(mode==Mode::CounterChanged)g_changeCounter=true;
@@ -233,7 +255,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
         const std::string body(record->Data(),record->Bytes());
         const char* key=(mode==Mode::GenericDefinition)
             ? "type(7:methods/4:Demo/4:Hero@2)"
-            : "type(7:methods/4:Demo/4:Hero@0)";
+            : mode==Mode::NestedType
+                ? "type(7:methods/4:Demo/5:Outer@0/4:Demo/4:Hero@0)"
+                : "type(7:methods/4:Demo/4:Hero@0)";
         Check(body.find(key)!=std::string::npos);
         Check(body.find("\"logicalAssembly\":\"Methods\"")!=std::string::npos);
         Check(body.find("\"r02\":{\"schemaVersion\":1")!=std::string::npos);
@@ -256,7 +280,10 @@ int main(){
     Exercise(Mode::GenericDefinition,src::Error::None);
     Exercise(Mode::BadImageOwner,src::Error::InvalidTypeIdentity);
     Exercise(Mode::ConstructedGeneric,src::Error::UnsupportedTypeShape);
-    Exercise(Mode::NestedType,src::Error::UnsupportedMetadataAncestry);
+    Exercise(Mode::NestedType,src::Error::None);
+    Exercise(Mode::WrongNestedOwner,src::Error::UnsupportedMetadataAncestry);
+    Exercise(Mode::CyclicNested,src::Error::UnsupportedMetadataAncestry);
+    Exercise(Mode::InvalidDeclaringShape,src::Error::UnsupportedMetadataAncestry);
     Exercise(Mode::UnsupportedImage,src::Error::UnsupportedImage);
     Exercise(Mode::SourceChanged,src::Error::SourceChanged);
     Exercise(Mode::CounterChanged,src::Error::CounterChanged);
