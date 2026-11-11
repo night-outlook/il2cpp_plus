@@ -1,0 +1,100 @@
+name: R03 B2 original VM name / Unicode table parity host (NOT Unity)
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - .github/workflows/r03-native-b2-original-unicode-name-parity.yml
+      - libil2cpp/vm/AssemblyShadowName.h
+      - libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
+      - libil2cpp/vm-utils/VmStringUtils.cpp
+      - libil2cpp/char-conversions.cpp
+      - libil2cpp/char-conversions.h
+      - NativeHostTests/ShadowNameParityShim/il2cpp-config.h
+      - NativeHostTests/AssemblyShadowNameReferenceParityHost.cpp
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  original-name-parity:
+    runs-on: ${{ matrix.os }}
+    name: Original Unicode name ${{ matrix.os }} ${{ matrix.std }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        std: [c++11, c++17]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadowName.h
+            libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
+            libil2cpp/vm-utils/VmStringUtils.h
+            libil2cpp/vm-utils/VmStringUtils.cpp
+            libil2cpp/char-conversions.cpp
+            libil2cpp/char-conversions.h
+            NativeHostTests/ShadowNameParityShim
+            NativeHostTests/AssemblyShadowNameReferenceParityHost.cpp
+      - name: Original table source and scoped Unity folding implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          shasum -a 256 libil2cpp/vm/AssemblyShadowName.h \
+            libil2cpp/vm-utils/VmStringUtils.cpp \
+            libil2cpp/char-conversions.cpp
+          grep -Fq "VmStringUtils::Utf16ToLower" libil2cpp/vm-utils/VmStringUtils.cpp
+          grep -Fq "ToLowerDataLow[c]" libil2cpp/vm-utils/VmStringUtils.cpp
+          grep -Fq "ToLowerDataHigh[c - kDataHighThreshold]" libil2cpp/vm-utils/VmStringUtils.cpp
+          grep -Fq "return utils::StringUtils::Utf16ToUtf8(folded);" libil2cpp/vm/AssemblyShadowTypeKey.cpp || true
+          mkdir -p "$RUNNER_TEMP/r03-b2-name-reference"
+          # The original table source includes il2cpp-config.h beside itself.
+          # In a standalone host, copy its exact array definitions into a
+          # temporary TU so our isolated minimal host ABI is selected instead.
+          # The generated TU is test-only and never enters production libil2cpp.
+          python3 -B - "$RUNNER_TEMP/r03-b2-name-reference/tables.cpp" <<'PY'
+          import sys
+          from pathlib import Path
+          src=Path('libil2cpp/char-conversions.cpp').read_bytes()
+          prefix=b'#include "il2cpp-config.h"\n#include "char-conversions.h"\n'
+          assert src.startswith(prefix)
+          out=Path(sys.argv[1])
+          out.write_bytes(b'#include "il2cpp-config.h"\n#include "char-conversions.h"\n'+src[len(prefix):])
+          assert out.read_bytes()==src
+          PY
+          for flavor in release debug; do
+            for profile in strict sanitized; do
+              flags=(-std=${{ matrix.std }} -O1 -g -Wall -Wextra -Werror -pedantic)
+              if [ "$profile" = sanitized ]; then
+                flags+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
+              fi
+              if [ "$flavor" = debug ]; then
+                flags+=(-DIL2CPP_DEBUG=1)
+              fi
+              exe="$RUNNER_TEMP/r03-b2-name-reference/$flavor-$profile"
+              clang++ "${flags[@]}" -INativeHostTests/ShadowNameParityShim \
+                -Ilibil2cpp \
+                NativeHostTests/AssemblyShadowNameReferenceParityHost.cpp \
+                "$RUNNER_TEMP/r03-b2-name-reference/tables.cpp" -o "$exe"
+              ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+              UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+                "$exe" > "$exe.json"
+              cat "$exe.json"
+              python3 -B - "$exe.json" <<'PY'
+          import json,sys
+          j=json.load(open(sys.argv[1],encoding='utf8'))
+          assert j['kind']=='R03B2OriginalNameUnicodeParityHost'
+          assert j['result']=='PassedOriginalNameTableAndOwnedBytes'
+          assert j['cases']==13 and j['assertions']>=48
+          assert j['protectedAllocations']==0
+          assert j['originalNameHeader'] is True
+          assert j['originalUnicodeTables'] is True
+          for k in ('actualVmMetadata','completeV1Parity',
+                    'realUnity','nativeV2TransportImplemented',
+                    'runtimeAcceptance'):
+              assert j[k] is False
+          PY
+            done
+          done
