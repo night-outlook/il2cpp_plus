@@ -104,6 +104,8 @@ static bool g_emitPhysical=true, g_duplicate=false;
 static bool g_changeRevision=false, g_changeCounter=false;
 static bool g_publishB1DuringEnumeration=false, g_midB1Published=false;
 static Il2CppClass* g_physical=nullptr;
+static Il2CppClass* g_otherPhysical=nullptr;
+static bool g_reversePhysicalCallbacks=false;
 static Il2CppGenericContainer g_container{};
 static Il2CppType* g_declaringType=nullptr;
 
@@ -132,7 +134,13 @@ public:
 };
 static bool Interpreter(const Il2CppAssembly* owner){return owner->interpreter;}
 static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* context){
-    if(g_emitPhysical)callback(g_physical,context);
+    if(g_emitPhysical) {
+        if(g_reversePhysicalCallbacks && g_otherPhysical)
+            callback(g_otherPhysical,context);
+        callback(g_physical,context);
+        if(!g_reversePhysicalCallbacks && g_otherPhysical)
+            callback(g_otherPhysical,context);
+    }
     if(g_duplicate && g_emitPhysical)callback(g_physical,context);
     if(g_publishB1DuringEnumeration) {
         static const char firstReason[]="mid-capture native B1 first error";
@@ -179,14 +187,17 @@ struct Fixture {
     Il2CppAssembly assembly{};
     Il2CppTypeDefinition def{};
     Il2CppTypeDefinition outer{};
+    Il2CppTypeDefinition secondary{};
     Il2CppType declaring{};
     Il2CppImage image{};
     Il2CppClass klass{};
+    Il2CppClass other{};
     ActiveSnapshot active{};
     Fixture() {
         assembly.aname.name="Methods";
         def.ns="Demo";def.name="Hero";
         outer.ns="Demo";outer.name="Outer";
+        secondary.ns="Demo";secondary.name="Friend";
         declaring.data.typeHandle=&outer;
         image.assembly=&assembly;image.token=0;image.typeCount=1;
         image.handles[0]=&def;
@@ -195,11 +206,17 @@ struct Fixture {
         klass.byval_arg.type=IL2CPP_TYPE_CLASS;
         klass.byval_arg.data.typeHandle=&def;
         klass.cctor_started=1;klass.static_fields=&def;
+        other.image=&image;other.typeMetadataHandle=&secondary;
+        other.namespaze=secondary.ns;other.name=secondary.name;
+        other.byval_arg.type=IL2CPP_TYPE_CLASS;
+        other.byval_arg.data.typeHandle=&secondary;
+        other.cctor_started=1;other.static_fields=&secondary;
         active.generation=7;active.byAssembly.insert(&assembly);
     }
 };
 enum class Mode {
-    Good, GenericDefinition, BadImageOwner, ConstructedGeneric,
+    Good, GenericDefinition, TwoClassesReversedPhysicalCallback,
+    BadImageOwner, ConstructedGeneric,
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
     StagedNestedIndex,
     UnsupportedImage, SourceChanged, CounterChanged,
@@ -218,10 +235,17 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_changeRevision=false;g_changeCounter=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
+    g_otherPhysical=nullptr;g_reversePhysicalCallbacks=false;
     s_active.store(&fixture.active);
     s_state.store(AssemblyShadowState::Committed);
     g_physical=&fixture.klass;
     if(mode==Mode::GenericDefinition)fixture.def.genericContainerIndex=0;
+    if(mode==Mode::TwoClassesReversedPhysicalCallback) {
+        fixture.image.typeCount=2;
+        fixture.image.handles[1]=&fixture.secondary;
+        g_otherPhysical=&fixture.other;
+        g_reversePhysicalCallbacks=true;
+    }
     if(mode==Mode::BadImageOwner)fixture.image.handles[0]=nullptr;
     if(mode==Mode::ConstructedGeneric)fixture.klass.generic_class=&fixture.def;
     if(mode==Mode::NestedType || mode==Mode::WrongNestedOwner ||
@@ -248,6 +272,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::DuplicateEnumeration)g_duplicate=true;
     if(mode==Mode::BadAssembly)fixture.assembly.aname.name="B\xC3\xA9";
     Register(&fixture.klass);
+    if(mode==Mode::TwoClassesReversedPhysicalCallback)
+        Register(&fixture.other);
+    const size_t expectedRows=
+        mode==Mode::TwoClassesReversedPhysicalCallback ? 2u : 1u;
 
     assembly_shadow_physical_membership::Scratch membership{};
     auto* owned=new rows::Rows();
@@ -257,13 +285,15 @@ static void Exercise(Mode mode,src::Error expectedError) {
         membership,*owned,*record,receipt);
     if(expectedError==src::Error::None) {
         Check(success && receipt.error==src::Error::None);
-        Check(receipt.registered==1 && receipt.physicallyMatched==1);
-        Check(receipt.serializedRows==1 && receipt.ownedBytes>0);
+        Check(receipt.registered==expectedRows &&
+              receipt.physicallyMatched==expectedRows);
+        Check(receipt.serializedRows==expectedRows && receipt.ownedBytes>0);
         Check(receipt.callbackPhysicalMembershipProven);
         Check(receipt.restrictedTypeDefSubsetProven);
         Check(receipt.observedRegistryAndCounterFenceStable);
         Check(receipt.admittedMetadataEpoch==1);
-        Check(owned->Complete() && record->Complete());
+        Check(owned->Complete() && owned->Count()==expectedRows &&
+              record->Complete());
         Check(!receipt.completeArbitraryTypeKeys);
         Check(!receipt.completeExecutionDiagnostics);
         Check(!receipt.coherentVmEpochProven && !receipt.runtimeAcceptance);
@@ -275,6 +305,13 @@ static void Exercise(Mode mode,src::Error expectedError) {
                 : "type(7:methods/4:Demo/4:Hero@0)";
         Check(body.find(key)!=std::string::npos);
         Check(body.find("\"logicalAssembly\":\"Methods\"")!=std::string::npos);
+        if(mode==Mode::TwoClassesReversedPhysicalCallback) {
+            Check(body.find("type(7:methods/4:Demo/6:Friend@0)")!=
+                  std::string::npos);
+            rows::RowView row0{},row1{};
+            Check(owned->Get(0,row0) && owned->Get(1,row1));
+            Check(row0.registrySlot < row1.registrySlot);
+        }
         Check(body.find("\"r02\":{\"schemaVersion\":1")!=std::string::npos);
         Check(body.find("\"cctorStarted\":true")!=std::string::npos);
         Check(body.find("\"staticStorageAvailable\":true")!=std::string::npos);
@@ -301,6 +338,7 @@ int main(){
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
     Exercise(Mode::Good,src::Error::None);
     Exercise(Mode::GenericDefinition,src::Error::None);
+    Exercise(Mode::TwoClassesReversedPhysicalCallback,src::Error::None);
     Exercise(Mode::BadImageOwner,src::Error::InvalidTypeIdentity);
     Exercise(Mode::ConstructedGeneric,src::Error::UnsupportedTypeShape);
     Exercise(Mode::NestedType,src::Error::None);
