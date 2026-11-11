@@ -290,6 +290,18 @@ int main(){
     Exercise(Mode::MissingEnumeration,src::Error::UnmatchedClass);
     Exercise(Mode::DuplicateEnumeration,src::Error::BadPhysicalEnumeration);
     Exercise(Mode::BadAssembly,src::Error::TypeKeyFailed);
+    // A previously published native terminal error must never authorize a
+    // postterminal metadata-collecting field15 source.
+    static const char originalReason[]="frozen original first failure";
+    Check(s_firstFailureV2.TryFreeze(
+        19,assembly_shadow_first_failure_v2::Origin::InterpreterInitializer,
+        originalReason,sizeof originalReason-1));
+    Exercise(Mode::Good,src::Error::UnsupportedTypeShape);
+    assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.CloseAndDrain();
+    // A stale registry from an old initial runtime epoch cannot be re-admitted
+    // merely because Runtime::Init reopened the metadata gate.
+    Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
+    Exercise(Mode::Good,src::Error::NoMetadataAdmission);
     assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.CloseAndDrain();
     std::printf("{\"kind\":\"R03B2ActualNativeSourceMock\","
         "\"result\":\"PassedActualInlWithMockedVmOnly\","
