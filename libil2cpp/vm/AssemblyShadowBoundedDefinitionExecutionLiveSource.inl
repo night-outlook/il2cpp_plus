@@ -20,6 +20,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     namespace owned=::r03_b2_owned_execution_rows;
     namespace key=::r03_b2_owned_definition_key;
     namespace constructed_key=::r03_b2_owned_constructed_type_key;
+    namespace composite_key=::r03_b2_owned_composite_type_key;
     namespace r02=assembly_shadow_r02;
     namespace frozen=assembly_shadow_frozen_execution_record;
     receipt=live::Receipt{};
@@ -401,40 +402,147 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                                 definitionArity,definitionOwner)) {
                 ++c.rejected;return;
             }
-            constructed_key::Capture genericKey;
+            // Preserve the pinned native FormatType spelling while owning
+            // every nested leaf. All TypeDef dereferences go through the
+            // already proven registered-AOT owner map above.
+            // This is a deliberately bounded SUBSET: primitive, open VAR/MVAR,
+            // unregistered, non-ASCII-folded assemblies and postterminal source
+            // still fail closed. A composite key is not a whole-VM epoch.
+            struct Composer {
+                decltype(buildDefinition)& makeDefinition;
+                Context& context;
+                const Il2CppImage* sourceImage;
+                static constexpr size_t MaximumDepth=8;
+
+                bool Fail() {
+                    ++context.rejected;
+                    if(context.error==live::Error::None)
+                        context.error=live::Error::UnsupportedTypeShape;
+                    return false;
+                }
+                bool Format(const Il2CppType* value,
+                            composite_key::Capture& destination,
+                            size_t depth) {
+                    if(!value||depth>MaximumDepth)return Fail();
+                    if(value->attrs||value->num_mods||value->byref||value->pinned) {
+                        composite_key::Capture core;
+                        // Qualifiers are wrapped around this same original
+                        // metadata node, not appended to its leaf.
+                        if(!Raw(value,core,depth))return false;
+                        if(!destination.FromQualified(
+                            core,value->attrs,value->num_mods,
+                            value->byref,value->pinned))
+                            return Fail();
+                        return true;
+                    }
+                    return Raw(value,destination,depth);
+                }
+                bool Raw(const Il2CppType* value,
+                         composite_key::Capture& destination,
+                         size_t depth) {
+                    if(!value)return Fail();
+                    switch(value->type) {
+                        case IL2CPP_TYPE_CLASS:
+                        case IL2CPP_TYPE_VALUETYPE: {
+                            if(!value->data.typeHandle)return Fail();
+                            key::Capture definition;
+                            uint32_t arity=0;
+                            const Il2CppImage* resolved=nullptr;
+                            if(!makeDefinition(value->data.typeHandle,nullptr,
+                                               definition,arity,resolved))
+                                return false;
+                            if(resolved!=sourceImage)
+                                context.usedCrossImageArgument=true;
+                            if(!context.observedImages->Contains(resolved))
+                                context.usedUnobservedAotArgumentImage=true;
+                            if(!destination.FromDefinition(definition))
+                                return Fail();
+                            return true;
+                        }
+                        case IL2CPP_TYPE_GENERICINST: {
+                            const Il2CppGenericClass* g=value->data.generic_class;
+                            if(!g||!g->type||
+                               (g->type->type!=IL2CPP_TYPE_CLASS &&
+                                g->type->type!=IL2CPP_TYPE_VALUETYPE) ||
+                               g->type->attrs||g->type->num_mods||
+                               g->type->byref||g->type->pinned||
+                               !g->type->data.typeHandle||
+                               !g->context.class_inst||
+                               g->context.method_inst)return Fail();
+                            const Il2CppGenericInst* args=g->context.class_inst;
+                            if(!args->type_argv||args->type_argc==0||
+                               args->type_argc>composite_key::Capture::kMaximumArguments)
+                                return Fail();
+                            key::Capture definition;
+                            uint32_t arity=0;
+                            const Il2CppImage* resolved=nullptr;
+                            if(!makeDefinition(g->type->data.typeHandle,nullptr,
+                                               definition,arity,resolved))
+                                return false;
+                            if(arity!=args->type_argc)return Fail();
+                            if(resolved!=sourceImage)
+                                context.usedCrossImageArgument=true;
+                            if(!context.observedImages->Contains(resolved))
+                                context.usedUnobservedAotArgumentImage=true;
+                            if(!destination.BeginGeneric(definition,args->type_argc))
+                                return Fail();
+                            for(uint32_t i=0;i<args->type_argc;++i) {
+                                composite_key::Capture child;
+                                if(!Format(args->type_argv[i],child,depth+1)||
+                                   !destination.AddGenericArgument(child))
+                                    return Fail();
+                            }
+                            if(!destination.SealGeneric())return Fail();
+                            return true;
+                        }
+                        case IL2CPP_TYPE_PTR:
+                        case IL2CPP_TYPE_SZARRAY: {
+                            composite_key::Capture child;
+                            if(!Format(value->data.type,child,depth+1))
+                                return false;
+                            const bool ok=value->type==IL2CPP_TYPE_PTR
+                                ?destination.FromPointer(child)
+                                :destination.FromSzArray(child);
+                            if(!ok)return Fail();
+                            return true;
+                        }
+                        case IL2CPP_TYPE_ARRAY: {
+                            const Il2CppArrayType* array=value->data.array;
+                            if(!array||!array->rank ||
+                               (array->numsizes&&!array->sizes) ||
+                               (array->numlobounds&&!array->lobounds))
+                                return Fail();
+                            composite_key::Capture child;
+                            if(!Format(array->etype,child,depth+1))return false;
+                            if(!destination.FromArray(
+                                child,array->rank,array->sizes,array->numsizes,
+                                array->lobounds,array->numlobounds))
+                                return Fail();
+                            return true;
+                        }
+                        default:
+                            // Primitive class resolution and open VAR/MVAR
+                            // need a separately proven metadata-owned source.
+                            return Fail();
+                    }
+                }
+            };
+            Composer composer{buildDefinition,c,image};
+            composite_key::Capture genericKey;
             if(constructed) {
-                // The original GENERICINST key uses the definition key plus
-                // length-prefixed canonical keys of each exact class argument.
-                // At most 16 TypeDef arguments; no open/primitive/array or
-                // cross-image argument is silently accepted.
                 if(definitionArity!=instance->type_argc ||
-                   !genericKey.Begin(definitionKey,instance->type_argc)) {
+                   !genericKey.BeginGeneric(definitionKey,instance->type_argc)) {
                     ++c.rejected;c.error=live::Error::UnsupportedTypeShape;return;
                 }
                 for(uint32_t i=0;i<instance->type_argc;++i) {
-                    const Il2CppType* arg=instance->type_argv[i];
-                    if(!arg ||
-                       (arg->type!=IL2CPP_TYPE_CLASS &&
-                        arg->type!=IL2CPP_TYPE_VALUETYPE) ||
-                       arg->attrs || arg->num_mods || arg->byref || arg->pinned ||
-                       !arg->data.typeHandle) {
-                        ++c.rejected;c.error=live::Error::UnsupportedTypeShape;return;
-                    }
-                    key::Capture argumentKey;
-                    uint32_t ignoredArity=0;
-                    const Il2CppImage* argumentOwner=nullptr;
-                    if(!buildDefinition(arg->data.typeHandle,nullptr,argumentKey,
-                                        ignoredArity,argumentOwner)) {
-                        ++c.rejected;return;
-                    }
-                    if(argumentOwner!=image)c.usedCrossImageArgument=true;
-                    if(!c.observedImages->Contains(argumentOwner))
-                        c.usedUnobservedAotArgumentImage=true;
-                    if(!genericKey.AddArgument(argumentKey)) {
-                        c.error=live::Error::TypeKeyFailed;return;
+                    composite_key::Capture argument;
+                    if(!composer.Format(instance->type_argv[i],argument,0))
+                        return;
+                    if(!genericKey.AddGenericArgument(argument)) {
+                        ++c.rejected;c.error=live::Error::TypeKeyFailed;return;
                     }
                 }
-                if(!genericKey.Seal()) {
+                if(!genericKey.SealGeneric()) {
                     c.error=live::Error::TypeKeyFailed;return;
                 }
             }
