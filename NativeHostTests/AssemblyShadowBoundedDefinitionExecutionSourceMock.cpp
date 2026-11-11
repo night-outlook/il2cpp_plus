@@ -509,7 +509,28 @@ static void Exercise(Mode mode,src::Error expectedError) {
     delete owned;
     s_active.store(nullptr);
 }
+static void TestPhysicalImageInventoryBounds() {
+    namespace physical_images=il2cpp::vm::assembly_shadow_observed_images;
+    char imageSymbols[65]{};
+    physical_images::Inventory<64> inventory;
+    Check(inventory.Healthy());
+    Check(!inventory.AddFromMatchedCallback(nullptr));
+    Check(inventory.FirstError()==physical_images::Error::MissingImage);
+    Check(!inventory.Healthy() && inventory.Count()==0);
+    physical_images::Inventory<64> bounded;
+    for(size_t i=0;i<64;++i)
+        Check(bounded.AddFromMatchedCallback(&imageSymbols[i]));
+    Check(bounded.Count()==64);
+    Check(bounded.AddFromMatchedCallback(&imageSymbols[0]));
+    Check(bounded.Count()==64);
+    Check(!bounded.AddFromMatchedCallback(&imageSymbols[64]));
+    Check(bounded.FirstError()==physical_images::Error::Capacity);
+    Check(!bounded.Healthy() && bounded.Count()==0);
+    Check(bounded.Get<Il2CppImage>(0)==nullptr);
+}
+
 int main(){
+    TestPhysicalImageInventoryBounds();
     g_container.type_argc=2;
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
     Exercise(Mode::Good,src::Error::None);
