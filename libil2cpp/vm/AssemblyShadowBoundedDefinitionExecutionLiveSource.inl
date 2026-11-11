@@ -15,6 +15,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     namespace physical=assembly_shadow_physical_membership;
     namespace owned=::r03_b2_owned_execution_rows;
     namespace key=::r03_b2_owned_definition_key;
+    namespace constructed_key=::r03_b2_owned_constructed_type_key;
     namespace r02=assembly_shadow_r02;
     namespace frozen=assembly_shadow_frozen_execution_record;
     receipt=live::Receipt{};
@@ -106,22 +107,48 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             const Il2CppImage* image=klass->image;
             const Il2CppAssembly* owner=image->assembly;
             const Il2CppType& type=klass->byval_arg;
-            // Restrict to original physical AOT *definition* metadata, not
-            // constructed generic, arrays, or qualified byval types. Nested
-            // definition ancestry is allowed ONLY when each handle is
-            // independently proven to belong to the same physical image.
+            // Only physical AOT definitions and a narrowly owned constructed
+            // generic whose definition AND each concrete TypeDef argument
+            // belong to this same physical image. Generic arguments from
+            // another image, recursively constructed types, arrays and
+            // qualifiers fail closed. The existing legacy getter is unchanged.
             if(hybridclr::metadata::IsInterpreterIndex(image->token) ||
                image->typeCount==0 ||
                image->typeCount>live::kMaximumAotImageTypes) {
                 ++c.rejected;c.error=live::Error::UnsupportedImage;return;
             }
-            if(klass->rank || klass->generic_class ||
-               (type.type!=IL2CPP_TYPE_CLASS &&
-                type.type!=IL2CPP_TYPE_VALUETYPE) ||
-               type.data.typeHandle!=klass->typeMetadataHandle ||
-               type.attrs || type.num_mods || type.byref || type.pinned) {
+            const bool constructed=type.type==IL2CPP_TYPE_GENERICINST;
+            const Il2CppGenericClass* generic=constructed?
+                type.data.generic_class:nullptr;
+            if(klass->rank || type.attrs || type.num_mods ||
+               type.byref || type.pinned ||
+               (!constructed && klass->generic_class) ||
+               (!constructed && type.type!=IL2CPP_TYPE_CLASS &&
+                type.type!=IL2CPP_TYPE_VALUETYPE)) {
                 ++c.rejected;c.error=live::Error::UnsupportedTypeShape;return;
             }
+            const Il2CppGenericInst* instance=nullptr;
+            auto definition=klass->typeMetadataHandle;
+            if(constructed) {
+                if(!generic || generic!=klass->generic_class ||
+                   !generic->type || !generic->context.class_inst ||
+                   generic->context.method_inst ||
+                   (generic->type->type!=IL2CPP_TYPE_CLASS &&
+                    generic->type->type!=IL2CPP_TYPE_VALUETYPE) ||
+                   generic->type->attrs || generic->type->num_mods ||
+                   generic->type->byref || generic->type->pinned ||
+                   generic->type->data.typeHandle!=definition) {
+                    ++c.rejected;c.error=live::Error::UnsupportedTypeShape;return;
+                }
+                instance=generic->context.class_inst;
+                if(!instance->type_argv || instance->type_argc==0 ||
+                   instance->type_argc>constructed_key::Capture::kMaximumArguments) {
+                    ++c.rejected;c.error=live::Error::UnsupportedTypeShape;return;
+                }
+            } else if(type.data.typeHandle!=definition) {
+                c.error=live::Error::InvalidTypeIdentity;return;
+            }
+
             auto count=[](const char* p,size_t& size)->bool {
                 if(!p)return false;
                 size=0;
@@ -132,99 +159,134 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             if(!count(owner->aname.name,assemblyBytes)) {
                 c.error=live::Error::TypeKeyFailed;return;
             }
-            struct Component {
-                key::ByteView nameSpace{};
-                key::ByteView simpleName{};
-                uint32_t arity=0;
+            // One reviewed physical image is this adapter's complete owner
+            // inventory. Do NOT use an unadmitted raw metadata handle merely
+            // because a generic-instantiation node points to it.
+            auto buildDefinition=[&](decltype(klass->typeMetadataHandle) handle,
+                                     key::Capture& result,
+                                     uint32_t& leafArity)->bool {
+                struct Component {
+                    key::ByteView nameSpace{};
+                    key::ByteView simpleName{};
+                    uint32_t arity=0;
+                };
+                Component parts[key::Capture::kMaximumDeclarations]{};
+                decltype(klass->typeMetadataHandle)
+                    verifiedHandles[key::Capture::kMaximumDeclarations]{};
+                size_t depth=0;
+                bool ancestryComplete=false;
+                leafArity=0;
+                for(;depth<key::Capture::kMaximumDeclarations;++depth) {
+                    if(!handle) {
+                        c.error=live::Error::UnsupportedMetadataAncestry;return false;
+                    }
+                    for(size_t j=0;j<depth;++j) {
+                        if(verifiedHandles[j]==handle) {
+                            c.error=live::Error::UnsupportedMetadataAncestry;return false;
+                        }
+                    }
+                    bool belongs=false;
+                    for(uint32_t i=0;i<image->typeCount;++i) {
+                        if(c.lookups==live::kMaximumTotalMetadataLookups) {
+                            c.error=live::Error::SourceOutsideBudget;return false;
+                        }
+                        ++c.lookups;
+                        if(MetadataCache::GetAssemblyTypeHandle(image,i)==handle) {
+                            belongs=true;break;
+                        }
+                    }
+                    if(!belongs) {
+                        c.error=depth?live::Error::UnsupportedMetadataAncestry:
+                            live::Error::InvalidTypeIdentity;
+                        return false;
+                    }
+                    verifiedHandles[depth]=handle;
+                    const auto* def=reinterpret_cast<const Il2CppTypeDefinition*>(handle);
+                    const auto name=GlobalMetadata::GetTypeNamespaceAndName(handle);
+                    if(!name.second) {
+                        c.error=live::Error::InvalidTypeIdentity;return false;
+                    }
+                    const char* ns=name.first?name.first:"";
+                    size_t nsBytes=0,nameBytes=0;
+                    if(!count(ns,nsBytes) || !count(name.second,nameBytes)) {
+                        c.error=live::Error::TypeKeyFailed;return false;
+                    }
+                    if(def->genericContainerIndex!=kGenericContainerIndexInvalid &&
+                       hybridclr::metadata::IsInterpreterIndex(
+                           def->genericContainerIndex)) {
+                        c.error=live::Error::UnsupportedMetadataAncestry;return false;
+                    }
+                    const auto container=GlobalMetadata::GetGenericContainerFromIndex(
+                        def->genericContainerIndex);
+                    const uint32_t arity=GlobalMetadata::GetGenericContainerCount(container);
+                    parts[depth].nameSpace={ns,nsBytes};
+                    parts[depth].simpleName={name.second,nameBytes};
+                    parts[depth].arity=arity;
+                    if(depth==0)leafArity=arity;
+                    if(def->declaringTypeIndex==kTypeIndexInvalid) {
+                        ancestryComplete=true;++depth;break;
+                    }
+                    if(hybridclr::metadata::IsInterpreterIndex(def->declaringTypeIndex)) {
+                        c.error=live::Error::UnsupportedMetadataAncestry;return false;
+                    }
+                    const Il2CppType* declaring=GlobalMetadata::GetIl2CppTypeFromIndex(
+                        def->declaringTypeIndex);
+                    if(!declaring ||
+                       (declaring->type!=IL2CPP_TYPE_CLASS &&
+                        declaring->type!=IL2CPP_TYPE_VALUETYPE)) {
+                        c.error=live::Error::UnsupportedMetadataAncestry;return false;
+                    }
+                    handle=declaring->data.typeHandle;
+                }
+                if(!ancestryComplete) {
+                    c.error=live::Error::UnsupportedMetadataAncestry;return false;
+                }
+                bool ok=result.Begin({owner->aname.name,assemblyBytes},true,false,false);
+                for(size_t i=depth;i>0&&ok;--i)
+                    ok=result.AddDeclaration(parts[i-1].nameSpace,
+                        parts[i-1].simpleName,parts[i-1].arity);
+                if(ok)ok=result.Seal();
+                if(!ok)c.error=live::Error::TypeKeyFailed;
+                return ok;
             };
-            Component parts[key::Capture::kMaximumDeclarations]{};
-            decltype(klass->typeMetadataHandle)
-                verifiedHandles[key::Capture::kMaximumDeclarations]{};
-            size_t depth=0;
-            bool ancestryComplete=false;
-            auto handle=klass->typeMetadataHandle;
-            // Each step checks the physical image owner BEFORE dereferencing
-            // TypeDefinition. This is a strict bounded O(typeCount*depth)
-            // diagnostic admission, never an unbounded walk or global epoch.
-            for(;depth<key::Capture::kMaximumDeclarations;++depth) {
-                if(!handle) {
-                    c.error=live::Error::UnsupportedMetadataAncestry;return;
+
+            key::Capture definitionKey;
+            uint32_t definitionArity=0;
+            if(!buildDefinition(definition,definitionKey,definitionArity)) {
+                ++c.rejected;return;
+            }
+            constructed_key::Capture genericKey;
+            if(constructed) {
+                // The original GENERICINST key uses the definition key plus
+                // length-prefixed canonical keys of each exact class argument.
+                // At most 16 TypeDef arguments; no open/primitive/array or
+                // cross-image argument is silently accepted.
+                if(definitionArity!=instance->type_argc ||
+                   !genericKey.Begin(definitionKey,instance->type_argc)) {
+                    ++c.rejected;c.error=live::Error::UnsupportedTypeShape;return;
                 }
-                for(size_t j=0;j<depth;++j) {
-                    if(verifiedHandles[j]==handle) {
-                        c.error=live::Error::UnsupportedMetadataAncestry;return;
+                for(uint32_t i=0;i<instance->type_argc;++i) {
+                    const Il2CppType* arg=instance->type_argv[i];
+                    if(!arg ||
+                       (arg->type!=IL2CPP_TYPE_CLASS &&
+                        arg->type!=IL2CPP_TYPE_VALUETYPE) ||
+                       arg->attrs || arg->num_mods || arg->byref || arg->pinned ||
+                       !arg->data.typeHandle) {
+                        ++c.rejected;c.error=live::Error::UnsupportedTypeShape;return;
+                    }
+                    key::Capture argumentKey;
+                    uint32_t ignoredArity=0;
+                    if(!buildDefinition(arg->data.typeHandle,argumentKey,
+                                        ignoredArity)) {
+                        ++c.rejected;return;
+                    }
+                    if(!genericKey.AddArgument(argumentKey)) {
+                        c.error=live::Error::TypeKeyFailed;return;
                     }
                 }
-                bool belongs=false;
-                for(uint32_t i=0;i<image->typeCount;++i) {
-                    if(c.lookups==live::kMaximumTotalMetadataLookups) {
-                        c.error=live::Error::SourceOutsideBudget;return;
-                    }
-                    ++c.lookups;
-                    if(MetadataCache::GetAssemblyTypeHandle(image,i)==handle) {
-                        belongs=true;break;
-                    }
-                }
-                if(!belongs) {
-                    c.error=depth?live::Error::UnsupportedMetadataAncestry:
-                        live::Error::InvalidTypeIdentity;
-                    return;
-                }
-                verifiedHandles[depth]=handle;
-                const auto* def=reinterpret_cast<const Il2CppTypeDefinition*>(handle);
-                const auto name=GlobalMetadata::GetTypeNamespaceAndName(handle);
-                if(!name.second) {
-                    c.error=live::Error::InvalidTypeIdentity;return;
-                }
-                const char* ns=name.first?name.first:"";
-                size_t nsBytes=0,nameBytes=0;
-                if(!count(ns,nsBytes) || !count(name.second,nameBytes)) {
+                if(!genericKey.Seal()) {
                     c.error=live::Error::TypeKeyFailed;return;
                 }
-                // Physical AOT TypeDef ownership does not authorize a
-                // dynamically encoded generic-container index. The -1
-                // sentinel is the only admitted negative "no container".
-                if(def->genericContainerIndex!=kGenericContainerIndexInvalid &&
-                   hybridclr::metadata::IsInterpreterIndex(def->genericContainerIndex)) {
-                    c.error=live::Error::UnsupportedMetadataAncestry;return;
-                }
-                const auto container=GlobalMetadata::GetGenericContainerFromIndex(
-                    def->genericContainerIndex);
-                parts[depth].nameSpace={ns,nsBytes};
-                parts[depth].simpleName={name.second,nameBytes};
-                parts[depth].arity=GlobalMetadata::GetGenericContainerCount(container);
-                if(def->declaringTypeIndex==kTypeIndexInvalid) {
-                    ancestryComplete=true;++depth;break;
-                }
-                // A physical AOT image cannot quietly depend on a staged/
-                // interpreter-only metadata index in its defining ancestry.
-                if(hybridclr::metadata::IsInterpreterIndex(def->declaringTypeIndex)) {
-                    c.error=live::Error::UnsupportedMetadataAncestry;return;
-                }
-                const Il2CppType* declaring=GlobalMetadata::GetIl2CppTypeFromIndex(
-                    def->declaringTypeIndex);
-                if(!declaring ||
-                   (declaring->type!=IL2CPP_TYPE_CLASS &&
-                    declaring->type!=IL2CPP_TYPE_VALUETYPE)) {
-                    c.error=live::Error::UnsupportedMetadataAncestry;return;
-                }
-                handle=declaring->data.typeHandle;
-            }
-            if(!ancestryComplete) {
-                c.error=live::Error::UnsupportedMetadataAncestry;return;
-            }
-            // The original MetadataDefinitionKey serializes definition
-            // declarations from outermost to innermost. All borrowed string
-            // views are consumed under the *same* metadata callback/lock.
-            key::Capture typeKey;
-            bool keyOk=typeKey.Begin(
-                {owner->aname.name,assemblyBytes},true,false,false);
-            for(size_t i=depth;i>0&&keyOk;--i)
-                keyOk=typeKey.AddDeclaration(parts[i-1].nameSpace,
-                    parts[i-1].simpleName,parts[i-1].arity);
-            if(keyOk)keyOk=typeKey.Seal();
-            if(!keyOk) {
-                ++c.rejected;c.error=live::Error::TypeKeyFailed;return;
             }
 
             owned::Flags flags{};
@@ -257,9 +319,14 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
 #endif
             const auto role=witness==assembly_shadow_execution_witness::Source::Candidate
                 ? owned::Source::Candidate : owned::Source::ActiveShadow;
-            if(!c.rows->Add(registration,role,
-                 {owner->aname.name,assemblyBytes},typeKey,
-                 {pointer,pointerBytes},flags)) {
+            const bool stored=constructed ?
+                c.rows->Add(registration,role,
+                    {owner->aname.name,assemblyBytes},genericKey,
+                    {pointer,pointerBytes},flags) :
+                c.rows->Add(registration,role,
+                    {owner->aname.name,assemblyBytes},definitionKey,
+                    {pointer,pointerBytes},flags);
+            if(!stored) {
                 c.error=live::Error::RowsFailed;return;
             }
         },&context);
