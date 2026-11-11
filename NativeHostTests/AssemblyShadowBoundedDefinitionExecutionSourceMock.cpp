@@ -22,6 +22,9 @@ static constexpr int kGenericContainerIndexInvalid=-1;
 static constexpr int IL2CPP_TYPE_CLASS=18;
 static constexpr int IL2CPP_TYPE_VALUETYPE=17;
 static constexpr int IL2CPP_TYPE_GENERICINST=21;
+static constexpr int IL2CPP_TYPE_PTR=15;
+static constexpr int IL2CPP_TYPE_ARRAY=20;
+static constexpr int IL2CPP_TYPE_SZARRAY=29;
 
 struct Il2CppImage;
 struct Il2CppAssembly { struct {const char* name=nullptr;} aname; int token=1; Il2CppImage* image=nullptr; bool interpreter=false; };
@@ -39,15 +42,23 @@ struct Il2CppImage {
     void* handles[8]{};
 };
 struct Il2CppGenericClass;
+struct Il2CppArrayType;
 struct Il2CppType {
     int type=IL2CPP_TYPE_CLASS;
     union Data {
         void* typeHandle;
         const Il2CppType* type;
         Il2CppGenericClass* generic_class;
+        const Il2CppArrayType* array;
         Data() noexcept:typeHandle(nullptr){}
     } data;
     int attrs=0,num_mods=0,byref=0,pinned=0;
+};
+struct Il2CppArrayType {
+    const Il2CppType* etype=nullptr;
+    uint8_t rank=0,numsizes=0,numlobounds=0;
+    int* sizes=nullptr;
+    int* lobounds=nullptr;
 };
 struct Il2CppGenericInst {
     uint32_t type_argc=0;
@@ -250,6 +261,12 @@ struct Fixture {
     Il2CppTypeDefinition secondary{};
     Il2CppType declaring{};
     Il2CppType genericBase{},genericArg1{},genericArg2{};
+    Il2CppType nestedBase{},compositeLeaf{},chain[11]{};
+    const Il2CppType* nestedArgv[2]{};
+    Il2CppGenericInst nestedInstance{};
+    Il2CppGenericClass nestedClass{};
+    Il2CppArrayType arrayType{};
+    int arraySizes[2]{4,5},arrayBounds[2]{-1,0};
     const Il2CppType* genericArgv[2]{};
     Il2CppGenericInst genericInstance{};
     Il2CppGenericClass genericClass{};
@@ -275,6 +292,19 @@ struct Fixture {
         genericInstance.type_argv=genericArgv;
         genericClass.type=&genericBase;
         genericClass.context.class_inst=&genericInstance;
+        nestedBase.type=IL2CPP_TYPE_CLASS;
+        nestedBase.data.typeHandle=&secondary;
+        nestedArgv[0]=nestedArgv[1]=&genericArg2;
+        nestedInstance.type_argc=2;
+        nestedInstance.type_argv=nestedArgv;
+        nestedClass.type=&nestedBase;
+        nestedClass.context.class_inst=&nestedInstance;
+        arrayType.etype=&genericArg2;
+        arrayType.rank=2;
+        arrayType.numsizes=2;
+        arrayType.numlobounds=2;
+        arrayType.sizes=arraySizes;
+        arrayType.lobounds=arrayBounds;
         image.assembly=&assembly;assembly.image=&image;
         image.token=0;image.typeCount=1;
         supportImage.assembly=&supportAssembly;
@@ -305,6 +335,10 @@ enum class Mode {
     CrossImageNestedArgument,
     GenericWrongArity, GenericTooManyArguments,
     GenericQualifiedArgument, GenericConstructedArgument,
+    GenericPointerArgument, GenericSzArrayArgument,
+    GenericArrayArgument, GenericQualifiedPointerArgument,
+    GenericArrayBadSizes, GenericArrayMissingElement,
+    GenericArrayTooManyDimensions, GenericCompositeTooDeep,
     GenericMissingArguments, GenericMissingContext,
     GenericBadMethodContext, GenericWrongBase,
     TwoClassesReversedPhysicalCallback,
@@ -342,7 +376,15 @@ static void Exercise(Mode mode,src::Error expectedError) {
        mode==Mode::GenericArgumentMissingOwner ||
        mode==Mode::GenericWrongArity || mode==Mode::GenericTooManyArguments ||
        mode==Mode::GenericQualifiedArgument ||
-       mode==Mode::GenericConstructedArgument || mode==Mode::GenericMissingArguments ||
+       mode==Mode::GenericConstructedArgument ||
+       mode==Mode::GenericPointerArgument ||
+       mode==Mode::GenericSzArrayArgument ||
+       mode==Mode::GenericArrayArgument ||
+       mode==Mode::GenericQualifiedPointerArgument ||
+       mode==Mode::GenericArrayBadSizes ||
+       mode==Mode::GenericArrayMissingElement ||
+       mode==Mode::GenericArrayTooManyDimensions ||
+       mode==Mode::GenericCompositeTooDeep || mode==Mode::GenericMissingArguments ||
        mode==Mode::GenericMissingContext ||
        mode==Mode::GenericBadMethodContext || mode==Mode::GenericWrongBase) {
         fixture.def.genericContainerIndex=0;
@@ -366,8 +408,48 @@ static void Exercise(Mode mode,src::Error expectedError) {
             fixture.genericInstance.type_argc=1;
         if(mode==Mode::GenericQualifiedArgument)
             fixture.genericArg1.byref=1;
-        if(mode==Mode::GenericConstructedArgument)
+        if(mode==Mode::GenericConstructedArgument) {
+            fixture.secondary.genericContainerIndex=0;
             fixture.genericArg1.type=IL2CPP_TYPE_GENERICINST;
+            fixture.genericArg1.data.generic_class=&fixture.nestedClass;
+        }
+        if(mode==Mode::GenericPointerArgument ||
+           mode==Mode::GenericQualifiedPointerArgument) {
+            fixture.genericArg1.type=IL2CPP_TYPE_PTR;
+            fixture.genericArg1.data.type=&fixture.genericArg2;
+            if(mode==Mode::GenericQualifiedPointerArgument) {
+                fixture.genericArg1.attrs=7;
+                fixture.genericArg1.num_mods=2;
+                fixture.genericArg1.byref=1;
+            }
+        }
+        if(mode==Mode::GenericSzArrayArgument) {
+            fixture.genericArg1.type=IL2CPP_TYPE_SZARRAY;
+            fixture.genericArg1.data.type=&fixture.genericArg2;
+        }
+        if(mode==Mode::GenericArrayArgument ||
+           mode==Mode::GenericArrayBadSizes ||
+           mode==Mode::GenericArrayMissingElement ||
+           mode==Mode::GenericArrayTooManyDimensions) {
+            fixture.genericArg1.type=IL2CPP_TYPE_ARRAY;
+            fixture.genericArg1.data.array=&fixture.arrayType;
+            if(mode==Mode::GenericArrayBadSizes)
+                fixture.arrayType.sizes=nullptr;
+            if(mode==Mode::GenericArrayMissingElement)
+                fixture.arrayType.etype=nullptr;
+            if(mode==Mode::GenericArrayTooManyDimensions)
+                fixture.arrayType.numsizes=33;
+        }
+        if(mode==Mode::GenericCompositeTooDeep) {
+            fixture.genericArg1.type=IL2CPP_TYPE_PTR;
+            fixture.genericArg1.data.type=&fixture.chain[0];
+            for(size_t i=0;i<10;++i) {
+                fixture.chain[i].type=IL2CPP_TYPE_PTR;
+                fixture.chain[i].data.type=&fixture.chain[i+1];
+            }
+            fixture.chain[10].type=IL2CPP_TYPE_CLASS;
+            fixture.chain[10].data.typeHandle=&fixture.secondary;
+        }
         if(mode==Mode::GenericMissingArguments)
             fixture.genericInstance.type_argv=nullptr;
         if(mode==Mode::GenericMissingContext)
@@ -513,6 +595,12 @@ static void Exercise(Mode mode,src::Error expectedError) {
         const char* key=(mode==Mode::GenericDefinition ||
                          mode==Mode::GenericSameImage ||
                          mode==Mode::GenericNestedArgument ||
+                         mode==Mode::GenericQualifiedArgument ||
+                         mode==Mode::GenericConstructedArgument ||
+                         mode==Mode::GenericPointerArgument ||
+                         mode==Mode::GenericSzArrayArgument ||
+                         mode==Mode::GenericArrayArgument ||
+                         mode==Mode::GenericQualifiedPointerArgument ||
                          mode==Mode::CrossImageGeneric ||
                          mode==Mode::CrossImageNestedArgument ||
                          mode==Mode::CrossImageGenericUnobserved)
@@ -548,6 +636,20 @@ static void Exercise(Mode mode,src::Error expectedError) {
             Check(body.find(generic)!=std::string::npos);
             Check(body.find("\"typeKey\":\"generic(")!=std::string::npos);
         }
+        if(mode==Mode::GenericQualifiedArgument)
+            Check(body.find("qualified(0,0,1,0,type(")!=std::string::npos);
+        if(mode==Mode::GenericPointerArgument)
+            Check(body.find("ptr(type(")!=std::string::npos);
+        if(mode==Mode::GenericSzArrayArgument)
+            Check(body.find("szarray(type(")!=std::string::npos);
+        if(mode==Mode::GenericArrayArgument)
+            Check(body.find("array(2,")!=std::string::npos &&
+                  body.find("sizes=4,5,bounds=-1,0,")!=std::string::npos);
+        if(mode==Mode::GenericQualifiedPointerArgument)
+            Check(body.find("qualified(7,2,1,0,ptr(type(")!=std::string::npos);
+        if(mode==Mode::GenericConstructedArgument)
+            Check(body.find("generic(type(7:methods/4:Demo/6:Friend@2),")!=
+                  std::string::npos);
         Check(body.find("\"logicalAssembly\":\"Methods\"")!=std::string::npos);
         if(mode==Mode::TwoClassesReversedPhysicalCallback) {
             Check(body.find("type(7:methods/4:Demo/6:Friend@0)")!=
@@ -618,8 +720,16 @@ int main(){
     Exercise(Mode::GenericArgumentMissingOwner,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::GenericWrongArity,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericTooManyArguments,src::Error::UnsupportedTypeShape);
-    Exercise(Mode::GenericQualifiedArgument,src::Error::UnsupportedTypeShape);
-    Exercise(Mode::GenericConstructedArgument,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericQualifiedArgument,src::Error::None);
+    Exercise(Mode::GenericConstructedArgument,src::Error::None);
+    Exercise(Mode::GenericPointerArgument,src::Error::None);
+    Exercise(Mode::GenericSzArrayArgument,src::Error::None);
+    Exercise(Mode::GenericArrayArgument,src::Error::None);
+    Exercise(Mode::GenericQualifiedPointerArgument,src::Error::None);
+    Exercise(Mode::GenericArrayBadSizes,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericArrayMissingElement,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericArrayTooManyDimensions,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericCompositeTooDeep,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericMissingArguments,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericMissingContext,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericBadMethodContext,src::Error::UnsupportedTypeShape);
