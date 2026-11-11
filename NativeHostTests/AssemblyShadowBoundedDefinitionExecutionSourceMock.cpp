@@ -103,7 +103,7 @@ static int g_MetadataLock=0;
 static bool g_emitPhysical=true, g_duplicate=false;
 static bool g_changeRevision=false, g_changeCounter=false;
 static Il2CppClass* g_physical=nullptr;
-static Il2CppGenericContainer g_container{2};
+static Il2CppGenericContainer g_container{};
 
 class MetadataCache {
 public:
@@ -250,6 +250,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_active.store(nullptr);
 }
 int main(){
+    g_container.type_argc=2;
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
     Exercise(Mode::Good,src::Error::None);
     Exercise(Mode::GenericDefinition,src::Error::None);
