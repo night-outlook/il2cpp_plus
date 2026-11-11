@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/r03-native-b2-original-unicode-name-parity.yml
       - libil2cpp/vm/AssemblyShadowName.h
+      - libil2cpp/vm/AssemblyShadowTypeKey.cpp
       - libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
       - libil2cpp/vm-utils/VmStringUtils.cpp
       - libil2cpp/char-conversions.cpp
@@ -31,6 +32,7 @@ jobs:
           sparse-checkout: |
             libil2cpp/vm/AssemblyShadowName.h
             libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
+            libil2cpp/vm/AssemblyShadowTypeKey.cpp
             libil2cpp/vm-utils/VmStringUtils.h
             libil2cpp/vm-utils/VmStringUtils.cpp
             libil2cpp/char-conversions.cpp
@@ -48,7 +50,7 @@ jobs:
           grep -Fq "VmStringUtils::Utf16ToLower" libil2cpp/vm-utils/VmStringUtils.cpp
           grep -Fq "ToLowerDataLow[c]" libil2cpp/vm-utils/VmStringUtils.cpp
           grep -Fq "ToLowerDataHigh[c - kDataHighThreshold]" libil2cpp/vm-utils/VmStringUtils.cpp
-          grep -Fq "return utils::StringUtils::Utf16ToUtf8(folded);" libil2cpp/vm/AssemblyShadowTypeKey.cpp || true
+          grep -Fq "return utils::StringUtils::Utf16ToUtf8(folded);" libil2cpp/vm/AssemblyShadowTypeKey.cpp
           mkdir -p "$RUNNER_TEMP/r03-b2-name-reference"
           # The original table source includes il2cpp-config.h beside itself.
           # In a standalone host, copy its exact array definitions into a
