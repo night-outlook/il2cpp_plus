@@ -43,23 +43,28 @@ jobs:
             libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h \
             libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h
           mkdir -p "$RUNNER_TEMP/r03-native-b2-live"
-          for profile in strict sanitized; do
+          for buildFlavor in release debug; do
+            for profile in strict sanitized; do
             FLAGS=(-std=${{ matrix.std }} -g -O1 -Wall -Wextra -Werror -pedantic -pthread)
             if [ "$profile" = sanitized ]; then
               FLAGS+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
             fi
+            if [ "$buildFlavor" = debug ]; then
+              FLAGS+=(-DIL2CPP_DEBUG=1)
+            fi
             clang++ "${FLAGS[@]}" -Ilibil2cpp "$SRC" \
-              -o "$RUNNER_TEMP/r03-native-b2-live/$profile"
+              -o "$RUNNER_TEMP/r03-native-b2-live/$buildFlavor-$profile"
             ASAN_OPTIONS="detect_leaks=0:abort_on_error=1" \
               UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
-              "$RUNNER_TEMP/r03-native-b2-live/$profile" \
-              > "$RUNNER_TEMP/r03-native-b2-live/$profile.json"
-            cat "$RUNNER_TEMP/r03-native-b2-live/$profile.json"
-            python3 -B - "$RUNNER_TEMP/r03-native-b2-live/$profile.json" <<'PY'
+              "$RUNNER_TEMP/r03-native-b2-live/$buildFlavor-$profile" \
+              > "$RUNNER_TEMP/r03-native-b2-live/$buildFlavor-$profile.json"
+            cat "$RUNNER_TEMP/r03-native-b2-live/$buildFlavor-$profile.json"
+            python3 -B - "$RUNNER_TEMP/r03-native-b2-live/$buildFlavor-$profile.json" "$buildFlavor" <<'PY'
           import json,sys
           j=json.load(open(sys.argv[1],encoding='utf8'))
           assert j['kind']=='R03B2ActualNativeSourceMock'
           assert j['result']=='PassedActualInlWithMockedVmOnly'
+          assert j['buildFlavor']==sys.argv[2]
           assert j['cases']>=17 and j['assertions']>=118
           assert j['realUnity'] is False
           assert j['physicalClassProvenInRealPlayer'] is False
@@ -68,5 +73,6 @@ jobs:
           assert j['runtimeAcceptance'] is False
           assert j['R03Accepted'] is False
           PY
+            done
           done
-          echo "Mock actual native source PASSED; Unity SDK compilation is not demonstrated"
+          echo "Mock actual native source PASSED in release/debug + strict/sanitized; Unity SDK compilation is not demonstrated"
