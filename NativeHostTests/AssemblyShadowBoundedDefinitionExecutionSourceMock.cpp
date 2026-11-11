@@ -255,9 +255,11 @@ struct Fixture {
 };
 enum class Mode {
     Good, GenericDefinition, StagedGenericContainer,
-    GenericSameImage, GenericArgumentMissingOwner, GenericWrongArity,
+    GenericSameImage, GenericNestedArgument, GenericArgumentMissingOwner,
+    GenericWrongArity, GenericTooManyArguments,
     GenericQualifiedArgument, GenericConstructedArgument,
-    GenericMissingArguments, GenericBadMethodContext, GenericWrongBase,
+    GenericMissingArguments, GenericMissingContext,
+    GenericBadMethodContext, GenericWrongBase,
     TwoClassesReversedPhysicalCallback,
     BadImageOwner, ConstructedGeneric,
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
@@ -283,9 +285,12 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_state.store(AssemblyShadowState::Committed);
     g_physical=&fixture.klass;
     if(mode==Mode::GenericDefinition)fixture.def.genericContainerIndex=0;
-    if(mode==Mode::GenericSameImage || mode==Mode::GenericArgumentMissingOwner ||
-       mode==Mode::GenericWrongArity || mode==Mode::GenericQualifiedArgument ||
+    if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument ||
+       mode==Mode::GenericArgumentMissingOwner ||
+       mode==Mode::GenericWrongArity || mode==Mode::GenericTooManyArguments ||
+       mode==Mode::GenericQualifiedArgument ||
        mode==Mode::GenericConstructedArgument || mode==Mode::GenericMissingArguments ||
+       mode==Mode::GenericMissingContext ||
        mode==Mode::GenericBadMethodContext || mode==Mode::GenericWrongBase) {
         fixture.def.genericContainerIndex=0;
         fixture.image.typeCount=2;
@@ -295,6 +300,15 @@ static void Exercise(Mode mode,src::Error expectedError) {
         fixture.klass.generic_class=&fixture.genericClass;
         if(mode==Mode::GenericArgumentMissingOwner)
             fixture.image.handles[1]=nullptr;
+        if(mode==Mode::GenericNestedArgument) {
+            fixture.secondary.declaringTypeIndex=3;
+            fixture.image.typeCount=3;
+            fixture.image.handles[2]=&fixture.outer;
+        }
+        if(mode==Mode::GenericTooManyArguments)
+            fixture.genericInstance.type_argc=
+                static_cast<uint32_t>(
+                    r03_b2_owned_constructed_type_key::Capture::kMaximumArguments+1);
         if(mode==Mode::GenericWrongArity)
             fixture.genericInstance.type_argc=1;
         if(mode==Mode::GenericQualifiedArgument)
@@ -303,6 +317,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
             fixture.genericArg1.type=IL2CPP_TYPE_GENERICINST;
         if(mode==Mode::GenericMissingArguments)
             fixture.genericInstance.type_argv=nullptr;
+        if(mode==Mode::GenericMissingContext)
+            fixture.genericClass.context.class_inst=nullptr;
         if(mode==Mode::GenericBadMethodContext)
             fixture.genericClass.context.method_inst=&fixture.genericInstance;
         if(mode==Mode::GenericWrongBase)
@@ -379,8 +395,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
                 ? "type(7:methods/4:Demo/5:Outer@0/4:Demo/4:Hero@0)"
                 : "type(7:methods/4:Demo/4:Hero@0)";
         Check(body.find(key)!=std::string::npos);
-        if(mode==Mode::GenericSameImage) {
-            const std::string arg="type(7:methods/4:Demo/6:Friend@0)";
+        if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument) {
+            const std::string arg=mode==Mode::GenericNestedArgument ?
+                "type(7:methods/4:Demo/5:Outer@0/4:Demo/6:Friend@0)" :
+                "type(7:methods/4:Demo/6:Friend@0)";
             const std::string generic="generic("+
                 std::string("type(7:methods/4:Demo/4:Hero@2),")+
                 std::to_string(arg.size())+":"+arg+","+
@@ -423,11 +441,14 @@ int main(){
     Exercise(Mode::Good,src::Error::None);
     Exercise(Mode::GenericDefinition,src::Error::None);
     Exercise(Mode::GenericSameImage,src::Error::None);
+    Exercise(Mode::GenericNestedArgument,src::Error::None);
     Exercise(Mode::GenericArgumentMissingOwner,src::Error::InvalidTypeIdentity);
     Exercise(Mode::GenericWrongArity,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericTooManyArguments,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericQualifiedArgument,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericConstructedArgument,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericMissingArguments,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericMissingContext,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericBadMethodContext,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericWrongBase,src::Error::UnsupportedTypeShape);
     Exercise(Mode::StagedGenericContainer,src::Error::UnsupportedMetadataAncestry);
