@@ -114,17 +114,25 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         struct AotRegistrySink {
             assembly_shadow_observed_images::Inventory<
                 live::kMaximumRegisteredAotImages>* inventory;
-        } registrySink{&registeredAotImages};
+            live::Error error=live::Error::None;
+        } registrySink{};
+        registrySink.inventory=&registeredAotImages;
         auto readAotRegistry=[](const Il2CppImage* img,void* raw)->bool {
             AotRegistrySink& sink=*static_cast<AotRegistrySink*>(raw);
             if(!img || !img->typeCount ||
-               img->typeCount>live::kMaximumAotImageTypes)return false;
-            return sink.inventory->AddFromRegisteredAssembly(img);
+               img->typeCount>live::kMaximumAotImageTypes) {
+                sink.error=live::Error::UnsupportedImage;
+                return false;
+            }
+            if(!sink.inventory->AddFromRegisteredAssembly(img)) {
+                sink.error=live::Error::PhysicalImageLimit;
+                return false;
+            }
+            return true;
         };
         if(!Assembly::TryVisitRegisteredAotImages(readAotRegistry,&registrySink))
-            return reject(registeredAotImages.Healthy()?
-                live::Error::UnadmittedMetadataOwner:
-                live::Error::PhysicalImageLimit);
+            return reject(registrySink.error==live::Error::None?
+                live::Error::UnadmittedMetadataOwner:registrySink.error);
         if(!registeredAotImages.Healthy() || !registeredAotImages.Count())
             return reject(live::Error::UnadmittedMetadataOwner);
         receipt.registeredPhysicalAotImages=registeredAotImages.Count();
