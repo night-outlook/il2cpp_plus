@@ -218,12 +218,53 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             if(!count(owner->aname.name,assemblyBytes)) {
                 c.error=live::Error::TypeKeyFailed;return;
             }
-            // One reviewed physical image is this adapter's complete owner
-            // inventory. Do NOT use an unadmitted raw metadata handle merely
-            // because a generic-instantiation node points to it.
+            // A complete owner inventory is available from the first
+            // physical pass, and only those matched/initial-session AOT images
+            // may supply TypeDef handles. Compare opaque handle identity first:
+            // never dereference a borrowed metadata handle before owner proof.
+            auto resolveOwner=[&](decltype(klass->typeMetadataHandle) handle,
+                                  const Il2CppImage* constrained,
+                                  const Il2CppImage*& resolved)->bool {
+                resolved=nullptr;
+                if(!handle || !c.images || !c.images->Healthy()) {
+                    c.error=live::Error::UnadmittedMetadataOwner;return false;
+                }
+                for(size_t sourceIndex=0;sourceIndex<c.images->Count();++sourceIndex) {
+                    const auto* ownerImage=c.images->Get<Il2CppImage>(sourceIndex);
+                    if(!ownerImage || !ownerImage->assembly ||
+                       !ownerImage->assembly->aname.name ||
+                       hybridclr::metadata::IsInterpreterIndex(ownerImage->token) ||
+                       !ownerImage->typeCount ||
+                       ownerImage->typeCount>live::kMaximumAotImageTypes) {
+                        c.error=live::Error::UnsupportedImage;return false;
+                    }
+                    for(uint32_t i=0;i<ownerImage->typeCount;++i) {
+                        if(c.lookups==live::kMaximumTotalMetadataLookups) {
+                            c.error=live::Error::SourceOutsideBudget;return false;
+                        }
+                        ++c.lookups;
+                        if(MetadataCache::GetAssemblyTypeHandle(ownerImage,i)==handle) {
+                            if(resolved && resolved!=ownerImage) {
+                                c.error=live::Error::AmbiguousMetadataOwner;
+                                return false;
+                            }
+                            resolved=ownerImage;
+                            break;
+                        }
+                    }
+                }
+                if(!resolved) {
+                    c.error=live::Error::UnadmittedMetadataOwner;return false;
+                }
+                if(constrained && constrained!=resolved) {
+                    c.error=live::Error::InvalidTypeIdentity;return false;
+                }
+                return true;
+            };
             auto buildDefinition=[&](decltype(klass->typeMetadataHandle) handle,
-                                     key::Capture& result,
-                                     uint32_t& leafArity)->bool {
+                                     const Il2CppImage* requiredOwner,
+                                     key::Capture& result,uint32_t& leafArity,
+                                     const Il2CppImage*& provenOwner)->bool {
                 struct Component {
                     key::ByteView nameSpace{};
                     key::ByteView simpleName{};
@@ -235,31 +276,24 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 size_t depth=0;
                 bool ancestryComplete=false;
                 leafArity=0;
+                provenOwner=nullptr;
                 for(;depth<key::Capture::kMaximumDeclarations;++depth) {
                     if(!handle) {
                         c.error=live::Error::UnsupportedMetadataAncestry;return false;
                     }
-                    for(size_t j=0;j<depth;++j) {
+                    for(size_t j=0;j<depth;++j)
                         if(verifiedHandles[j]==handle) {
-                            c.error=live::Error::UnsupportedMetadataAncestry;return false;
+                            c.error=live::Error::UnsupportedMetadataAncestry;
+                            return false;
                         }
-                    }
-                    bool belongs=false;
-                    for(uint32_t i=0;i<image->typeCount;++i) {
-                        if(c.lookups==live::kMaximumTotalMetadataLookups) {
-                            c.error=live::Error::SourceOutsideBudget;return false;
-                        }
-                        ++c.lookups;
-                        if(MetadataCache::GetAssemblyTypeHandle(image,i)==handle) {
-                            belongs=true;break;
-                        }
-                    }
-                    if(!belongs) {
-                        c.error=depth?live::Error::UnsupportedMetadataAncestry:
-                            live::Error::InvalidTypeIdentity;
-                        return false;
-                    }
+                    const Il2CppImage* currentOwner=nullptr;
+                    if(!resolveOwner(handle,depth?provenOwner:requiredOwner,
+                                     currentOwner))return false;
+                    if(!depth)provenOwner=currentOwner;
                     verifiedHandles[depth]=handle;
+                    // The only dereference of this TypeDef occurs after the
+                    // full physical-image ownership scan and under the same
+                    // metadata lock + initial epoch Reader.
                     const auto* def=reinterpret_cast<const Il2CppTypeDefinition*>(handle);
                     const auto name=GlobalMetadata::GetTypeNamespaceAndName(handle);
                     if(!name.second) {
@@ -297,10 +331,18 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     }
                     handle=declaring->data.typeHandle;
                 }
-                if(!ancestryComplete) {
+                if(!ancestryComplete || !provenOwner ||
+                   !provenOwner->assembly ||
+                   !provenOwner->assembly->aname.name) {
                     c.error=live::Error::UnsupportedMetadataAncestry;return false;
                 }
-                bool ok=result.Begin({owner->aname.name,assemblyBytes},true,false,false);
+                size_t sourceAssemblyBytes=0;
+                if(!count(provenOwner->assembly->aname.name,sourceAssemblyBytes)) {
+                    c.error=live::Error::TypeKeyFailed;return false;
+                }
+                bool ok=result.Begin(
+                    {provenOwner->assembly->aname.name,sourceAssemblyBytes},
+                    true,false,false);
                 for(size_t i=depth;i>0&&ok;--i)
                     ok=result.AddDeclaration(parts[i-1].nameSpace,
                         parts[i-1].simpleName,parts[i-1].arity);
@@ -311,7 +353,9 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
 
             key::Capture definitionKey;
             uint32_t definitionArity=0;
-            if(!buildDefinition(definition,definitionKey,definitionArity)) {
+            const Il2CppImage* definitionOwner=nullptr;
+            if(!buildDefinition(definition,image,definitionKey,
+                                definitionArity,definitionOwner)) {
                 ++c.rejected;return;
             }
             constructed_key::Capture genericKey;
@@ -335,10 +379,12 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     }
                     key::Capture argumentKey;
                     uint32_t ignoredArity=0;
-                    if(!buildDefinition(arg->data.typeHandle,argumentKey,
-                                        ignoredArity)) {
+                    const Il2CppImage* argumentOwner=nullptr;
+                    if(!buildDefinition(arg->data.typeHandle,nullptr,argumentKey,
+                                        ignoredArity,argumentOwner)) {
                         ++c.rejected;return;
                     }
+                    if(argumentOwner!=image)c.usedCrossImageArgument=true;
                     if(!genericKey.AddArgument(argumentKey)) {
                         c.error=live::Error::TypeKeyFailed;return;
                     }
@@ -393,6 +439,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
 
     receipt.metadataLookups=context.lookups;
     receipt.rejectedUnsupported=context.rejected;
+    receipt.usedCrossImageArgument=context.usedCrossImageArgument;
     receipt.physicallyMatched=membership.Matched();
     if(context.error!=live::Error::None)return reject(context.error);
     if(!membership.EnumeratorHealthy() || !membership.FullyMatched() ||
