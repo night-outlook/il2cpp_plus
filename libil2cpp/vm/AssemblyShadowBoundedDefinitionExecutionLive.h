@@ -1,7 +1,9 @@
 #pragma once
-// R03 B2 INACTIVE genuine native observed-class source, restricted to ordinary
-// physical AOT TypeDef definitions. NOT a full execution-V1 source, V2
-// field15, a global VM epoch, or a terminal/release recovery API.
+// R03 B2 INACTIVE genuine native observed-class source, restricted to
+// physically matched AOT TypeDef definitions and bounded GENERICINST with
+// independently owner-verified concrete AOT TypeDef args from matched class
+// images. NOT a complete execution-V1 source, V2 field15, coherent VM epoch,
+// or terminal/release recovery API.
 // Caller owns/preallocates all 3 objects while healthy, one thread only.
 // No registered Il2CppClass* escapes the synchronous physical enumerator.
 #include "AssemblyShadowOwnedExecutionRows.h"
