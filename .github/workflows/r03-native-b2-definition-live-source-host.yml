@@ -1,0 +1,71 @@
+name: R03 B2 real restricted TypeDef source .inl mock harness (NOT Unity)
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - .github/workflows/r03-native-b2-definition-live-source-host.yml
+      - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h
+      - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl
+      - libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
+      - libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h
+      - NativeHostTests/AssemblyShadowBoundedDefinitionExecutionSourceMock.cpp
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mock-native-source:
+    runs-on: ${{ matrix.os }}
+    name: Restricted native .inl ${{ matrix.os }} ${{ matrix.std }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        std: [c++11, c++17]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            NativeHostTests
+            libil2cpp/vm
+      - name: Compile actual VM .inl with fake VM and run strict/sanitized cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          clang++ --version
+          SRC="NativeHostTests/AssemblyShadowBoundedDefinitionExecutionSourceMock.cpp"
+          shasum -a 256 "$SRC" \
+            libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl \
+            libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h \
+            libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h \
+            libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h
+          mkdir -p "$RUNNER_TEMP/r03-native-b2-live"
+          for profile in strict sanitized; do
+            FLAGS=(-std=${{ matrix.std }} -g -O1 -Wall -Wextra -Werror -pedantic -pthread)
+            if [ "$profile" = sanitized ]; then
+              FLAGS+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
+            fi
+            clang++ "${FLAGS[@]}" -Ilibil2cpp "$SRC" \
+              -o "$RUNNER_TEMP/r03-native-b2-live/$profile"
+            ASAN_OPTIONS="detect_leaks=0:abort_on_error=1" \
+              UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
+              "$RUNNER_TEMP/r03-native-b2-live/$profile" \
+              > "$RUNNER_TEMP/r03-native-b2-live/$profile.json"
+            cat "$RUNNER_TEMP/r03-native-b2-live/$profile.json"
+            python3 -B - "$RUNNER_TEMP/r03-native-b2-live/$profile.json" <<'PY'
+          import json,sys
+          j=json.load(open(sys.argv[1],encoding='utf8'))
+          assert j['kind']=='R03B2ActualNativeSourceMock'
+          assert j['result']=='PassedActualInlWithMockedVmOnly'
+          assert j['cases']>=11 and j['assertions']>=70
+          assert j['realUnity'] is False
+          assert j['physicalClassProvenInRealPlayer'] is False
+          assert j['fullCanonicalTypeKeys'] is False
+          assert j['nativeV2TransportImplemented'] is False
+          assert j['runtimeAcceptance'] is False
+          assert j['R03Accepted'] is False
+          PY
+          done
+          echo "Mock actual native source PASSED; Unity SDK compilation is not demonstrated"
