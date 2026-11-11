@@ -48,6 +48,15 @@ namespace vm
         static bool PublishShadowBatch(const AssemblyVector& assemblies,
             bool (*tryBegin)(void*), bool (*publish)(void*), void* context);
         static uint64_t CaptureShadowEnumeration(AssemblyVector& assemblies);
+        // R03 B2 INACTIVE: synchronously visit the ORIGINAL registered AOT
+        // physical image table under s_assemblyLock. The caller MUST hold
+        // g_MetadataLock and a metadata Reader for the initial source session.
+        // A borrowed image is valid only during this callback; no full-VM
+        // epoch, class-lifetime or terminal read is implied.
+        // The visitor must be nonthrowing, nonallocating, and never run
+        // managed callbacks or invoke user code.
+        static bool TryVisitRegisteredAotImages(
+            bool (*visit)(const Il2CppImage*,void*),void* context) noexcept;
         // P1 additive, inactive: visit the original physical registry under
         // s_assemblyLock and synchronously deep-copy owned name/physical-kind
         // bytes. Caller must preallocate Capture while healthy. No VM type
