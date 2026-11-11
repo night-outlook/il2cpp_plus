@@ -465,6 +465,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
         mode==Mode::TwoClassesReversedPhysicalCallback ||
         mode==Mode::CrossImageGeneric ||
         mode==Mode::CrossImageGenericAmbiguous ||
+        mode==Mode::RegisteredAotChanged ||
         mode==Mode::CrossImageInterpreter ||
         mode==Mode::CrossImageNestedArgument;
     const size_t expectedRows=twoRows?2u:1u;
@@ -488,9 +489,14 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.restrictedTypeDefSubsetProven);
         Check(receipt.observedRegistryAndCounterFenceStable);
         Check(receipt.admittedMetadataEpoch==1);
+        Check(receipt.registeredImageSetStable);
+        Check(receipt.registeredPhysicalAotImages>=receipt.admittedPhysicalImages);
         const bool crossImage=(mode==Mode::CrossImageGeneric ||
-                               mode==Mode::CrossImageNestedArgument);
+                               mode==Mode::CrossImageNestedArgument ||
+                               mode==Mode::CrossImageGenericUnobserved);
         Check(receipt.usedCrossImageArgument==crossImage);
+        Check(receipt.usedUnobservedAotArgumentImage==
+              (mode==Mode::CrossImageGenericUnobserved));
         Check(receipt.admittedPhysicalImages==(twoRows?2u:1u) ||
               mode==Mode::TwoClassesReversedPhysicalCallback);
         Check(owned->Complete() && owned->Count()==expectedRows &&
@@ -503,14 +509,16 @@ static void Exercise(Mode mode,src::Error expectedError) {
                          mode==Mode::GenericSameImage ||
                          mode==Mode::GenericNestedArgument ||
                          mode==Mode::CrossImageGeneric ||
-                         mode==Mode::CrossImageNestedArgument)
+                         mode==Mode::CrossImageNestedArgument ||
+                         mode==Mode::CrossImageGenericUnobserved)
             ? "type(7:methods/4:Demo/4:Hero@2)"
             : mode==Mode::NestedType
                 ? "type(7:methods/4:Demo/5:Outer@0/4:Demo/4:Hero@0)"
                 : "type(7:methods/4:Demo/4:Hero@0)";
         Check(body.find(key)!=std::string::npos);
         if(mode==Mode::CrossImageGeneric ||
-           mode==Mode::CrossImageNestedArgument) {
+           mode==Mode::CrossImageNestedArgument ||
+           mode==Mode::CrossImageGenericUnobserved) {
             const std::string arg=mode==Mode::CrossImageNestedArgument ?
                 "type(7:support/4:Demo/5:Outer@0/4:Demo/6:Friend@0)" :
                 "type(7:support/4:Demo/6:Friend@0)";
@@ -518,8 +526,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
                 std::to_string(arg.size())+":"+arg+","+
                 std::to_string(arg.size())+":"+arg+")";
             Check(body.find(canonical)!=std::string::npos);
-            Check(body.find("\"logicalAssembly\":\"Support\"")!=std::string::npos);
-            Check(receipt.admittedPhysicalImages==2);
+            if(mode!=Mode::CrossImageGenericUnobserved)
+                Check(body.find("\"logicalAssembly\":\"Support\"")!=std::string::npos);
+            Check(receipt.admittedPhysicalImages==
+                  (mode==Mode::CrossImageGenericUnobserved?1u:2u));
+            Check(receipt.registeredPhysicalAotImages==2);
         }
         if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument) {
             const std::string arg=mode==Mode::GenericNestedArgument ?
@@ -590,7 +601,11 @@ int main(){
     Exercise(Mode::GenericSameImage,src::Error::None);
     Exercise(Mode::GenericNestedArgument,src::Error::None);
     Exercise(Mode::CrossImageGeneric,src::Error::None);
-    Exercise(Mode::CrossImageGenericUnobserved,src::Error::UnadmittedMetadataOwner);
+    Exercise(Mode::CrossImageGenericUnobserved,src::Error::None);
+    Exercise(Mode::CrossImageGenericNotRegistered,src::Error::UnadmittedMetadataOwner);
+    Exercise(Mode::RegisteredAotChanged,src::Error::SourceChanged);
+    Exercise(Mode::RegisteredAotOverflow,src::Error::PhysicalImageLimit);
+    Exercise(Mode::RegisteredAotInvalidOwner,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::CrossImageGenericAmbiguous,src::Error::AmbiguousMetadataOwner);
     Exercise(Mode::CrossImageInterpreter,src::Error::UnsupportedImage);
     Exercise(Mode::CrossImageNestedArgument,src::Error::None);
