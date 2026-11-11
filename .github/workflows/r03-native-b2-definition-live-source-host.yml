@@ -7,6 +7,7 @@ on:
       - libil2cpp/vm/AssemblyShadow.cpp
       - libil2cpp/vm/AssemblyShadow.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h
+      - libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl
       - libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
       - libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h
@@ -45,6 +46,7 @@ jobs:
           shasum -a 256 "$SRC" \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h \
+            libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h \
             libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h \
             libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h \
             libil2cpp/vm/AssemblyShadowOwnedConstructedTypeKey.h \
@@ -72,7 +74,7 @@ jobs:
           assert j['kind']=='R03B2ActualNativeSourceMock'
           assert j['result']=='PassedActualInlWithMockedVmOnly'
           assert j['buildFlavor']==sys.argv[2]
-          assert j['cases']>=31 and j['assertions']>=243
+          assert j['cases']>=37 and j['assertions']>=396
           assert j['realUnity'] is False
           assert j['physicalClassProvenInRealPlayer'] is False
           assert j['fullCanonicalTypeKeys'] is False
