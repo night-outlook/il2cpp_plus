@@ -45,6 +45,7 @@ struct Receipt {
     bool registeredImageSetStable=false; // two lock-scoped snapshots only
     bool usedCrossImageArgument=false;
     bool usedUnobservedAotArgumentImage=false;
+    bool usedUnicodeAssemblyFold=false;
     // Diagnostic-only subset coverage. All are false on rejected source.
     bool usedNestedGenericArgument=false;
     bool usedPointerArgument=false;
@@ -79,6 +80,7 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.restrictedTypeDefSubsetProven=false;
     receipt.usedCrossImageArgument=false;
     receipt.usedUnobservedAotArgumentImage=false;
+    receipt.usedUnicodeAssemblyFold=false;
     receipt.usedNestedGenericArgument=false;
     receipt.usedPointerArgument=false;
     receipt.usedSzArrayArgument=false;
