@@ -301,6 +301,7 @@ enum class Mode {
     CrossImageGenericNotRegistered, CrossImageGenericAmbiguous,
     CrossImageInterpreter, RegisteredAotChanged,
     RegisteredAotOverflow, RegisteredAotInvalidOwner,
+    RegisteredEmptyAotAssembly,
     CrossImageNestedArgument,
     GenericWrongArity, GenericTooManyArguments,
     GenericQualifiedArgument, GenericConstructedArgument,
@@ -418,6 +419,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::BadImageOwner)fixture.image.handles[0]=nullptr;
     if(mode==Mode::RegisteredAotInvalidOwner)
         fixture.image.assembly=nullptr;
+    if(mode==Mode::RegisteredEmptyAotAssembly) {
+        fixture.supportImage.typeCount=0;
+        g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
+    }
     if(mode==Mode::RegisteredAotOverflow) {
         for(size_t i=0;i<1025;++i) {
             g_extraAssemblies[i].aname.name="Extra";
@@ -606,6 +611,7 @@ int main(){
     Exercise(Mode::RegisteredAotChanged,src::Error::SourceChanged);
     Exercise(Mode::RegisteredAotOverflow,src::Error::PhysicalImageLimit);
     Exercise(Mode::RegisteredAotInvalidOwner,src::Error::UnadmittedMetadataOwner);
+    Exercise(Mode::RegisteredEmptyAotAssembly,src::Error::None);
     Exercise(Mode::CrossImageGenericAmbiguous,src::Error::AmbiguousMetadataOwner);
     Exercise(Mode::CrossImageInterpreter,src::Error::UnsupportedImage);
     Exercise(Mode::CrossImageNestedArgument,src::Error::None);
