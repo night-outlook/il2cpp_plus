@@ -163,7 +163,7 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
             callback(g_otherPhysical,context);
     }
     if(g_duplicate && g_emitPhysical)callback(g_physical,context);
-    if(g_publishB1DuringEnumeration) {
+    if(g_publishB1DuringEnumeration && !g_midB1Published) {
         static const char firstReason[]="mid-capture native B1 first error";
         g_midB1Published=s_firstFailureV2.TryFreeze(
             19,assembly_shadow_first_failure_v2::Origin::InterpreterInitializer,
