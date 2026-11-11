@@ -688,7 +688,14 @@ static void Exercise(Mode mode,src::Error expectedError) {
         if(mode==Mode::GenericConstructedArgument)
             Check(body.find("generic(type(7:methods/4:Demo/6:Friend@2),")!=
                   std::string::npos);
+        if(!unicode)
         Check(body.find("\"logicalAssembly\":\"Methods\"")!=std::string::npos);
+        else {
+            rows::RowView unicodeRow{};
+            Check(owned->Get(0,unicodeRow));
+            Check(unicodeRow.logicalAssembly.size==
+                  std::strlen(fixture.assembly.aname.name));
+        }
         if(mode==Mode::TwoClassesReversedPhysicalCallback) {
             Check(body.find("type(7:methods/4:Demo/6:Friend@0)")!=
                   std::string::npos);
