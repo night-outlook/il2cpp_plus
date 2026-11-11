@@ -4,6 +4,8 @@ on:
     branches: [codex/assembly-shadow-r01b-h1]
     paths:
       - .github/workflows/r03-native-b2-definition-live-source-host.yml
+      - libil2cpp/vm/AssemblyShadow.cpp
+      - libil2cpp/vm/AssemblyShadow.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl
       - libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
@@ -37,6 +39,7 @@ jobs:
           git rev-parse HEAD
           clang++ --version
           SRC="NativeHostTests/AssemblyShadowBoundedDefinitionExecutionSourceMock.cpp"
+          shasum -a 256 libil2cpp/vm/AssemblyShadow.cpp libil2cpp/vm/AssemblyShadow.h
           shasum -a 256 "$SRC" \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h \
