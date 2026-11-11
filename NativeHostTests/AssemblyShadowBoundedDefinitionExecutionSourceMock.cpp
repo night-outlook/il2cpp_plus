@@ -5,6 +5,7 @@
 #include "vm/AssemblyShadowBoundedExecutionEmptyLive.h"
 #include "vm/AssemblyShadowExecutionRegistryRevision.h"
 #include "vm/AssemblyShadowFirstFailureV2.h"
+#include "vm/AssemblyShadowRegisteredAotImageScan.h"
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -22,7 +23,8 @@ static constexpr int IL2CPP_TYPE_CLASS=18;
 static constexpr int IL2CPP_TYPE_VALUETYPE=17;
 static constexpr int IL2CPP_TYPE_GENERICINST=21;
 
-struct Il2CppAssembly { struct {const char* name=nullptr;} aname; bool interpreter=false; };
+struct Il2CppImage;
+struct Il2CppAssembly { struct {const char* name=nullptr;} aname; int token=1; Il2CppImage* image=nullptr; bool interpreter=false; };
 struct Il2CppTypeDefinition {
     int declaringTypeIndex=kTypeIndexInvalid;
     int genericContainerIndex=-1;
@@ -130,6 +132,31 @@ static Il2CppClass* g_otherPhysical=nullptr;
 static bool g_reversePhysicalCallbacks=false;
 static Il2CppGenericContainer g_container{};
 static Il2CppType* g_declaringType=nullptr;
+// Mock of the real Assembly.cpp unfiltered physical registry. The visitor
+// itself uses the ACTUAL pure Scan header shared with production Assembly.cpp.
+static std::array<const Il2CppAssembly*,1100> g_rawAssemblies{};
+static size_t g_rawCount=0,g_rawVisits=0;
+static bool g_dropRegisteredOnSecond=false;
+static std::array<Il2CppAssembly,1025> g_extraAssemblies{};
+static std::array<Il2CppImage,1025> g_extraImages{};
+class Assembly {
+public:
+    static bool TryVisitRegisteredAotImages(
+        bool(*visit)(const Il2CppImage*,void*),void* context) noexcept {
+        if(!visit)return false;
+        ++g_rawVisits;
+        const size_t count=(g_dropRegisteredOnSecond&&g_rawVisits==2&&g_rawCount>1)
+            ? g_rawCount-1:g_rawCount;
+        return assembly_shadow_registered_aot_scan::Scan(
+            g_rawAssemblies.begin(),g_rawAssemblies.begin()+count,
+            [](const Il2CppImage* image) noexcept -> bool {
+                return image->token<0;
+            },
+            [=](const Il2CppImage* image) noexcept -> bool {
+                return visit(image,context);
+            });
+    }
+};
 
 class MetadataCache {
 public:
@@ -248,8 +275,10 @@ struct Fixture {
         genericInstance.type_argv=genericArgv;
         genericClass.type=&genericBase;
         genericClass.context.class_inst=&genericInstance;
-        image.assembly=&assembly;image.token=0;image.typeCount=1;
-        supportImage.assembly=&supportAssembly;supportImage.token=0;
+        image.assembly=&assembly;assembly.image=&image;
+        image.token=0;image.typeCount=1;
+        supportImage.assembly=&supportAssembly;
+        supportAssembly.image=&supportImage;supportImage.token=0;
         supportImage.typeCount=1;supportImage.handles[0]=&secondary;
         image.handles[0]=&def;
         klass.image=&image;klass.typeMetadataHandle=&def;
