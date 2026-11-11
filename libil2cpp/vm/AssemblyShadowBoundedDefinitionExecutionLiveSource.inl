@@ -188,6 +188,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 if(def->declaringTypeIndex==kTypeIndexInvalid) {
                     ancestryComplete=true;++depth;break;
                 }
+                // A physical AOT image cannot quietly depend on a staged/
+                // interpreter-only metadata index in its defining ancestry.
+                if(hybridclr::metadata::IsInterpreterIndex(def->declaringTypeIndex)) {
+                    c.error=live::Error::UnsupportedMetadataAncestry;return;
+                }
                 const Il2CppType* declaring=GlobalMetadata::GetIl2CppTypeFromIndex(
                     def->declaringTypeIndex);
                 if(!declaring ||
