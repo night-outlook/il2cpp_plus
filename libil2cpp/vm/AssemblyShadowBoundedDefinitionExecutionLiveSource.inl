@@ -1,8 +1,9 @@
 // R03 B2 INACTIVE: restricted, actual VM physical TypeDef -> owned class
 // rows -> original frozen execution/R02 record. Included ONCE by
 // AssemblyShadow.cpp inside il2cpp::vm; NEVER called by a Player or V1 getter.
-// This is deliberately fail-closed for nested/constructed/non-AOT/non-ASCII
-// assembly/type-qualified cases. Neither successful source capture nor an
+// Nested physical metadata definitions are admitted only with a complete,
+// independently owner-checked ancestor chain. Constructed/non-AOT/non-ASCII
+// assembly/qualified cases reject. Neither successful capture nor an
 // unchanged R02/registry read fence proves a global VM epoch or full V2.
 bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     assembly_shadow_physical_membership::Scratch& membership,
@@ -279,7 +280,10 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     }
     if(!sameRegistry ||
        activeBefore!=s_active.load(std::memory_order_acquire) ||
-       stateBefore!=s_state.load(std::memory_order_acquire))
+       stateBefore!=s_state.load(std::memory_order_acquire) ||
+       // Terminal publication may race the physical traversal independently
+       // of s_state and of the opaque execution-registry revision.
+       s_firstFailureV2.status()!=assembly_shadow_first_failure_v2::State::Empty)
         return reject(live::Error::SourceChanged);
 
     frozen::Identity identity{};
@@ -333,7 +337,9 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     const AssemblyShadowState stateAfter=s_state.load(std::memory_order_acquire);
     receipt.activeGenerationAfter=activeAfter?activeAfter->generation:0;
     if(!sameRegistry || activeAfter!=activeBefore ||
-       stateAfter!=stateBefore || !record.Complete())
+       stateAfter!=stateBefore ||
+       s_firstFailureV2.status()!=assembly_shadow_first_failure_v2::State::Empty ||
+       !record.Complete())
         return reject(live::Error::SourceChanged);
 
     membership.Scrub();
