@@ -198,12 +198,16 @@ static void Register(Il2CppClass* klass) {
 
 }} // il2cpp::vm
 
-static int assertions=0,cases=0;
-static void Check(bool value){
+static int assertions=0,cases=0,currentMode=-1;
+static void CheckAt(bool value,int line,const char* expression){
     ++assertions;
-    if(!value){std::fprintf(stderr,"R03 B2 native mock assertion failed: #%d\\n",assertions);
-               std::abort();}
+    if(!value){
+        std::fprintf(stderr,"R03 B2 source-mock assertion failed: mode=%d check=%d line=%d expr=%s\\n",
+                     currentMode,assertions,line,expression);
+        std::abort();
+    }
 }
+#define Check(expression) CheckAt(bool(expression),__LINE__,#expression)
 using namespace il2cpp::vm;
 namespace src=il2cpp::vm::assembly_shadow_bounded_definition_execution;
 namespace rows=::r03_b2_owned_execution_rows;
@@ -279,6 +283,7 @@ enum class Mode {
 
 static void Exercise(Mode mode,src::Error expectedError) {
     ++cases;
+    currentMode=static_cast<int>(mode);
     Fixture fixture;
     s_executionClasses.fill(nullptr);
     s_executionClassCount=0;
