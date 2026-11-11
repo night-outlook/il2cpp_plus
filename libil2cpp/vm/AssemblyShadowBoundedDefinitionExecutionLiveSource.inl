@@ -42,13 +42,14 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         return reject(live::Error::UnsupportedTypeShape);
     receipt.activeGenerationBefore=activeBefore?activeBefore->generation:0;
 
+    bool capturedRegistry=false;
     {
         ExecutionObservationLock lock;
-        if(!membership.Capture(s_executionClasses.data(),s_executionClasses.size(),
+        capturedRegistry=membership.Capture(s_executionClasses.data(),s_executionClasses.size(),
              s_executionClassCount,s_executionRegistryRevision.Current(),
-             s_executionRegistrationWitnesses))
-            return reject(live::Error::InvalidRegistry);
+             s_executionRegistrationWitnesses);
     }
+    if(!capturedRegistry)return reject(live::Error::InvalidRegistry);
     if(!membership.Unique())return reject(live::Error::DuplicateRegistration);
     receipt.registered=membership.Observed();
     receipt.registryRevisionBefore=membership.Revision();
@@ -68,7 +69,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         const ActiveSnapshot* active;
         live::Error error=live::Error::None;
         size_t lookups=0, rejected=0;
-    } context{&membership,&rows,activeBefore};
+    };
+    Context context{};
+    context.membership=&membership;
+    context.rows=&rows;
+    context.active=activeBefore;
 
     // Physically enumerate with the original metadata lock. Only a
     // FirstMatch may be dereferenced, and then only inside this callback.
@@ -295,7 +300,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.ownedBytes=rows.TextBytes();
     receipt.callbackPhysicalMembershipProven=true;
     receipt.restrictedTypeDefSubsetProven=true;
-    receipt.sourceFenceStable=true;
+    receipt.observedRegistryAndCounterFenceStable=true;
     // Deliberately NOT a complete arbitrary TypeKey/field15/VM-epoch claim.
     return true;
 }
