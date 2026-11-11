@@ -42,7 +42,9 @@ struct Receipt {
     // and a physical enumeration in the initial metadata session.
     bool callbackPhysicalMembershipProven=false;
     bool restrictedTypeDefSubsetProven=false;
-    bool sourceFenceStable=false;
+    // Only the registry identities/revision and R02 sample are checked twice.
+    // Cctor, static storage and metadata mutation have no all-VM fence here.
+    bool observedRegistryAndCounterFenceStable=false;
     bool completeArbitraryTypeKeys=false;
     bool completeExecutionDiagnostics=false;
     bool coherentVmEpochProven=false;
@@ -58,7 +60,7 @@ inline bool Reject(Receipt& receipt,Error reason,
     if(receipt.error==Error::None)receipt.error=reason;
     receipt.callbackPhysicalMembershipProven=false;
     receipt.restrictedTypeDefSubsetProven=false;
-    receipt.sourceFenceStable=false;
+    receipt.observedRegistryAndCounterFenceStable=false;
     receipt.completeArbitraryTypeKeys=false;
     receipt.completeExecutionDiagnostics=false;
     rows.Revoke();
