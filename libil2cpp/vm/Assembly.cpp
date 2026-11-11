@@ -14,6 +14,7 @@
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "vm/AssemblyShadowName.h"
 #include "vm/AssemblyShadowBoundedPhysicalAssemblies.h"
+#include "vm/AssemblyShadowRegisteredAotImageScan.h"
 #include "vm/AssemblyShadowMetadataLifetime.h"
 #include "hybridclr/metadata/MetadataModule.h"
 #endif
@@ -281,6 +282,24 @@ namespace vm
         }
         ++s_assemblyVersion;
         return true;
+    }
+
+    bool Assembly::TryVisitRegisteredAotImages(
+        bool (*visit)(const Il2CppImage*,void*),void* context) noexcept
+    {
+        if(!visit)return false;
+        // Source reader owns g_MetadataLock + initial MetadataLifetimeGate
+        // admission; only this method owns s_assemblyLock. This is the
+        // unfiltered physical table (not GetAllAssemblies' logical snapshot).
+        os::FastAutoLock lock(&s_assemblyLock);
+        return assembly_shadow_registered_aot_scan::Scan(
+            s_Assemblies.begin(),s_Assemblies.end(),
+            [](const Il2CppImage* image) noexcept -> bool {
+                return hybridclr::metadata::IsInterpreterImage(image);
+            },
+            [=](const Il2CppImage* image) noexcept -> bool {
+                return visit(image,context);
+            });
     }
 
     bool Assembly::TryCaptureBoundedPhysicalAssemblies(
