@@ -390,9 +390,26 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 if(!count(provenOwner->assembly->aname.name,sourceAssemblyBytes)) {
                     c.error=live::Error::TypeKeyFailed;return false;
                 }
-                bool ok=result.Begin(
-                    {provenOwner->assembly->aname.name,sourceAssemblyBytes},
-                    true,false,false);
+                // V1 canonical assembly normalization is source-of-truth:
+                // ViewName strips path/version/extension and NextFolded uses
+                // original VmStringUtils UTF16 ordinal case folding.
+                const auto canonical=assembly_shadow_detail::ViewName(
+                    provenOwner->assembly->aname.name);
+                if(!canonical.begin||canonical.begin==canonical.end) {
+                    c.error=live::Error::TypeKeyFailed;return false;
+                }
+                size_t canonicalHash=0;
+                if(!assembly_shadow_detail::NameHash(canonical,canonicalHash)) {
+                    c.error=live::Error::TypeKeyFailed;return false;
+                }
+                bool ok=result.BeginCanonicalFolded(
+                    {canonical.begin,static_cast<size_t>(canonical.end-canonical.begin)},
+                    true,false,false,
+                    [](const char*& next,const char* end,uint16_t& first,
+                       uint16_t& second)->bool {
+                        return assembly_shadow_detail::NextFolded(
+                            next,end,first,second);
+                    });
                 for(size_t i=depth;i>0&&ok;--i)
                     ok=result.AddDeclaration(parts[i-1].nameSpace,
                         parts[i-1].simpleName,parts[i-1].arity);
