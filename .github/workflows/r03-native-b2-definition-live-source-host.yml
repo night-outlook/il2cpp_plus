@@ -17,6 +17,7 @@ on:
       - libil2cpp/vm/AssemblyShadowOwnedConstructedTypeKey.h
       - libil2cpp/vm/AssemblyShadowOwnedCompositeTypeKey.h
       - NativeHostTests/AssemblyShadowBoundedDefinitionExecutionSourceMock.cpp
+      - NativeHostTests/AssemblyShadowFoldedNameMock.h
       - NativeHostTests/README.md
   workflow_dispatch:
 permissions:
@@ -59,7 +60,9 @@ jobs:
             libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h \
             libil2cpp/vm/AssemblyShadowOwnedConstructedTypeKey.h \
             libil2cpp/vm/AssemblyShadowOwnedCompositeTypeKey.h \
-            libil2cpp/vm/AssemblyShadowTypeKey.cpp
+            libil2cpp/vm/AssemblyShadowTypeKey.cpp \
+            NativeHostTests/AssemblyShadowFoldedNameMock.h \
+            libil2cpp/vm/AssemblyShadowName.h
           mkdir -p "$RUNNER_TEMP/r03-native-b2-live"
           for buildFlavor in release debug; do
             for profile in strict sanitized; do
@@ -83,7 +86,7 @@ jobs:
           assert j['kind']=='R03B2ActualNativeSourceMock'
           assert j['result']=='PassedActualInlWithMockedVmOnly'
           assert j['buildFlavor']==sys.argv[2]
-          assert j['cases']>=50 and j['assertions']>=640
+          assert j['cases']>=55 and j['assertions']>=650
           assert j['realUnity'] is False
           assert j['physicalClassProvenInRealPlayer'] is False
           assert j['fullCanonicalTypeKeys'] is False
