@@ -1,0 +1,67 @@
+name: R03 B2 bounded constructed generic TypeKey host (no Unity)
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - .github/workflows/r03-native-b2-constructed-typekey-host.yml
+      - libil2cpp/vm/AssemblyShadowOwnedConstructedTypeKey.h
+      - libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h
+      - libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
+      - NativeHostTests/AssemblyShadowOwnedConstructedTypeKeyHost.cpp
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  composed-key:
+    name: Generic key ${{ matrix.os }} ${{ matrix.std }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        std: [c++11, c++17]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            NativeHostTests
+            libil2cpp/vm
+      - name: Compile original native headers and strict + ASan/UBSan host tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          clang++ --version
+          SRC="NativeHostTests/AssemblyShadowOwnedConstructedTypeKeyHost.cpp"
+          shasum -a 256 "$SRC" \
+            libil2cpp/vm/AssemblyShadowOwnedConstructedTypeKey.h \
+            libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h \
+            libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
+          mkdir -p "$RUNNER_TEMP/b2-generic-key"
+          for profile in strict sanitized; do
+            FLAGS=(-std=${{ matrix.std }} -g -O1 -Wall -Wextra -Werror -pedantic)
+            if [ "$profile" = sanitized ]; then
+              FLAGS+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
+            fi
+            clang++ "${FLAGS[@]}" -Ilibil2cpp "$SRC" \
+              -o "$RUNNER_TEMP/b2-generic-key/$profile"
+            ASAN_OPTIONS="detect_leaks=0:abort_on_error=1" \
+              UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
+              "$RUNNER_TEMP/b2-generic-key/$profile" \
+              > "$RUNNER_TEMP/b2-generic-key/$profile.json"
+            cat "$RUNNER_TEMP/b2-generic-key/$profile.json"
+            python3 -B - "$RUNNER_TEMP/b2-generic-key/$profile.json" <<'PY'
+          import json,sys
+          j=json.load(open(sys.argv[1],encoding='utf8'))
+          assert j['kind']=='R03B2ConstructedTypeKeyHost'
+          assert j['result']=='PassedSameImageDefinitionArgumentsOnly'
+          assert j['assertions']>=40
+          assert j['protectedAllocations']==0
+          assert j['realVmSource'] is False
+          assert j['completeCanonicalTypeKeys'] is False
+          assert j['nativeV2TransportImplemented'] is False
+          assert j['runtimeAcceptance'] is False
+          PY
+          done
