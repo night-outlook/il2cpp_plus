@@ -4,7 +4,7 @@
 // A complete Rows object proves owned bytes and ordered rows ONLY. It does
 // NOT prove the data came from an authentic, live Il2CppClass, an actual
 // register witness or a correct canonical metadata TypeKey.
-#include "BoundedOwnedDefinitionTypeKey.h"
+#include "AssemblyShadowOwnedDefinitionTypeKey.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
