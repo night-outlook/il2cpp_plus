@@ -45,6 +45,13 @@ struct Receipt {
     bool registeredImageSetStable=false; // two lock-scoped snapshots only
     bool usedCrossImageArgument=false;
     bool usedUnobservedAotArgumentImage=false;
+    // Diagnostic-only subset coverage. All are false on rejected source.
+    bool usedNestedGenericArgument=false;
+    bool usedPointerArgument=false;
+    bool usedSzArrayArgument=false;
+    bool usedMdArrayArgument=false;
+    bool usedQualifiedArgument=false;
+    size_t compositeNodesVisited=0,maximumCompositeDepth=0;
     uint64_t registryRevisionBefore=0, registryRevisionAfter=0;
     uint64_t activeGenerationBefore=0, activeGenerationAfter=0;
     uint32_t admittedMetadataEpoch=0;
@@ -72,6 +79,13 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.restrictedTypeDefSubsetProven=false;
     receipt.usedCrossImageArgument=false;
     receipt.usedUnobservedAotArgumentImage=false;
+    receipt.usedNestedGenericArgument=false;
+    receipt.usedPointerArgument=false;
+    receipt.usedSzArrayArgument=false;
+    receipt.usedMdArrayArgument=false;
+    receipt.usedQualifiedArgument=false;
+    receipt.compositeNodesVisited=0;
+    receipt.maximumCompositeDepth=0;
     receipt.registeredImageSetStable=false;
     receipt.observedRegistryAndCounterFenceStable=false;
     receipt.completeArbitraryTypeKeys=false;
