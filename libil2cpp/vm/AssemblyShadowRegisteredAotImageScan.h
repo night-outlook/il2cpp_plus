@@ -20,7 +20,11 @@ bool Scan(Iterator first,Iterator last,IsInterpreter isInterpreter,
            assembly->image->assembly!=assembly)return false;
         const auto* image=assembly->image;
         if(isInterpreter(image))continue;
-        if(!image->typeCount || !visit(image))return false;
+        // A registered AOT image with zero TypeDefs is legitimate but cannot
+        // own a metadata definition handle. Omit it without rejecting other
+        // registered images (including the observed source class's image).
+        if(!image->typeCount)continue;
+        if(!visit(image))return false;
     }
     return true;
 }
