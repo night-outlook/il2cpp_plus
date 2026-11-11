@@ -17,6 +17,7 @@
 #include <vector>
 
 static constexpr int kTypeIndexInvalid=-1;
+static constexpr int kGenericContainerIndexInvalid=-1;
 static constexpr int IL2CPP_TYPE_CLASS=18;
 static constexpr int IL2CPP_TYPE_VALUETYPE=17;
 
@@ -122,6 +123,7 @@ public:
         return {def->ns,def->name};
     }
     static Il2CppGenericContainer* GetGenericContainerFromIndex(int index){
+        if(index<kGenericContainerIndexInvalid)std::abort(); // Guard must run first.
         return index<0 ? nullptr : &g_container;
     }
     static uint32_t GetGenericContainerCount(Il2CppGenericContainer* p){
@@ -215,7 +217,8 @@ struct Fixture {
     }
 };
 enum class Mode {
-    Good, GenericDefinition, TwoClassesReversedPhysicalCallback,
+    Good, GenericDefinition, StagedGenericContainer,
+    TwoClassesReversedPhysicalCallback,
     BadImageOwner, ConstructedGeneric,
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
     StagedNestedIndex,
@@ -240,6 +243,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_state.store(AssemblyShadowState::Committed);
     g_physical=&fixture.klass;
     if(mode==Mode::GenericDefinition)fixture.def.genericContainerIndex=0;
+    if(mode==Mode::StagedGenericContainer)fixture.def.genericContainerIndex=-2;
     if(mode==Mode::TwoClassesReversedPhysicalCallback) {
         fixture.image.typeCount=2;
         fixture.image.handles[1]=&fixture.secondary;
@@ -338,6 +342,7 @@ int main(){
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
     Exercise(Mode::Good,src::Error::None);
     Exercise(Mode::GenericDefinition,src::Error::None);
+    Exercise(Mode::StagedGenericContainer,src::Error::UnsupportedMetadataAncestry);
     Exercise(Mode::TwoClassesReversedPhysicalCallback,src::Error::None);
     Exercise(Mode::BadImageOwner,src::Error::InvalidTypeIdentity);
     Exercise(Mode::ConstructedGeneric,src::Error::UnsupportedTypeShape);
