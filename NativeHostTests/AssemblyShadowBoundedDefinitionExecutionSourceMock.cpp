@@ -210,6 +210,7 @@ namespace rows=::r03_b2_owned_execution_rows;
 
 struct Fixture {
     Il2CppAssembly assembly{};
+    Il2CppAssembly supportAssembly{};
     Il2CppTypeDefinition def{};
     Il2CppTypeDefinition outer{};
     Il2CppTypeDefinition secondary{};
@@ -219,11 +220,13 @@ struct Fixture {
     Il2CppGenericInst genericInstance{};
     Il2CppGenericClass genericClass{};
     Il2CppImage image{};
+    Il2CppImage supportImage{};
     Il2CppClass klass{};
     Il2CppClass other{};
     ActiveSnapshot active{};
     Fixture() {
         assembly.aname.name="Methods";
+        supportAssembly.aname.name="Support";
         def.ns="Demo";def.name="Hero";
         outer.ns="Demo";outer.name="Outer";
         secondary.ns="Demo";secondary.name="Friend";
@@ -239,6 +242,8 @@ struct Fixture {
         genericClass.type=&genericBase;
         genericClass.context.class_inst=&genericInstance;
         image.assembly=&assembly;image.token=0;image.typeCount=1;
+        supportImage.assembly=&supportAssembly;supportImage.token=0;
+        supportImage.typeCount=1;supportImage.handles[0]=&secondary;
         image.handles[0]=&def;
         klass.image=&image;klass.typeMetadataHandle=&def;
         klass.namespaze=def.ns;klass.name=def.name;
@@ -256,6 +261,9 @@ struct Fixture {
 enum class Mode {
     Good, GenericDefinition, StagedGenericContainer,
     GenericSameImage, GenericNestedArgument, GenericArgumentMissingOwner,
+    CrossImageGeneric, CrossImageGenericUnobserved,
+    CrossImageGenericAmbiguous, CrossImageInterpreter,
+    CrossImageNestedArgument,
     GenericWrongArity, GenericTooManyArguments,
     GenericQualifiedArgument, GenericConstructedArgument,
     GenericMissingArguments, GenericMissingContext,
@@ -324,6 +332,32 @@ static void Exercise(Mode mode,src::Error expectedError) {
         if(mode==Mode::GenericWrongBase)
             fixture.genericBase.data.typeHandle=&fixture.secondary;
     }
+    if(mode==Mode::CrossImageGeneric ||
+       mode==Mode::CrossImageGenericUnobserved ||
+       mode==Mode::CrossImageGenericAmbiguous ||
+       mode==Mode::CrossImageInterpreter ||
+       mode==Mode::CrossImageNestedArgument) {
+        fixture.def.genericContainerIndex=0;
+        fixture.klass.byval_arg.type=IL2CPP_TYPE_GENERICINST;
+        fixture.klass.byval_arg.data.generic_class=&fixture.genericClass;
+        fixture.klass.generic_class=&fixture.genericClass;
+        fixture.other.image=&fixture.supportImage;
+        g_otherPhysical=&fixture.other;
+        g_reversePhysicalCallbacks=true;
+        if(mode==Mode::CrossImageGenericUnobserved)
+            g_otherPhysical=nullptr; // No actual matched callback owner
+        if(mode==Mode::CrossImageGenericAmbiguous) {
+            fixture.image.typeCount=2;
+            fixture.image.handles[1]=&fixture.secondary; // Same TypeDef in two images
+        }
+        if(mode==Mode::CrossImageInterpreter)
+            fixture.supportImage.token=-2;
+        if(mode==Mode::CrossImageNestedArgument) {
+            fixture.secondary.declaringTypeIndex=3;
+            fixture.supportImage.typeCount=2;
+            fixture.supportImage.handles[1]=&fixture.outer;
+        }
+    }
     if(mode==Mode::StagedGenericContainer)fixture.def.genericContainerIndex=-2;
     if(mode==Mode::TwoClassesReversedPhysicalCallback) {
         fixture.image.typeCount=2;
@@ -358,10 +392,19 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::DuplicateEnumeration)g_duplicate=true;
     if(mode==Mode::BadAssembly)fixture.assembly.aname.name="B\xC3\xA9";
     Register(&fixture.klass);
-    if(mode==Mode::TwoClassesReversedPhysicalCallback)
+    if(mode==Mode::TwoClassesReversedPhysicalCallback ||
+       mode==Mode::CrossImageGeneric ||
+       mode==Mode::CrossImageGenericAmbiguous ||
+       mode==Mode::CrossImageInterpreter ||
+       mode==Mode::CrossImageNestedArgument)
         Register(&fixture.other);
-    const size_t expectedRows=
-        mode==Mode::TwoClassesReversedPhysicalCallback ? 2u : 1u;
+    const bool twoRows=
+        mode==Mode::TwoClassesReversedPhysicalCallback ||
+        mode==Mode::CrossImageGeneric ||
+        mode==Mode::CrossImageGenericAmbiguous ||
+        mode==Mode::CrossImageInterpreter ||
+        mode==Mode::CrossImageNestedArgument;
+    const size_t expectedRows=twoRows?2u:1u;
 
     assembly_shadow_physical_membership::Scratch membership{};
     auto* owned=new rows::Rows();
@@ -382,6 +425,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.restrictedTypeDefSubsetProven);
         Check(receipt.observedRegistryAndCounterFenceStable);
         Check(receipt.admittedMetadataEpoch==1);
+        const bool crossImage=(mode==Mode::CrossImageGeneric ||
+                               mode==Mode::CrossImageNestedArgument);
+        Check(receipt.usedCrossImageArgument==crossImage);
+        Check(receipt.admittedPhysicalImages==(twoRows?2u:1u) ||
+              mode==Mode::TwoClassesReversedPhysicalCallback);
         Check(owned->Complete() && owned->Count()==expectedRows &&
               record->Complete());
         Check(!receipt.completeArbitraryTypeKeys);
@@ -390,12 +438,26 @@ static void Exercise(Mode mode,src::Error expectedError) {
         const std::string body(record->Data(),record->Bytes());
         const char* key=(mode==Mode::GenericDefinition ||
                          mode==Mode::GenericSameImage ||
-                         mode==Mode::GenericNestedArgument)
+                         mode==Mode::GenericNestedArgument ||
+                         mode==Mode::CrossImageGeneric ||
+                         mode==Mode::CrossImageNestedArgument)
             ? "type(7:methods/4:Demo/4:Hero@2)"
             : mode==Mode::NestedType
                 ? "type(7:methods/4:Demo/5:Outer@0/4:Demo/4:Hero@0)"
                 : "type(7:methods/4:Demo/4:Hero@0)";
         Check(body.find(key)!=std::string::npos);
+        if(mode==Mode::CrossImageGeneric ||
+           mode==Mode::CrossImageNestedArgument) {
+            const std::string arg=mode==Mode::CrossImageNestedArgument ?
+                "type(7:support/4:Demo/5:Outer@0/4:Demo/6:Friend@0)" :
+                "type(7:support/4:Demo/6:Friend@0)";
+            const std::string canonical="generic(type(7:methods/4:Demo/4:Hero@2),"+
+                std::to_string(arg.size())+":"+arg+","+
+                std::to_string(arg.size())+":"+arg+")";
+            Check(body.find(canonical)!=std::string::npos);
+            Check(body.find("\"logicalAssembly\":\"Support\"")!=std::string::npos);
+            Check(receipt.admittedPhysicalImages==2);
+        }
         if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument) {
             const std::string arg=mode==Mode::GenericNestedArgument ?
                 "type(7:methods/4:Demo/5:Outer@0/4:Demo/6:Friend@0)" :
@@ -443,6 +505,11 @@ int main(){
     Exercise(Mode::GenericDefinition,src::Error::None);
     Exercise(Mode::GenericSameImage,src::Error::None);
     Exercise(Mode::GenericNestedArgument,src::Error::None);
+    Exercise(Mode::CrossImageGeneric,src::Error::None);
+    Exercise(Mode::CrossImageGenericUnobserved,src::Error::UnadmittedMetadataOwner);
+    Exercise(Mode::CrossImageGenericAmbiguous,src::Error::AmbiguousMetadataOwner);
+    Exercise(Mode::CrossImageInterpreter,src::Error::UnsupportedImage);
+    Exercise(Mode::CrossImageNestedArgument,src::Error::None);
     Exercise(Mode::GenericArgumentMissingOwner,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::GenericWrongArity,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericTooManyArguments,src::Error::UnsupportedTypeShape);
