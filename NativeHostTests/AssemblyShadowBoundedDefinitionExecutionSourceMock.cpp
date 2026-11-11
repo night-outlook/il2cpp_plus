@@ -578,6 +578,23 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.admittedMetadataEpoch==1);
         Check(receipt.registeredImageSetStable);
         Check(receipt.registeredPhysicalAotImages>=receipt.admittedPhysicalImages);
+        const bool nestedGeneric=(mode==Mode::GenericConstructedArgument);
+        const bool pointerArgument=(mode==Mode::GenericPointerArgument ||
+                                    mode==Mode::GenericQualifiedPointerArgument);
+        const bool szArrayArgument=(mode==Mode::GenericSzArrayArgument);
+        const bool mdArrayArgument=(mode==Mode::GenericArrayArgument);
+        const bool qualifiedArgument=(mode==Mode::GenericQualifiedArgument ||
+                                      mode==Mode::GenericQualifiedPointerArgument);
+        Check(receipt.usedNestedGenericArgument==nestedGeneric);
+        Check(receipt.usedPointerArgument==pointerArgument);
+        Check(receipt.usedSzArrayArgument==szArrayArgument);
+        Check(receipt.usedMdArrayArgument==mdArrayArgument);
+        Check(receipt.usedQualifiedArgument==qualifiedArgument);
+        if(nestedGeneric||pointerArgument||szArrayArgument||mdArrayArgument)
+            Check(receipt.maximumCompositeDepth>0);
+        if(receipt.compositeNodesVisited)
+            Check(receipt.compositeNodesVisited>=2);
+
         const bool crossImage=(mode==Mode::CrossImageGeneric ||
                                mode==Mode::CrossImageNestedArgument ||
                                mode==Mode::CrossImageGenericUnobserved);
@@ -673,6 +690,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!record->Complete() && record->Data()==nullptr);
         Check(!owned->Complete() && owned->Count()==0);
         Check(!receipt.callbackPhysicalMembershipProven);
+        Check(!receipt.usedNestedGenericArgument &&
+              !receipt.usedPointerArgument && !receipt.usedSzArrayArgument &&
+              !receipt.usedMdArrayArgument && !receipt.usedQualifiedArgument);
+
         Check(!receipt.completeExecutionDiagnostics && !receipt.runtimeAcceptance);
     }
     delete record;
