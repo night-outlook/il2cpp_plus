@@ -370,6 +370,15 @@ static void Exercise(Mode mode,src::Error expectedError) {
                 ? "type(7:methods/4:Demo/5:Outer@0/4:Demo/4:Hero@0)"
                 : "type(7:methods/4:Demo/4:Hero@0)";
         Check(body.find(key)!=std::string::npos);
+        if(mode==Mode::GenericSameImage) {
+            const std::string arg="type(7:methods/4:Demo/6:Friend@0)";
+            const std::string generic="generic("+
+                std::string("type(7:methods/4:Demo/4:Hero@2),")+
+                std::to_string(arg.size())+":"+arg+","+
+                std::to_string(arg.size())+":"+arg+")";
+            Check(body.find(generic)!=std::string::npos);
+            Check(body.find("\"typeKey\":\"generic(")!=std::string::npos);
+        }
         Check(body.find("\"logicalAssembly\":\"Methods\"")!=std::string::npos);
         if(mode==Mode::TwoClassesReversedPhysicalCallback) {
             Check(body.find("type(7:methods/4:Demo/6:Friend@0)")!=
@@ -404,6 +413,14 @@ int main(){
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
     Exercise(Mode::Good,src::Error::None);
     Exercise(Mode::GenericDefinition,src::Error::None);
+    Exercise(Mode::GenericSameImage,src::Error::None);
+    Exercise(Mode::GenericArgumentMissingOwner,src::Error::InvalidTypeIdentity);
+    Exercise(Mode::GenericWrongArity,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericQualifiedArgument,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericConstructedArgument,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericMissingArguments,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericBadMethodContext,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::GenericWrongBase,src::Error::UnsupportedTypeShape);
     Exercise(Mode::StagedGenericContainer,src::Error::UnsupportedMetadataAncestry);
     Exercise(Mode::TwoClassesReversedPhysicalCallback,src::Error::None);
     Exercise(Mode::BadImageOwner,src::Error::InvalidTypeIdentity);
