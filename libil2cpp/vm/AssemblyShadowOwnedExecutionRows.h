@@ -6,6 +6,7 @@
 // register witness or a correct canonical metadata TypeKey.
 #include "AssemblyShadowOwnedDefinitionTypeKey.h"
 #include "AssemblyShadowOwnedConstructedTypeKey.h"
+#include "AssemblyShadowOwnedCompositeTypeKey.h"
 #include <type_traits>
 #include <array>
 #include <cstddef>
@@ -134,6 +135,7 @@ public:
         static_assert(
             std::is_same<TrustedKey,::r03_b2_owned_definition_key::Capture>::value ||
             std::is_same<TrustedKey,::r03_b2_owned_constructed_type_key::Capture>::value,
+            std::is_same<TrustedKey,::r03_b2_owned_composite_type_key::Capture>::value ||
             "Only canonical owned definition/constructed TypeKeys may enter rows");
         if(stage_!=Stage::Collecting)return Fail(Error::NotComplete);
         if(count_>=expected_)return Fail(Error::CountMismatch);
