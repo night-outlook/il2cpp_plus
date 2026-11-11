@@ -5,6 +5,8 @@
 // NOT prove the data came from an authentic, live Il2CppClass, an actual
 // register witness or a correct canonical metadata TypeKey.
 #include "AssemblyShadowOwnedDefinitionTypeKey.h"
+#include "AssemblyShadowOwnedConstructedTypeKey.h"
+#include <type_traits>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -125,9 +127,14 @@ public:
     // Must be called synchronously while each authenticated owned TypeKey
     // and original class-field primitive is still valid. Registration Source
     // here is a copied role; external VM proof is mandatory.
+    template<class TrustedKey>
     bool Add(size_t registrationSlot,Source source,ByteView logicalAssembly,
-             const Capture& immutableTypeKey,ByteView staticPointer,
+             const TrustedKey& immutableTypeKey,ByteView staticPointer,
              const Flags& fields) noexcept {
+        static_assert(
+            std::is_same<TrustedKey,::r03_b2_owned_definition_key::Capture>::value ||
+            std::is_same<TrustedKey,::r03_b2_owned_constructed_type_key::Capture>::value,
+            "Only canonical owned definition/constructed TypeKeys may enter rows");
         if(stage_!=Stage::Collecting)return Fail(Error::NotComplete);
         if(count_>=expected_)return Fail(Error::CountMismatch);
         if(registrationSlot>=kMaximumRegistrationSlots)return Fail(Error::InvalidSlot);
