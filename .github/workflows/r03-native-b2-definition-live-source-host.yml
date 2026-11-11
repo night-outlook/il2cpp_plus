@@ -5,6 +5,9 @@ on:
     paths:
       - .github/workflows/r03-native-b2-definition-live-source-host.yml
       - libil2cpp/vm/AssemblyShadow.cpp
+      - libil2cpp/vm/Assembly.cpp
+      - libil2cpp/vm/Assembly.h
+      - libil2cpp/vm/AssemblyShadowRegisteredAotImageScan.h
       - libil2cpp/vm/AssemblyShadow.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h
       - libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h
@@ -41,8 +44,12 @@ jobs:
           git rev-parse HEAD
           clang++ --version
           SRC="NativeHostTests/AssemblyShadowBoundedDefinitionExecutionSourceMock.cpp"
-          shasum -a 256 libil2cpp/vm/AssemblyShadow.cpp libil2cpp/vm/AssemblyShadow.h
+          shasum -a 256 libil2cpp/vm/AssemblyShadow.cpp libil2cpp/vm/AssemblyShadow.h \
+            libil2cpp/vm/Assembly.cpp libil2cpp/vm/Assembly.h \
+            libil2cpp/vm/AssemblyShadowRegisteredAotImageScan.h
           grep -Fqx '#include "vm/GlobalMetadataFileInternals.h"' libil2cpp/vm/AssemblyShadow.cpp
+          grep -Fq 'Assembly::TryVisitRegisteredAotImages(' libil2cpp/vm/Assembly.cpp
+          grep -Fq 'assembly_shadow_registered_aot_scan::Scan(' libil2cpp/vm/Assembly.cpp
           shasum -a 256 "$SRC" \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h \
@@ -74,7 +81,7 @@ jobs:
           assert j['kind']=='R03B2ActualNativeSourceMock'
           assert j['result']=='PassedActualInlWithMockedVmOnly'
           assert j['buildFlavor']==sys.argv[2]
-          assert j['cases']>=37 and j['assertions']>=396
+          assert j['cases']>=41 and j['assertions']>=463
           assert j['realUnity'] is False
           assert j['physicalClassProvenInRealPlayer'] is False
           assert j['fullCanonicalTypeKeys'] is False
