@@ -2,9 +2,10 @@
 // rows -> original frozen execution/R02 record. Included ONCE by
 // AssemblyShadow.cpp inside il2cpp::vm; NEVER called by a Player or V1 getter.
 // Nested physical metadata definitions require an owner-checked ancestry.
-// Limited constructed GENERICINST is admitted only if every AOT TypeDef arg
-// belongs to a bounded image discovered from a matched observed class in the
-// same initial-session metadata-lock scope. Unmatched/cross-epoch images,
+// Limited GENERICINST AOT argument owners now come from the raw physical
+// assembly table (registered AOT images), even when no observed class exists
+// in that argument's image. Both physical registry visits and the two class
+// enumerations run under the initial-session metadata-lock scope. Unregistered,
 // recursive/open/qualified/array and non-ASCII assembly forms reject.
 // Neither two enumerations nor unchanged R02/registry fences prove an
 // atomic VM epoch or complete V2 execution diagnostics.
@@ -88,8 +89,10 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         const ActiveSnapshot* active;
         live::Error error=live::Error::None;
         size_t lookups=0, rejected=0;
-        assembly_shadow_observed_images::Inventory<64>* images=nullptr;
+        assembly_shadow_observed_images::Inventory<live::kMaximumRegisteredAotImages>* images=nullptr;
+        assembly_shadow_observed_images::Inventory<64>* observedImages=nullptr;
         bool usedCrossImageArgument=false;
+        bool usedUnobservedAotArgumentImage=false;
     };
     Context context{};
     context.membership=&membership;
@@ -103,7 +106,30 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     {
         os::FastAutoLock metadataLock(&g_MetadataLock);
         assembly_shadow_observed_images::Inventory<64> imageInventory;
-        context.images=&imageInventory;
+        assembly_shadow_observed_images::Inventory<
+            live::kMaximumRegisteredAotImages> registeredAotImages;
+        // This is the *raw physical* assembly table, NOT the logical
+        // Assembly::GetAllAssemblies visibility-filtered snapshot. The
+        // original s_assemblyLock is held during each synchronous visit.
+        struct AotRegistrySink {
+            assembly_shadow_observed_images::Inventory<
+                live::kMaximumRegisteredAotImages>* inventory;
+        } registrySink{&registeredAotImages};
+        auto readAotRegistry=[](const Il2CppImage* img,void* raw)->bool {
+            AotRegistrySink& sink=*static_cast<AotRegistrySink*>(raw);
+            if(!img || !img->typeCount ||
+               img->typeCount>live::kMaximumAotImageTypes)return false;
+            return sink.inventory->AddFromRegisteredAssembly(img);
+        };
+        if(!Assembly::TryVisitRegisteredAotImages(readAotRegistry,&registrySink))
+            return reject(registeredAotImages.Healthy()?
+                live::Error::UnadmittedMetadataOwner:
+                live::Error::PhysicalImageLimit);
+        if(!registeredAotImages.Healthy() || !registeredAotImages.Count())
+            return reject(live::Error::UnadmittedMetadataOwner);
+        receipt.registeredPhysicalAotImages=registeredAotImages.Count();
+        context.images=&registeredAotImages;
+        context.observedImages=&imageInventory;
         // Physical iterator #1 is observation-only: no output rows and no
         // metadata handles are retained. A class is dereferenced only after
         // it matches one of the authenticated observed registry identities.
@@ -111,10 +137,13 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         struct DiscoveryContext {
             physical::Scratch* matched;
             assembly_shadow_observed_images::Inventory<64>* images;
+            const assembly_shadow_observed_images::Inventory<
+                live::kMaximumRegisteredAotImages>* registry;
             live::Error error=live::Error::None;
         } inventoryContext{};
         inventoryContext.matched=&discovery;
         inventoryContext.images=&imageInventory;
+        inventoryContext.registry=&registeredAotImages;
         il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
             DiscoveryContext& d=*static_cast<DiscoveryContext*>(raw);
             if(d.error!=live::Error::None)return;
@@ -132,6 +161,9 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                hybridclr::metadata::IsInterpreterIndex(img->token) ||
                !img->typeCount || img->typeCount>live::kMaximumAotImageTypes) {
                 d.error=live::Error::UnsupportedImage;return;
+            }
+            if(!d.registry->Contains(img)) {
+                d.error=live::Error::UnadmittedMetadataOwner;return;
             }
             if(!d.images->AddFromMatchedCallback(img))
                 d.error=live::Error::PhysicalImageLimit;
@@ -388,6 +420,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                         ++c.rejected;return;
                     }
                     if(argumentOwner!=image)c.usedCrossImageArgument=true;
+                    if(!c.observedImages->Contains(argumentOwner))
+                        c.usedUnobservedAotArgumentImage=true;
                     if(!genericKey.AddArgument(argumentKey)) {
                         c.error=live::Error::TypeKeyFailed;return;
                     }
@@ -438,15 +472,26 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 c.error=live::Error::RowsFailed;return;
             }
         },&context);
-        // The borrowed image inventory is destroyed (and scrubbed) while
-        // g_MetadataLock is still held. Never retain even its address in the
-        // callback context after the physical enumeration finishes.
+        // Revisit the SAME raw physical registry under the assembly lock.
+        // Ordered identity equality is an observational source fence only,
+        // not a VM-wide epoch, ABA barrier or class-cctor mutation lock.
+        assembly_shadow_observed_images::Inventory<
+            live::kMaximumRegisteredAotImages> registeredAfter;
+        AotRegistrySink afterSink{&registeredAfter};
+        if(!Assembly::TryVisitRegisteredAotImages(readAotRegistry,&afterSink) ||
+           !registeredAfter.SameOrderedImageSet(registeredAotImages))
+            return reject(live::Error::SourceChanged);
+        receipt.registeredImageSetStable=true;
+        // Borrowed metadata pointers are scrubbed while g_MetadataLock is
+        // still held. Nothing escapes to the frozen writer after this scope.
         context.images=nullptr;
+        context.observedImages=nullptr;
     }
 
     receipt.metadataLookups=context.lookups;
     receipt.rejectedUnsupported=context.rejected;
     receipt.usedCrossImageArgument=context.usedCrossImageArgument;
+    receipt.usedUnobservedAotArgumentImage=context.usedUnobservedAotArgumentImage;
     receipt.physicallyMatched=membership.Matched();
     if(context.error!=live::Error::None)return reject(context.error);
     if(!membership.EnumeratorHealthy() || !membership.FullyMatched() ||
