@@ -15,7 +15,11 @@ struct Il2CppObject;
 struct Il2CppType;
 struct MethodInfo;
 
+namespace r03_b2_owned_execution_rows { class Rows; }
+
 namespace il2cpp { namespace vm {
+namespace assembly_shadow_bounded_definition_execution { struct Receipt; }
+namespace assembly_shadow_physical_membership { class Scratch; }
 namespace assembly_shadow_bounded_transaction { class Capture; }
 namespace assembly_shadow_bounded_inventory { class Capture; }
 namespace assembly_shadow_bounded_first_use { class Capture; }
@@ -118,6 +122,20 @@ public:
     static bool TryCaptureBoundedEmptyExecutionLive(
         assembly_shadow_frozen_execution_record::Record& output,
         assembly_shadow_bounded_execution_empty_live::Receipt& receipt);
+    // R03 B2 INACTIVE restricted physical-AOT *definition* source. It joins
+    // a real matched class-enumerator callback to a process-lifetime
+    // registration witness under initial-session metadata admission and
+    // copies original execution fields into caller-owned fixed buffers.
+    // Rejects constructed/nested/non-AOT/qualified and unproven metadata,
+    // and never exposes a class pointer after the callback.
+    // This does NOT replace the original live execution diagnostics getter,
+    // implement full canonical TypeKey coverage, authorize a Player, or
+    // establish a coherent VM-wide epoch.
+    static bool TryCaptureBoundedDefinitionExecutionLive(
+        assembly_shadow_physical_membership::Scratch& membership,
+        ::r03_b2_owned_execution_rows::Rows& rows,
+        assembly_shadow_frozen_execution_record::Record& record,
+        assembly_shadow_bounded_definition_execution::Receipt& receipt);
     // P1 INACTIVE: observable opaque class identities without metadata dereference.
     // Never returns pointers, type keys, JSON, or a VM-coherence claim.
     static bool TryCaptureOpaqueExecutionInventory(
