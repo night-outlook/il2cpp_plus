@@ -94,6 +94,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         assembly_shadow_observed_images::Inventory<64>* observedImages=nullptr;
         bool usedCrossImageArgument=false;
         bool usedUnobservedAotArgumentImage=false;
+        bool usedUnicodeAssemblyFold=false;
         bool usedNestedGenericArgument=false;
         bool usedPointerArgument=false;
         bool usedSzArrayArgument=false;
@@ -414,6 +415,12 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     ok=result.AddDeclaration(parts[i-1].nameSpace,
                         parts[i-1].simpleName,parts[i-1].arity);
                 if(ok)ok=result.Seal();
+                if(ok) {
+                    for(const char* pos=canonical.begin;pos!=canonical.end;++pos)
+                        if(static_cast<unsigned char>(*pos)>=0x80u) {
+                            c.usedUnicodeAssemblyFold=true;break;
+                        }
+                }
                 if(!ok)c.error=live::Error::TypeKeyFailed;
                 return ok;
             };
@@ -642,6 +649,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.rejectedUnsupported=context.rejected;
     receipt.usedCrossImageArgument=context.usedCrossImageArgument;
     receipt.usedUnobservedAotArgumentImage=context.usedUnobservedAotArgumentImage;
+    receipt.usedUnicodeAssemblyFold=context.usedUnicodeAssemblyFold;
     receipt.usedNestedGenericArgument=context.usedNestedGenericArgument;
     receipt.usedPointerArgument=context.usedPointerArgument;
     receipt.usedSzArrayArgument=context.usedSzArrayArgument;
