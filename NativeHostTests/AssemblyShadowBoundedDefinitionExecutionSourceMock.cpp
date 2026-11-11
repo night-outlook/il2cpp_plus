@@ -121,6 +121,8 @@ namespace assembly_shadow_metadata_lifetime {
 }
 static int g_MetadataLock=0;
 static bool g_emitPhysical=true, g_duplicate=false;
+static bool g_dropSecondPass=false;
+static unsigned g_physicalPasses=0;
 static bool g_changeRevision=false, g_changeCounter=false;
 static bool g_publishB1DuringEnumeration=false, g_midB1Published=false;
 static Il2CppClass* g_physical=nullptr;
@@ -155,7 +157,8 @@ public:
 };
 static bool Interpreter(const Il2CppAssembly* owner){return owner->interpreter;}
 static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* context){
-    if(g_emitPhysical) {
+    ++g_physicalPasses;
+    if(g_emitPhysical && !(g_dropSecondPass && g_physicalPasses==2)) {
         if(g_reversePhysicalCallbacks && g_otherPhysical)
             callback(g_otherPhysical,context);
         callback(g_physical,context);
@@ -277,6 +280,7 @@ enum class Mode {
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
     StagedNestedIndex,
     UnsupportedImage, SourceChanged, CounterChanged,
+    MissingSecondPass,
     TerminalDuringCapture,
     MissingEnumeration, DuplicateEnumeration, BadAssembly
 };
@@ -290,6 +294,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_executionRegistryRevision=Revision{};
     s_executionRegistrationWitnesses=Table{};
     g_emitPhysical=true;g_duplicate=false;
+    g_physicalPasses=0;g_dropSecondPass=false;
     g_changeRevision=false;g_changeCounter=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
@@ -394,6 +399,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::CounterChanged)g_changeCounter=true;
     if(mode==Mode::TerminalDuringCapture)g_publishB1DuringEnumeration=true;
     if(mode==Mode::MissingEnumeration)g_emitPhysical=false;
+    if(mode==Mode::MissingSecondPass)g_dropSecondPass=true;
     if(mode==Mode::DuplicateEnumeration)g_duplicate=true;
     if(mode==Mode::BadAssembly)fixture.assembly.aname.name="B\xC3\xA9";
     Register(&fixture.klass);
@@ -537,6 +543,7 @@ int main(){
     Exercise(Mode::SourceChanged,src::Error::SourceChanged);
     Exercise(Mode::CounterChanged,src::Error::CounterChanged);
     Exercise(Mode::MissingEnumeration,src::Error::UnmatchedClass);
+    Exercise(Mode::MissingSecondPass,src::Error::UnmatchedClass);
     Exercise(Mode::DuplicateEnumeration,src::Error::BadPhysicalEnumeration);
     Exercise(Mode::BadAssembly,src::Error::TypeKeyFailed);
     // Original B1 producer can publish a first terminal error independently
