@@ -123,15 +123,16 @@ public:
     static bool TryCaptureBoundedEmptyExecutionLive(
         assembly_shadow_frozen_execution_record::Record& output,
         assembly_shadow_bounded_execution_empty_live::Receipt& receipt);
-    // R03 B2 INACTIVE restricted physical-AOT *definition* source. It joins
-    // a real matched class-enumerator callback to a process-lifetime
-    // registration witness under initial-session metadata admission and
-    // copies original execution fields into caller-owned fixed buffers.
-    // Rejects constructed/nested/non-AOT/qualified and unproven metadata,
-    // and never exposes a class pointer after the callback.
-    // This does NOT replace the original live execution diagnostics getter,
-    // implement full canonical TypeKey coverage, authorize a Player, or
-    // establish a coherent VM-wide epoch.
+    // R03 B2 INACTIVE restricted physical-AOT execution TypeKey source.
+    // A genuine matched class callback is bound to a process-lifetime
+    // registration witness under initial-session metadata admission.
+    // Supported bounded physical AOT TypeDef/composite/Unicode/primitive
+    // leaves require registered AOT owner proof AND the same first-emplace
+    // metadata owner as the original V1 token-valid physical assembly scan,
+    // including any earlier interpreter image. Conflicts fail closed.
+    // Never returns a live class pointer or modifies the original getter.
+    // Source-local first-owner parity is NOT complete V1 field15, a coherent
+    // VM-wide epoch, postterminal source or Player/V2 authority.
     static bool TryCaptureBoundedDefinitionExecutionLive(
         assembly_shadow_physical_membership::Scratch& membership,
         ::r03_b2_owned_execution_rows::Rows& rows,
