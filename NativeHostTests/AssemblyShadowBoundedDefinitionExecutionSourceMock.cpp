@@ -882,8 +882,50 @@ static void TestPhysicalImageInventoryBounds() {
     Check(bounded.Get<Il2CppImage>(0)==nullptr);
 }
 
+// The original Class.cpp uses ASSERT for absent il2cpp_defaults pointers.
+// Our actual production Peek must return null instead of aborting.
+static unsigned primitivePeekCases=0;
+static void TestAssertFreePrimitivePeekMapping(){
+    namespace defaults=il2cpp::vm::assembly_shadow_existing_primitive_defaults;
+    struct TestCase {Il2CppTypeEnum code;Il2CppClass* Il2CppDefaults::*slot;};
+    const TestCase table[]={
+        {IL2CPP_TYPE_OBJECT,&Il2CppDefaults::object_class},
+        {IL2CPP_TYPE_VOID,&Il2CppDefaults::void_class},
+        {IL2CPP_TYPE_BOOLEAN,&Il2CppDefaults::boolean_class},
+        {IL2CPP_TYPE_CHAR,&Il2CppDefaults::char_class},
+        {IL2CPP_TYPE_I1,&Il2CppDefaults::sbyte_class},
+        {IL2CPP_TYPE_U1,&Il2CppDefaults::byte_class},
+        {IL2CPP_TYPE_I2,&Il2CppDefaults::int16_class},
+        {IL2CPP_TYPE_U2,&Il2CppDefaults::uint16_class},
+        {IL2CPP_TYPE_I4,&Il2CppDefaults::int32_class},
+        {IL2CPP_TYPE_U4,&Il2CppDefaults::uint32_class},
+        {IL2CPP_TYPE_I,&Il2CppDefaults::int_class},
+        {IL2CPP_TYPE_U,&Il2CppDefaults::uint_class},
+        {IL2CPP_TYPE_I8,&Il2CppDefaults::int64_class},
+        {IL2CPP_TYPE_U8,&Il2CppDefaults::uint64_class},
+        {IL2CPP_TYPE_R4,&Il2CppDefaults::single_class},
+        {IL2CPP_TYPE_R8,&Il2CppDefaults::double_class},
+        {IL2CPP_TYPE_STRING,&Il2CppDefaults::string_class},
+        {IL2CPP_TYPE_TYPEDBYREF,&Il2CppDefaults::typed_reference_class},
+        {IL2CPP_TYPE_IL2CPP_TYPE_INDEX,&Il2CppDefaults::systemtype_class},
+    };
+    Il2CppClass sentinel{};
+    for(const TestCase& test:table){
+        il2cpp_defaults=Il2CppDefaults{};
+        Check(defaults::Peek(test.code)==nullptr);
+        il2cpp_defaults.*(test.slot)=&sentinel;
+        Check(defaults::Peek(test.code)==&sentinel);
+        ++primitivePeekCases;
+    }
+    il2cpp_defaults=Il2CppDefaults{};
+    Check(defaults::Peek(static_cast<Il2CppTypeEnum>(42))==nullptr);
+    Check(defaults::Peek(static_cast<Il2CppTypeEnum>(IL2CPP_TYPE_GENERICINST))==nullptr);
+    Check(defaults::Peek(static_cast<Il2CppTypeEnum>(IL2CPP_TYPE_CLASS))==nullptr);
+    ++primitivePeekCases;
+}
 int main(){
     TestPhysicalImageInventoryBounds();
+    TestAssertFreePrimitivePeekMapping();
     g_container.type_argc=2;
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
     Exercise(Mode::Good,src::Error::None);
@@ -971,7 +1013,7 @@ int main(){
 #endif
     std::printf("{\"kind\":\"R03B2ActualNativeSourceMock\","
         "\"result\":\"PassedActualInlWithMockedVmOnly\","
-        "\"buildFlavor\":\"%s\",\"cases\":%d,\"assertions\":%d,\"realUnity\":false,"
+        "\"buildFlavor\":\"%s\",\"cases\":%d,\"assertions\":%d,\"primitivePeekCases\":20,\"realUnity\":false,"
         "\"physicalClassProvenInRealPlayer\":false,"
         "\"fullCanonicalTypeKeys\":false,\"nativeV2TransportImplemented\":false,"
         "\"runtimeAcceptance\":false,\"R03Accepted\":false}\n",flavor,cases,assertions);
