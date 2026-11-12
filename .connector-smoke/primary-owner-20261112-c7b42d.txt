@@ -1,0 +1,5 @@
+Disposable GitHub Connector write smoke test for Primary Implementation Owner.
+Repository: night-outlook/il2cpp_plus
+Base: codex/assembly-shadow-r01b-h1@e5f8eebca1263181ed3fca49e84a1cf73f40b90b
+Date: 2026-11-12
+Disposable branch only; no product code changes.
