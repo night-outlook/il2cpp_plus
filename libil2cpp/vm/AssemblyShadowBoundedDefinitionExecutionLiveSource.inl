@@ -563,17 +563,16 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                             return true;
                         }
                         default: {
-                            // The original V1 default branch uses
-                            // Class::FromIl2CppTypeEnum(type->type), a switch
-                            // over preinitialized il2cpp_defaults pointers.
-                            // It does not create a class or populate caches.
-                            // The returned class MUST independently pass
-                            // registered physical AOT TypeDef ownership.
-                            // VAR/MVAR and unsupported tags return null and
-                            // still fail closed, matching original metadata-
-                            // only VAR/MVAR rejection without class creation.
+                            // Mirror the original Class.cpp primitive
+                            // default switch without its ASSERT. If a
+                            // default has not been initialized, fail closed
+                            // instead of aborting under IL2CPP_DEBUG.
+                            // Exact mapping is compared against original
+                            // Class.cpp by the four-fork source gate.
+                            // No class creation; VAR/MVAR return null.
                             const Il2CppClass* primitive=
-                                Class::FromIl2CppTypeEnum(value->type);
+                                assembly_shadow_existing_primitive_defaults::Peek(
+                                    value->type);
                             if(!primitive || !primitive->image ||
                                !primitive->image->assembly ||
                                !primitive->typeMetadataHandle ||
