@@ -57,6 +57,16 @@ namespace vm
         // managed callbacks or invoke user code.
         static bool TryVisitRegisteredAotImages(
             bool (*visit)(const Il2CppImage*,void*),void* context) noexcept;
+        // R03 B2 INACTIVE: mirrors the original V1 execution getter's
+        // CaptureShadowEnumeration/CopyValidAssemblies token-valid physical
+        // assembly enumeration INCLUDING interpreter and zero-TypeDef images.
+        // No logical shadow mapping; no class creation or heap allocation.
+        // Caller holds g_MetadataLock and initial metadata Reader; image
+        // is borrowed only for this synchronous callback under s_assemblyLock.
+        // This does not prove one coherent VM epoch or postterminal lifetime.
+        static bool TryVisitOriginalV1ExecutionImages(
+            bool (*visit)(const Il2CppImage*,void*),void* context) noexcept;
+
         // P1 additive, inactive: visit the original physical registry under
         // s_assemblyLock and synchronously deep-copy owned name/physical-kind
         // bytes. Caller must preallocate Capture while healthy. No VM type
