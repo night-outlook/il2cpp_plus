@@ -356,6 +356,7 @@ enum class Mode {
     PrimitiveDefault, PrimitiveQualified, PrimitiveMissingDefault,
     PrimitiveUnregistered, PrimitiveWrongHandle, PrimitiveWrongImage,
     PrimitiveUnsupportedTag, PrimitiveAmbiguousOwner, PrimitiveGenericArity,
+    PrimitiveClassNameMismatch, PrimitiveClassNested,
     GenericPointerArgument, GenericSzArrayArgument,
     GenericArrayArgument, GenericQualifiedPointerArgument,
     GenericArrayBadSizes, GenericArrayMissingElement,
@@ -408,6 +409,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
        mode==Mode::PrimitiveUnsupportedTag ||
        mode==Mode::PrimitiveAmbiguousOwner ||
        mode==Mode::PrimitiveGenericArity ||
+       mode==Mode::PrimitiveClassNameMismatch ||
+       mode==Mode::PrimitiveClassNested ||
        mode==Mode::GenericQualifiedArgument ||
        mode==Mode::GenericConstructedArgument ||
        mode==Mode::GenericPointerArgument ||
@@ -530,7 +533,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
         mode==Mode::PrimitiveMissingDefault || mode==Mode::PrimitiveUnregistered ||
         mode==Mode::PrimitiveWrongHandle || mode==Mode::PrimitiveWrongImage ||
         mode==Mode::PrimitiveUnsupportedTag || mode==Mode::PrimitiveAmbiguousOwner ||
-        mode==Mode::PrimitiveGenericArity;
+        mode==Mode::PrimitiveGenericArity ||
+        mode==Mode::PrimitiveClassNameMismatch ||
+        mode==Mode::PrimitiveClassNested;
     if(primitiveMode) {
         fixture.genericArg1.type=IL2CPP_TYPE_I4;
         fixture.genericArg1.data.typeHandle=nullptr;
@@ -552,6 +557,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
         }
         if(mode==Mode::PrimitiveGenericArity)
             fixture.primitiveDefinition.genericContainerIndex=0;
+        if(mode==Mode::PrimitiveClassNameMismatch)
+            fixture.primitiveClass.name="Other";
+        if(mode==Mode::PrimitiveClassNested)
+            fixture.primitiveClass.declaringType=&fixture.outer;
     }
     if(mode==Mode::StagedGenericContainer)fixture.def.genericContainerIndex=-2;
     if(mode==Mode::TwoClassesReversedPhysicalCallback) {
@@ -850,6 +859,8 @@ int main(){
     Exercise(Mode::PrimitiveUnsupportedTag,src::Error::UnsupportedTypeShape);
     Exercise(Mode::PrimitiveAmbiguousOwner,src::Error::AmbiguousMetadataOwner);
     Exercise(Mode::PrimitiveGenericArity,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::PrimitiveClassNameMismatch,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::PrimitiveClassNested,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericSameImage,src::Error::None);
     Exercise(Mode::GenericNestedArgument,src::Error::None);
     Exercise(Mode::CrossImageGeneric,src::Error::None);
