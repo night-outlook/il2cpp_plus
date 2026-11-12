@@ -416,6 +416,66 @@ struct Fixture {
         active.generation=7;active.byAssembly.insert(&assembly);
     }
 };
+// Actual parity VM .inl; FAKE V1 reference getter built from the same
+// bounded source. Equality here proves only probe behavior, not V1 parity.
+static unsigned parityProbeCases=0;
+static void TestParityProbeMock(){
+    namespace parity=il2cpp::vm::assembly_shadow_execution_v1_parity;
+    for(int variant=0;variant<3;++variant){
+        ++parityProbeCases;
+        Fixture f;
+        s_executionClasses.fill(nullptr);s_executionClassCount=0;
+        s_executionRegistryRevision=Revision{};
+        s_executionRegistrationWitnesses=Table{};
+        g_rawAssemblies.fill(nullptr);g_rawCount=1;g_rawAssemblies[0]=&f.assembly;
+        g_rawVisits=0;g_dropRegisteredOnSecond=false;
+        g_emitPhysical=true;g_duplicate=false;g_physicalPasses=0;
+        g_dropSecondPass=false;g_changeRevision=false;g_changeCounter=false;
+        g_publishB1DuringEnumeration=false;g_midB1Published=false;
+        g_otherPhysical=nullptr;g_reversePhysicalCallbacks=false;
+        il2cpp_defaults=Il2CppDefaults{};
+        g_physical=&f.klass;s_active.store(&f.active);
+        s_state.store(AssemblyShadowState::Committed);
+        Register(&f.klass);
+        assembly_shadow_physical_membership::Scratch membership{};
+        auto* owned=new rows::Rows();
+        auto* record=new assembly_shadow_frozen_execution_record::Record();
+        src::Receipt source{};
+        parity::Probe probe;
+        std::string original="stale original";
+        g_legacyParityMismatch=variant==1;
+        g_legacyParityUnavailable=variant==2;
+        const bool ok=AssemblyShadow::TryProbeBoundedExecutionV1ByteParity(
+            membership,*owned,*record,source,probe,original);
+        const auto& result=probe.Result();
+        if(variant==0){
+            Check(ok&&record->Complete()&&!original.empty());
+            Check(result.exactBytesObserved&&result.twoIndependentObservationsOnly);
+            Check(result.error==parity::Error::None);
+            Check(result.legacyBytes==result.boundedBytes);
+            Check(original.size()==record->Bytes());
+            Check(std::memcmp(original.data(),record->Data(),
+                              record->Bytes())==0);
+        }else{
+            Check(!ok&&original.empty()&&!record->Complete());
+            Check(!owned->Complete()&&!source.callbackPhysicalMembershipProven);
+            Check(result.error==(variant==1?parity::Error::DifferentByte:
+                                     parity::Error::UnavailableLegacy));
+            if(variant==1)Check(result.firstDifferentOffset==0);
+        }
+        Check(!result.coherentVmEpochProven&&!result.fullCanonicalTypeKeysProven);
+        Check(!result.terminalSafeFinalExecutionDiagnostics&&
+              !result.nativeV2TransportImplemented&&!result.runtimeAcceptance);
+        if(variant==0){
+            Check(!AssemblyShadow::TryProbeBoundedExecutionV1ByteParity(
+                membership,*owned,*record,source,probe,original));
+            Check(probe.Result().error==parity::Error::Reused);
+            Check(original.empty()&&!record->Complete());
+        }
+        delete record;delete owned;s_active.store(nullptr);
+    }
+    g_legacyParityMismatch=g_legacyParityUnavailable=false;
+}
 enum class Mode {
     Good, GenericDefinition, StagedGenericContainer,
     GenericSameImage, GenericNestedArgument, GenericArgumentMissingOwner,
@@ -1034,6 +1094,7 @@ int main(){
     // Original B1 producer can publish a first terminal error independently
     // while the metadata callback is executing. Reject the full result even
     // if the execution-registry and R02 revisions did not change.
+    TestParityProbeMock();
     Exercise(Mode::TerminalDuringCapture,src::Error::SourceChanged);
     Check(g_midB1Published);
     // A previously published native first failure stays terminal forever;
@@ -1052,8 +1113,8 @@ int main(){
 #endif
     std::printf("{\"kind\":\"R03B2ActualNativeSourceMock\","
         "\"result\":\"PassedActualInlWithMockedVmOnly\","
-        "\"buildFlavor\":\"%s\",\"cases\":%d,\"assertions\":%d,\"primitivePeekCases\":%u,\"realUnity\":false,"
+        "\"buildFlavor\":\"%s\",\"cases\":%d,\"assertions\":%d,\"primitivePeekCases\":%u,\"parityProbeCases\":%u,\"realLegacyGetter\":false,\"realUnity\":false,"
         "\"physicalClassProvenInRealPlayer\":false,"
         "\"fullCanonicalTypeKeys\":false,\"nativeV2TransportImplemented\":false,"
-        "\"runtimeAcceptance\":false,\"R03Accepted\":false}\n",flavor,cases,assertions,primitivePeekCases);
+        "\"runtimeAcceptance\":false,\"R03Accepted\":false}\n",flavor,cases,assertions,primitivePeekCases,parityProbeCases);
 }
