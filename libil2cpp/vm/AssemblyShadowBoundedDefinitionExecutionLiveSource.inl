@@ -21,6 +21,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     namespace key=::r03_b2_owned_definition_key;
     namespace constructed_key=::r03_b2_owned_constructed_type_key;
     namespace composite_key=::r03_b2_owned_composite_type_key;
+    namespace original_join=assembly_shadow_original_v1_owner_join;
     namespace r02=assembly_shadow_r02;
     namespace frozen=assembly_shadow_frozen_execution_record;
     receipt=live::Receipt{};
@@ -90,8 +91,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         const ActiveSnapshot* active;
         live::Error error=live::Error::None;
         size_t lookups=0, rejected=0;
+        size_t originalV1Lookups=0, originalV1Matches=0;
         assembly_shadow_observed_images::Inventory<live::kMaximumRegisteredAotImages>* images=nullptr;
         assembly_shadow_observed_images::Inventory<64>* observedImages=nullptr;
+        assembly_shadow_observed_images::Inventory<
+            live::kMaximumOriginalV1Images>* originalV1Images=nullptr;
         bool usedCrossImageArgument=false;
         bool usedUnobservedAotArgumentImage=false;
         bool usedUnicodeAssemblyFold=false;
@@ -116,6 +120,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     {
         os::FastAutoLock metadataLock(&g_MetadataLock);
         assembly_shadow_observed_images::Inventory<64> imageInventory;
+        assembly_shadow_observed_images::Inventory<
+            live::kMaximumOriginalV1Images> originalV1Images;
         assembly_shadow_observed_images::Inventory<
             live::kMaximumRegisteredAotImages> registeredAotImages;
         // This is the *raw physical* assembly table, NOT the logical
@@ -146,6 +152,40 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         if(!registeredAotImages.Healthy() || !registeredAotImages.Count())
             return reject(live::Error::UnadmittedMetadataOwner);
         receipt.registeredPhysicalAotImages=registeredAotImages.Count();
+        // The ORIGINAL GetExecutionDiagnosticsJson uses
+        // Assembly::CaptureShadowEnumeration->CopyValidAssemblies, which
+        // visits token-valid PHYSICAL images including interpreter images.
+        // GetAllAssemblies' logical/shadow mapping is NOT this V1 source.
+        // Borrow exactly this original V1 image order, without allocating
+        // or retaining it outside the initial metadata-lock/Reader scope.
+        struct OriginalV1Sink {
+            assembly_shadow_observed_images::Inventory<
+                live::kMaximumOriginalV1Images>* images;
+            live::Error error=live::Error::None;
+        } originalSink{};
+        originalSink.images=&originalV1Images;
+        auto readOriginalV1=[](const Il2CppImage* img,void* raw)->bool {
+            OriginalV1Sink& sink=*static_cast<OriginalV1Sink*>(raw);
+            if(!img || !img->assembly || !img->assembly->image ||
+               img->assembly->image!=img || !img->assembly->token ||
+               !img->assembly->aname.name ||
+               img->typeCount>live::kMaximumAotImageTypes) {
+                sink.error=live::Error::OriginalV1ImageSourceUnavailable;
+                return false;
+            }
+            if(!sink.images->AddFromRegisteredAssembly(img)) {
+                sink.error=live::Error::PhysicalImageLimit;return false;
+            }
+            return true;
+        };
+        if(!Assembly::TryVisitOriginalV1ExecutionImages(
+               readOriginalV1,&originalSink) ||
+           !originalV1Images.Healthy() || !originalV1Images.Count())
+            return reject(originalSink.error==live::Error::None ?
+                live::Error::OriginalV1ImageSourceUnavailable:
+                originalSink.error);
+        receipt.originalV1Images=originalV1Images.Count();
+        context.originalV1Images=&originalV1Images;
         context.images=&registeredAotImages;
         context.observedImages=&imageInventory;
         // Physical iterator #1 is observation-only: no output rows and no
@@ -312,6 +352,32 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 if(constrained && constrained!=resolved) {
                     c.error=live::Error::InvalidTypeIdentity;return false;
                 }
+                // The legacy unordered_map::emplace is FIRST-owner-wins
+                // across ALL token-valid physical images (interpreter too).
+                // Verify that independent original V1 first owner matches
+                // the already authenticated registered physical AOT owner.
+                // No TypeDef handle is dereferenced by this comparison.
+                original_join::Receipt joined{};
+                if(!c.originalV1Images ||
+                   !original_join::CheckFirstOwner(
+                       *c.originalV1Images,resolved,handle,
+                       [](const Il2CppImage* img,uint32_t index) {
+                           return MetadataCache::GetAssemblyTypeHandle(img,index);
+                       },
+                       c.originalV1Lookups,
+                       live::kMaximumTotalMetadataLookups,
+                       live::kMaximumAotImageTypes,joined)) {
+                    if(joined.error==original_join::Error::FirstOwnerDifferent)
+                        c.error=live::Error::OriginalV1FirstOwnerConflict;
+                    else if(joined.error==original_join::Error::LookupBudget)
+                        c.error=live::Error::OriginalV1LookupBudget;
+                    else if(joined.error==original_join::Error::OwnerNotFound)
+                        c.error=live::Error::OriginalV1OwnerMissing;
+                    else
+                        c.error=live::Error::OriginalV1ImageSourceUnavailable;
+                    return false;
+                }
+                ++c.originalV1Matches;
                 return true;
             };
             auto buildDefinition=[&](decltype(klass->typeMetadataHandle) handle,
@@ -686,13 +752,28 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
            !registeredAfter.SameOrderedImageSet(registeredAotImages))
             return reject(live::Error::SourceChanged);
         receipt.registeredImageSetStable=true;
+        // Second original-V1 image-source snapshot, in its own assembly
+        // lock pass. Only image *identities/order* are compared: no ABA,
+        // metadata rewrite or class cctor/static transaction is proved.
+        assembly_shadow_observed_images::Inventory<
+            live::kMaximumOriginalV1Images> originalAfter;
+        OriginalV1Sink originalAfterSink{};
+        originalAfterSink.images=&originalAfter;
+        if(!Assembly::TryVisitOriginalV1ExecutionImages(
+               readOriginalV1,&originalAfterSink) ||
+           !originalAfter.SameOrderedImageSet(originalV1Images))
+            return reject(live::Error::SourceChanged);
+        receipt.originalV1ImageSetStable=true;
         // Borrowed metadata pointers are scrubbed while g_MetadataLock is
         // still held. Nothing escapes to the frozen writer after this scope.
         context.images=nullptr;
         context.observedImages=nullptr;
+        context.originalV1Images=nullptr;
     }
 
     receipt.metadataLookups=context.lookups;
+    receipt.originalV1MetadataLookups=context.originalV1Lookups;
+    receipt.originalV1HandlesMatched=context.originalV1Matches;
     receipt.rejectedUnsupported=context.rejected;
     receipt.usedCrossImageArgument=context.usedCrossImageArgument;
     receipt.usedUnobservedAotArgumentImage=context.usedUnobservedAotArgumentImage;
@@ -793,6 +874,12 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.ownedBytes=rows.TextBytes();
     receipt.callbackPhysicalMembershipProven=true;
     receipt.restrictedTypeDefSubsetProven=true;
+    receipt.originalV1FirstEmplaceOwnerMatched=
+        receipt.originalV1ImageSetStable &&
+        receipt.originalV1HandlesMatched>0;
+    // No claim of complete legacy execution field15, only those handles
+    // actually used in the restricted rows. Other original V1 source rows,
+    // cctor/static and global VM consistency remain unproven.
     receipt.observedRegistryAndCounterFenceStable=true;
     // Deliberately NOT a complete arbitrary TypeKey/field15/VM-epoch claim.
     return true;
