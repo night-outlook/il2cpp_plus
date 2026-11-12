@@ -679,9 +679,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
         const bool szArrayArgument=(mode==Mode::GenericSzArrayArgument);
         const bool mdArrayArgument=(mode==Mode::GenericArrayArgument);
         const bool qualifiedArgument=(mode==Mode::PrimitiveQualified ||
-                                      mode==Mode::PrimitiveDefault ||
-                         mode==Mode::PrimitiveQualified ||
-                         mode==Mode::GenericQualifiedArgument ||
+                                      mode==Mode::GenericQualifiedArgument ||
                                       mode==Mode::GenericQualifiedPointerArgument);
         Check(receipt.usedNestedGenericArgument==nestedGeneric);
         Check(receipt.usedPointerArgument==pointerArgument);
