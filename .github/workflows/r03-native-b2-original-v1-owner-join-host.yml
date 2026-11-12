@@ -1,0 +1,71 @@
+name: R03 B2 original execution V1 first-owner physical join host (NOT Unity)
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - .github/workflows/r03-native-b2-original-v1-owner-join-host.yml
+      - NativeHostTests/AssemblyShadowOriginalV1OwnerJoinHost.cpp
+      - libil2cpp/vm/AssemblyShadowOriginalV1ImageScan.h
+      - libil2cpp/vm/AssemblyShadowOriginalV1OwnerJoin.h
+      - libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pure-v1-owner-join:
+    runs-on: ${{ matrix.os }}
+    name: Original V1 physical owner ${{ matrix.os }} ${{ matrix.std }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        std: [c++11, c++17]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadowOriginalV1ImageScan.h
+            libil2cpp/vm/AssemblyShadowOriginalV1OwnerJoin.h
+            libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h
+            NativeHostTests/AssemblyShadowOriginalV1OwnerJoinHost.cpp
+      - name: Compile original token-valid V1 source and first-emplace join
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          shasum -a 256 \
+            libil2cpp/vm/AssemblyShadowOriginalV1ImageScan.h \
+            libil2cpp/vm/AssemblyShadowOriginalV1OwnerJoin.h
+          mkdir -p "$RUNNER_TEMP/r03-v1-first-owner"
+          for flavor in release debug; do
+            for profile in strict sanitized; do
+              flags=(-std=${{ matrix.std }} -O1 -g -Wall -Wextra -Werror -pedantic)
+              if [ "$profile" = sanitized ]; then
+                flags+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
+              fi
+              if [ "$flavor" = debug ]; then
+                flags+=(-DIL2CPP_DEBUG=1)
+              fi
+              exe="$RUNNER_TEMP/r03-v1-first-owner/$flavor-$profile"
+              clang++ "${flags[@]}" -Ilibil2cpp \
+                NativeHostTests/AssemblyShadowOriginalV1OwnerJoinHost.cpp \
+                -o "$exe"
+              ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+              UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+                "$exe" > "$exe.json"
+              cat "$exe.json"
+              python3 -B - "$exe.json" <<'PY'
+          import json,sys
+          j=json.load(open(sys.argv[1],encoding='utf8'))
+          assert j['kind']=='R03B2OriginalV1FirstOwnerJoinHost'
+          assert j['result']=='PassedSourceSemanticsOnly'
+          assert j['cases']==12 and j['assertions']>=45
+          assert j['protectedAllocations']==0
+          for key in ('actualUnityAssemblyCppCompiled','fullLegacyField15Parity',
+                      'coherentVmEpochProven','runtimeAcceptance'):
+              assert j[key] is False
+          PY
+            done
+          done
