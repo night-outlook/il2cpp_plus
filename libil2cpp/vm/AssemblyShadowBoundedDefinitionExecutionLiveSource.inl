@@ -193,7 +193,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         if(!Assembly::TryVisitRegisteredAotImages(readAotRegistry,&registrySink))
             return reject(registrySink.error==live::Error::None?
                 live::Error::UnadmittedMetadataOwner:registrySink.error);
-        if(!registeredAotImages.Healthy() || !registeredAotImages.Count())
+        // The original V1 physical enumeration can contain only interpreter
+        // TypeDefs. Do NOT require an unrelated AOT TypeDef merely to admit
+        // a plain interpreter row. Every AOT root/argument still requires
+        // registeredAotImages.Contains() during its own owner resolution.
+        if(!registeredAotImages.Healthy())
             return reject(live::Error::UnadmittedMetadataOwner);
         receipt.registeredPhysicalAotImages=registeredAotImages.Count();
         // The ORIGINAL GetExecutionDiagnosticsJson uses
