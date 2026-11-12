@@ -1,0 +1,63 @@
+name: R03 B2 observational execution V1 byte-parity host (NOT Unity)
+on:
+  push:
+    branches: [codex/assembly-shadow-r01b-h1]
+    paths:
+      - .github/workflows/r03-native-b2-v1-parity-host.yml
+      - libil2cpp/vm/AssemblyShadowExecutionV1ByteParity.h
+      - NativeHostTests/AssemblyShadowExecutionV1ByteParityHost.cpp
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  parity-pure:
+    runs-on: ${{ matrix.os }}
+    name: Observational V1 parity ${{ matrix.os }} ${{ matrix.std }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        std: [c++11, c++17]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            libil2cpp/vm/AssemblyShadowExecutionV1ByteParity.h
+            NativeHostTests/AssemblyShadowExecutionV1ByteParityHost.cpp
+      - name: Pure bounded original/owned JSON byte comparison (not source authority)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          mkdir -p "$RUNNER_TEMP/r03-v1-parity"
+          for flavor in release debug; do
+            for profile in strict sanitized; do
+              flags=(-std=${{ matrix.std }} -O1 -g -Wall -Wextra -Werror -pedantic)
+              if [ "$profile" = sanitized ]; then
+                flags+=(-fsanitize=address,undefined -fno-omit-frame-pointer)
+              fi
+              if [ "$flavor" = debug ]; then
+                flags+=(-DIL2CPP_DEBUG=1)
+              fi
+              exe="$RUNNER_TEMP/r03-v1-parity/$flavor-$profile"
+              clang++ "${flags[@]}" -Ilibil2cpp \
+                NativeHostTests/AssemblyShadowExecutionV1ByteParityHost.cpp \
+                -o "$exe"
+              ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+              UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+                "$exe" > "$exe.json"
+              cat "$exe.json"
+              python3 -B - "$exe.json" <<'PY'
+          import json,sys
+          j=json.load(open(sys.argv[1],encoding='utf8'))
+          assert j['kind']=='R03B2ObservedExecutionV1ByteParityHost'
+          assert j['result']=='PassedPureNonAuthorityOnly'
+          assert j['cases']==10 and j['assertions']>=40
+          for k in ('realLegacyGetter','vmEpochProven','fullV1Field15Parity',
+                    'nativeV2TransportImplemented','runtimeAcceptance'):
+              assert j[k] is False
+          PY
+            done
+          done
