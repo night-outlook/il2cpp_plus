@@ -46,6 +46,8 @@ struct Receipt {
     bool usedCrossImageArgument=false;
     bool usedUnobservedAotArgumentImage=false;
     bool usedUnicodeAssemblyFold=false;
+    bool usedExistingPrimitiveDefault=false;
+    size_t admittedPrimitiveArguments=0;
     // Diagnostic-only subset coverage. All are false on rejected source.
     bool usedNestedGenericArgument=false;
     bool usedPointerArgument=false;
@@ -81,6 +83,8 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.usedCrossImageArgument=false;
     receipt.usedUnobservedAotArgumentImage=false;
     receipt.usedUnicodeAssemblyFold=false;
+    receipt.usedExistingPrimitiveDefault=false;
+    receipt.admittedPrimitiveArguments=0;
     receipt.usedNestedGenericArgument=false;
     receipt.usedPointerArgument=false;
     receipt.usedSzArrayArgument=false;
