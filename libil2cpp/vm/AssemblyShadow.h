@@ -19,6 +19,7 @@ namespace r03_b2_owned_execution_rows { class Rows; }
 
 namespace il2cpp { namespace vm {
 namespace assembly_shadow_bounded_definition_execution { struct Receipt; }
+namespace assembly_shadow_execution_v1_parity { class Probe; }
 namespace assembly_shadow_physical_membership { class Scratch; }
 namespace assembly_shadow_bounded_transaction { class Capture; }
 namespace assembly_shadow_bounded_inventory { class Capture; }
@@ -136,6 +137,20 @@ public:
         ::r03_b2_owned_execution_rows::Rows& rows,
         assembly_shadow_frozen_execution_record::Record& record,
         assembly_shadow_bounded_definition_execution::Receipt& receipt);
+    // R03 B2 INACTIVE healthy-time diagnostic probe: invoke the UNMODIFIED
+    // original V1 execution getter under initial metadata Reader and compare
+    // its bytes to a separately captured, source-authenticated bounded record.
+    // Original V1 may allocate; this method is NOT terminal-safe or no-alloc.
+    // Even exact bytes from two observations do not prove one coherent VM
+    // epoch or native V2 field15 readiness. Caller preallocates all buffers.
+    static bool TryProbeBoundedExecutionV1ByteParity(
+        assembly_shadow_physical_membership::Scratch& membership,
+        ::r03_b2_owned_execution_rows::Rows& rows,
+        assembly_shadow_frozen_execution_record::Record& record,
+        assembly_shadow_bounded_definition_execution::Receipt& sourceReceipt,
+        assembly_shadow_execution_v1_parity::Probe& parity,
+        std::string& originalV1);
+
     // P1 INACTIVE: observable opaque class identities without metadata dereference.
     // Never returns pointers, type keys, JSON, or a VM-coherence claim.
     static bool TryCaptureOpaqueExecutionInventory(
