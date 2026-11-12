@@ -9,6 +9,8 @@ on:
       - libil2cpp/vm/Assembly.h
       - libil2cpp/vm/AssemblyShadowRegisteredAotImageScan.h
       - libil2cpp/vm/AssemblyShadow.h
+      - libil2cpp/vm/Class.cpp
+      - libil2cpp/vm/Class.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h
       - libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl
@@ -50,6 +52,10 @@ jobs:
             libil2cpp/vm/Assembly.cpp libil2cpp/vm/Assembly.h \
             libil2cpp/vm/AssemblyShadowRegisteredAotImageScan.h
           grep -Fqx '#include "vm/GlobalMetadataFileInternals.h"' libil2cpp/vm/AssemblyShadow.cpp
+          grep -Fqx '#include "vm/Class.h"' libil2cpp/vm/AssemblyShadow.cpp
+          grep -Fq 'Il2CppClass* Class::FromIl2CppTypeEnum(Il2CppTypeEnum type)' libil2cpp/vm/Class.cpp
+          grep -Fq 'RETURN_DEFAULT_TYPE(int32_class)' libil2cpp/vm/Class.cpp
+          grep -Fq 'static Il2CppClass* FromIl2CppTypeEnum(Il2CppTypeEnum type);' libil2cpp/vm/Class.h
           grep -Fq 'Assembly::TryVisitRegisteredAotImages(' libil2cpp/vm/Assembly.cpp
           grep -Fq 'assembly_shadow_registered_aot_scan::Scan(' libil2cpp/vm/Assembly.cpp
           shasum -a 256 "$SRC" \
@@ -61,6 +67,7 @@ jobs:
             libil2cpp/vm/AssemblyShadowOwnedConstructedTypeKey.h \
             libil2cpp/vm/AssemblyShadowOwnedCompositeTypeKey.h \
             libil2cpp/vm/AssemblyShadowTypeKey.cpp \
+            libil2cpp/vm/Class.cpp libil2cpp/vm/Class.h \
             NativeHostTests/AssemblyShadowFoldedNameMock.h \
             libil2cpp/vm/AssemblyShadowName.h
           mkdir -p "$RUNNER_TEMP/r03-native-b2-live"
@@ -86,7 +93,7 @@ jobs:
           assert j['kind']=='R03B2ActualNativeSourceMock'
           assert j['result']=='PassedActualInlWithMockedVmOnly'
           assert j['buildFlavor']==sys.argv[2]
-          assert j['cases']>=55 and j['assertions']>=650
+          assert j['cases']>=66 and j['assertions']>=850
           assert j['realUnity'] is False
           assert j['physicalClassProvenInRealPlayer'] is False
           assert j['fullCanonicalTypeKeys'] is False
