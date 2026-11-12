@@ -2,6 +2,7 @@
 // This is a source-execution mock, NOT Unity/IL2CPP or live metadata authority.
 // Never install this file or its fake VM definitions into libil2cpp/vm.
 #include "vm/AssemblyShadowBoundedDefinitionExecutionLive.h"
+#include "vm/AssemblyShadowExecutionV1ByteParity.h"
 #include "vm/AssemblyShadowBoundedExecutionEmptyLive.h"
 #include "vm/AssemblyShadowExecutionRegistryRevision.h"
 #include "vm/AssemblyShadowFirstFailureV2.h"
@@ -262,6 +263,8 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
         assembly_shadow_r02::ObservationCounters::Add(
             assembly_shadow_r02::Metric::MethodChecks,1);
 }
+enum class AssemblyShadowError : int32_t {Success=0,InvalidState=1};
+static bool g_legacyParityMismatch=false,g_legacyParityUnavailable=false;
 class AssemblyShadow {
 public:
     static bool TryCaptureBoundedDefinitionExecutionLive(
@@ -269,8 +272,43 @@ public:
         ::r03_b2_owned_execution_rows::Rows&,
         assembly_shadow_frozen_execution_record::Record&,
         assembly_shadow_bounded_definition_execution::Receipt&);
+    static AssemblyShadowError TryGetExecutionDiagnosticsWithMetadataAdmission(
+        std::string& json);
+    static bool TryProbeBoundedExecutionV1ByteParity(
+        assembly_shadow_physical_membership::Scratch&,
+        ::r03_b2_owned_execution_rows::Rows&,
+        assembly_shadow_frozen_execution_record::Record&,
+        assembly_shadow_bounded_definition_execution::Receipt&,
+        assembly_shadow_execution_v1_parity::Probe&,
+        std::string&);
 };
 #include "vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl"
+
+// The original getter is intentionally NOT present in the synthetic VM.
+// This fake original reference reuses the actual inactive .inl, so positive
+// tests establish only *probe mechanics*, NOT genuine V1/Unity byte parity.
+AssemblyShadowError AssemblyShadow::TryGetExecutionDiagnosticsWithMetadataAdmission(
+    std::string& json) {
+    json.clear();
+    if(g_legacyParityUnavailable) {
+        json="invalid partial legacy output";
+        return AssemblyShadowError::InvalidState;
+    }
+    assembly_shadow_physical_membership::Scratch scratch;
+    auto* rows=new ::r03_b2_owned_execution_rows::Rows();
+    auto* record=new assembly_shadow_frozen_execution_record::Record();
+    assembly_shadow_bounded_definition_execution::Receipt source;
+    const bool ok=TryCaptureBoundedDefinitionExecutionLive(
+        scratch,*rows,*record,source);
+    if(ok && record->Complete())
+        json.assign(record->Data(),record->Bytes());
+    delete record;
+    delete rows;
+    if(!ok)return AssemblyShadowError::InvalidState;
+    if(g_legacyParityMismatch && !json.empty())json[0]='X';
+    return AssemblyShadowError::Success;
+}
+#include "vm/AssemblyShadowExecutionV1ByteParitySource.inl"
 
 static void Register(Il2CppClass* klass) {
     // Same power-of-two, open-addressed slot policy used by the production
