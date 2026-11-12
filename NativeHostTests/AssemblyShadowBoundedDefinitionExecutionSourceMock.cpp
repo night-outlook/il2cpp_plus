@@ -81,6 +81,7 @@ struct Il2CppClass {
     const char* name=nullptr;
     int rank=0;
     Il2CppGenericClass* generic_class=nullptr;
+    void* genericContainerHandle=nullptr;
     void* declaringType=nullptr;
     Il2CppType byval_arg{};
     int32_t cctor_started=0,cctor_finished_or_no_cctor=0;
@@ -357,6 +358,7 @@ enum class Mode {
     PrimitiveUnregistered, PrimitiveWrongHandle, PrimitiveWrongImage,
     PrimitiveUnsupportedTag, PrimitiveAmbiguousOwner, PrimitiveGenericArity,
     PrimitiveClassNameMismatch, PrimitiveClassNested,
+    PrimitiveClassGenericContainer,
     GenericPointerArgument, GenericSzArrayArgument,
     GenericArrayArgument, GenericQualifiedPointerArgument,
     GenericArrayBadSizes, GenericArrayMissingElement,
@@ -411,6 +413,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
        mode==Mode::PrimitiveGenericArity ||
        mode==Mode::PrimitiveClassNameMismatch ||
        mode==Mode::PrimitiveClassNested ||
+       mode==Mode::PrimitiveClassGenericContainer ||
        mode==Mode::GenericQualifiedArgument ||
        mode==Mode::GenericConstructedArgument ||
        mode==Mode::GenericPointerArgument ||
@@ -535,7 +538,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         mode==Mode::PrimitiveUnsupportedTag || mode==Mode::PrimitiveAmbiguousOwner ||
         mode==Mode::PrimitiveGenericArity ||
         mode==Mode::PrimitiveClassNameMismatch ||
-        mode==Mode::PrimitiveClassNested;
+        mode==Mode::PrimitiveClassNested ||
+        mode==Mode::PrimitiveClassGenericContainer;
     if(primitiveMode) {
         fixture.genericArg1.type=IL2CPP_TYPE_I4;
         fixture.genericArg1.data.typeHandle=nullptr;
@@ -564,6 +568,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
             fixture.primitiveClass.name="Other";
         if(mode==Mode::PrimitiveClassNested)
             fixture.primitiveClass.declaringType=&fixture.outer;
+        if(mode==Mode::PrimitiveClassGenericContainer)
+            fixture.primitiveClass.genericContainerHandle=&fixture.def;
     }
     if(mode==Mode::StagedGenericContainer)fixture.def.genericContainerIndex=-2;
     if(mode==Mode::TwoClassesReversedPhysicalCallback) {
@@ -864,6 +870,7 @@ int main(){
     Exercise(Mode::PrimitiveGenericArity,src::Error::UnsupportedTypeShape);
     Exercise(Mode::PrimitiveClassNameMismatch,src::Error::UnsupportedTypeShape);
     Exercise(Mode::PrimitiveClassNested,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::PrimitiveClassGenericContainer,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericSameImage,src::Error::None);
     Exercise(Mode::GenericNestedArgument,src::Error::None);
     Exercise(Mode::CrossImageGeneric,src::Error::None);
