@@ -15,6 +15,7 @@
 #include "vm/AssemblyShadowName.h"
 #include "vm/AssemblyShadowBoundedPhysicalAssemblies.h"
 #include "vm/AssemblyShadowRegisteredAotImageScan.h"
+#include "vm/AssemblyShadowOriginalV1ImageScan.h"
 #include "vm/AssemblyShadowMetadataLifetime.h"
 #include "hybridclr/metadata/MetadataModule.h"
 #endif
@@ -282,6 +283,23 @@ namespace vm
         }
         ++s_assemblyVersion;
         return true;
+    }
+
+    bool Assembly::TryVisitOriginalV1ExecutionImages(
+        bool (*visit)(const Il2CppImage*,void*),void* context) noexcept
+    {
+        if(!visit)return false;
+        // Exactly the eligibility/order of the ORIGINAL
+        // CaptureShadowEnumeration -> CopyValidAssemblies, including
+        // interpreter images. No logical assembly remapping or new classes.
+        // The new bounded source must hold its initial metadata Reader and
+        // g_MetadataLock across the synchronous borrowed-image callback.
+        os::FastAutoLock lock(&s_assemblyLock);
+        return assembly_shadow_original_v1_image_scan::Scan(
+            s_Assemblies.begin(),s_Assemblies.end(),
+            [=](const Il2CppImage* image) noexcept -> bool {
+                return visit(image,context);
+            });
     }
 
     bool Assembly::TryVisitRegisteredAotImages(
