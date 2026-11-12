@@ -7,6 +7,7 @@
 #include "vm/AssemblyShadowExecutionRegistryRevision.h"
 #include "vm/AssemblyShadowFirstFailureV2.h"
 #include "vm/AssemblyShadowRegisteredAotImageScan.h"
+#include "vm/AssemblyShadowOriginalV1ImageScan.h"
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -196,10 +197,26 @@ static Il2CppType* g_declaringType=nullptr;
 static std::array<const Il2CppAssembly*,1100> g_rawAssemblies{};
 static size_t g_rawCount=0,g_rawVisits=0;
 static bool g_dropRegisteredOnSecond=false;
+static size_t g_originalV1Visits=0;
+static bool g_dropOriginalV1OnSecond=false;
+// The fake original-V1 visitor follows ACTUAL pure CopyValidAssemblies
+// source semantics, never GetAllAssemblies' shadow-resolved view.
 static std::array<Il2CppAssembly,1025> g_extraAssemblies{};
 static std::array<Il2CppImage,1025> g_extraImages{};
 class Assembly {
 public:
+    static bool TryVisitOriginalV1ExecutionImages(
+        bool(*visit)(const Il2CppImage*,void*),void* context) noexcept {
+        if(!visit)return false;
+        ++g_originalV1Visits;
+        const size_t count=(g_dropOriginalV1OnSecond &&
+            g_originalV1Visits==2 && g_rawCount>0) ? g_rawCount-1:g_rawCount;
+        return assembly_shadow_original_v1_image_scan::Scan(
+            g_rawAssemblies.begin(),g_rawAssemblies.begin()+count,
+            [=](const Il2CppImage* image) noexcept -> bool {
+                return visit(image,context);
+            });
+    }
     static bool TryVisitRegisteredAotImages(
         bool(*visit)(const Il2CppImage*,void*),void* context) noexcept {
         if(!visit)return false;
@@ -492,6 +509,9 @@ enum class Mode {
     PrimitiveUnsupportedTag, PrimitiveAmbiguousOwner, PrimitiveGenericArity,
     PrimitiveClassNameMismatch, PrimitiveClassNested,
     PrimitiveClassGenericContainer,
+    OriginalV1InterpreterBeforeAot, OriginalV1InterpreterAfterAot,
+    OriginalV1ZeroTypeDefInterpreter, OriginalV1SnapshotChanged,
+    OriginalV1UnregisteredOwner, OriginalV1InvalidImage,
     GenericPointerArgument, GenericSzArrayArgument,
     GenericArrayArgument, GenericQualifiedPointerArgument,
     GenericArrayBadSizes, GenericArrayMissingElement,
@@ -522,6 +542,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_physicalPasses=0;g_dropSecondPass=false;
     g_rawAssemblies.fill(nullptr);g_rawCount=0;g_rawVisits=0;
     g_dropRegisteredOnSecond=false;
+    g_originalV1Visits=0;g_dropOriginalV1OnSecond=false;
     g_rawAssemblies[g_rawCount++]=&fixture.assembly;
     il2cpp_defaults=Il2CppDefaults{};
     g_changeRevision=false;g_changeCounter=false;
@@ -763,6 +784,39 @@ static void Exercise(Mode mode,src::Error expectedError) {
         fixture.assembly.aname.name="B\xC0\xAF";
     if(mode==Mode::InvalidUnicodeSurrogate)
         fixture.assembly.aname.name="B\xED\xA0\x80";
+    if(mode==Mode::OriginalV1InterpreterBeforeAot ||
+       mode==Mode::OriginalV1InterpreterAfterAot ||
+       mode==Mode::OriginalV1ZeroTypeDefInterpreter ||
+       mode==Mode::OriginalV1SnapshotChanged) {
+        fixture.supportImage.token=-2; // synthetic interpreter physical image
+        fixture.supportAssembly.interpreter=true;
+        fixture.supportImage.typeCount=
+            mode==Mode::OriginalV1ZeroTypeDefInterpreter?0:1;
+        fixture.supportImage.handles[0]=
+            mode==Mode::OriginalV1ZeroTypeDefInterpreter ?
+                nullptr:&fixture.def; // duplicate raw TypeDef identity
+        if(mode==Mode::OriginalV1InterpreterBeforeAot ||
+           mode==Mode::OriginalV1ZeroTypeDefInterpreter) {
+            g_rawAssemblies[1]=g_rawAssemblies[0];
+            g_rawAssemblies[0]=&fixture.supportAssembly;
+            g_rawCount=2;
+        } else g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
+        if(mode==Mode::OriginalV1SnapshotChanged)
+            g_dropOriginalV1OnSecond=true;
+    }
+    if(mode==Mode::OriginalV1UnregisteredOwner) {
+        // The raw AOT registry still reports source.image, but this fake
+        // original V1 visitor omits that image (a deliberate mismatch).
+        g_dropOriginalV1OnSecond=true;
+    }
+    if(mode==Mode::OriginalV1InvalidImage) {
+        // This invalid raw interpreter entry fails only the original V1
+        // unfiltered scanner, while registered AOT scan skips it.
+        fixture.supportImage.token=-2;
+        fixture.supportAssembly.interpreter=true;
+        fixture.supportAssembly.image=nullptr;
+        g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
+    }
     Register(&fixture.klass);
     if(mode==Mode::TwoClassesReversedPhysicalCallback ||
        mode==Mode::CrossImageGeneric ||
