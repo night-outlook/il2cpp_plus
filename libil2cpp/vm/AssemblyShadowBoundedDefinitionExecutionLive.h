@@ -53,8 +53,10 @@ struct Receipt {
     bool originalV1ImageSetStable=false; // independent second image read
     bool originalV1FirstEmplaceOwnerMatched=false; // admitted handles ONLY
     bool originalV1CompleteField15Parity=false; // never set by this source
-    size_t observedClassFactsMatched=0; // only admitted observed classes
+    size_t observedClassFactsMatched=0; // admitted first/second-pass matches
     bool observedClassFactsTwoPassStable=false; // no whole VM epoch
+    size_t observedClassFactsEndPassMatched=0; // third, end-of-collection pass
+    bool observedClassFactsEndPassStable=false; // observational, not atomic
     bool usedCrossImageArgument=false;
     bool usedUnobservedAotArgumentImage=false;
     bool usedUnicodeAssemblyFold=false;
@@ -111,6 +113,8 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.originalV1HandlesMatched=0;
     receipt.observedClassFactsMatched=0;
     receipt.observedClassFactsTwoPassStable=false;
+    receipt.observedClassFactsEndPassMatched=0;
+    receipt.observedClassFactsEndPassStable=false;
     receipt.observedRegistryAndCounterFenceStable=false;
     receipt.completeArbitraryTypeKeys=false;
     receipt.completeExecutionDiagnostics=false;

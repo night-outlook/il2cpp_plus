@@ -129,7 +129,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         size_t lookups=0, rejected=0;
         size_t originalV1Lookups=0, originalV1Matches=0;
         size_t classFactsMatched=0;
-        const ClassFacts* firstPassFacts=nullptr;
+        ClassFacts* firstPassFacts=nullptr;
         assembly_shadow_observed_images::Inventory<live::kMaximumRegisteredAotImages>* images=nullptr;
         assembly_shadow_observed_images::Inventory<64>* observedImages=nullptr;
         assembly_shadow_observed_images::Inventory<
@@ -815,7 +815,59 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             if(!stored) {
                 c.error=live::Error::RowsFailed;return;
             }
+            // Save the last observed primitive AFTER the owned row has been
+            // recorded. A later row's TypeKey source may mutate an earlier
+            // class; a final per-row read cannot detect that late change.
+            c.firstPassFacts[registration]=finalFacts;
         },&context);
+        // Third, end-of-collection physical traversal rechecks EVERY
+        // previously admitted class, including early rows that a later
+        // TypeKey formatter could mutate after their row was copied.
+        // The second pass updated firstPassFacts with its FINAL primitive
+        // values only after successful owned-row publication. Each third-pass
+        // callback must be independently unique; missing, duplicated or
+        // changed sources reject the entire record before any positive
+        // receipt can be emitted. No TypeKey/metadata handle is dereferenced.
+        // This is only a third observation within the initial Reader and
+        // original g_MetadataLock, not an atomic class/GC/VM epoch.
+        if(context.error==live::Error::None &&
+           membership.EnumeratorHealthy() && membership.FullyMatched()) {
+            struct EndPassFacts {
+                physical::Scratch* membership=nullptr;
+                const ClassFacts* facts=nullptr;
+                std::array<uint8_t,physical::kSlots> seen{};
+                size_t enumerated=0,matched=0;
+                live::Error error=live::Error::None;
+            } endPass{};
+            endPass.membership=&membership;
+            endPass.facts=firstPassFacts.data();
+            il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
+                EndPassFacts& end=*static_cast<EndPassFacts*>(raw);
+                if(end.error!=live::Error::None)return;
+                if(!klass || end.enumerated==physical::kMaximumEnumerated) {
+                    end.error=live::Error::BadPhysicalEnumeration;return;
+                }
+                ++end.enumerated;
+                size_t slot=physical::kSlots;
+                assembly_shadow_execution_witness::Source witness=
+                    assembly_shadow_execution_witness::Source::None;
+                if(!end.membership->TryObservedRegistrationBinding(
+                       klass,slot,witness))
+                    return; // Other physical VM classes are not in V1 registry.
+                if(slot>=physical::kSlots || end.seen[slot]) {
+                    end.error=live::Error::BadPhysicalEnumeration;return;
+                }
+                end.seen[slot]=1;
+                ++end.matched;
+                if(!end.facts[slot].Same(ClassFacts::Read(klass)))
+                    end.error=live::Error::ObservedClassFactsChanged;
+            },&endPass);
+            if(endPass.error!=live::Error::None)
+                return reject(endPass.error);
+            if(endPass.matched!=receipt.registered)
+                return reject(live::Error::UnmatchedClass);
+            receipt.observedClassFactsEndPassMatched=endPass.matched;
+        }
         // Revisit the SAME raw physical registry under the assembly lock.
         // Ordered identity equality is an observational source fence only,
         // not a VM-wide epoch, ABA barrier or class-cctor mutation lock.
@@ -957,8 +1009,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.observedClassFactsTwoPassStable=
         receipt.registered>0 &&
         receipt.observedClassFactsMatched==receipt.registered;
-    // Same observed class primitives across two enumerations and a final
-    // read: NOT a global cctor/GC/metadata transaction or terminal-safe V2.
+    receipt.observedClassFactsEndPassStable=
+        receipt.observedClassFactsTwoPassStable &&
+        receipt.observedClassFactsEndPassMatched==receipt.registered;
+    // Same observed facts across three physical traversals, plus the final
+    // row-callback read: NOT a coherent cctor/GC/metadata transaction or V2.
     receipt.originalV1FirstEmplaceOwnerMatched=
         receipt.originalV1ImageSetStable &&
         receipt.originalV1HandlesMatched>0;

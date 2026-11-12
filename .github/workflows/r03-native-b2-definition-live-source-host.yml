@@ -106,7 +106,7 @@ jobs:
           assert j['kind']=='R03B2ActualNativeSourceMock'
           assert j['result']=='PassedActualInlWithMockedVmOnly'
           assert j['buildFlavor']==sys.argv[2]
-          assert j['cases']>=76 and j['assertions']>=1865
+          assert j['cases']>=81 and j['assertions']>=1865
           assert j['primitivePeekCases']==20
           assert j['parityProbeCases']==3
           assert j['realLegacyGetter'] is False

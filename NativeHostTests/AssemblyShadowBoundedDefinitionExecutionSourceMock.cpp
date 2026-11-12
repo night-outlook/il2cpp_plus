@@ -188,6 +188,9 @@ static unsigned g_physicalPasses=0;
 static bool g_changeRevision=false, g_changeCounter=false;
 static bool g_mutateCctorOnSecond=false,g_mutateStaticOnSecond=false;
 static bool g_mutateCctorInsideTypeKey=false,g_mutatedCctorInsideTypeKey=false;
+static bool g_mutateCctorOnEndPass=false,g_mutateStaticOnEndPass=false;
+static bool g_mutateEarlierClassDuringLaterTypeKey=false,g_mutatedEarlierClass=false;
+static bool g_dropEndPass=false,g_duplicateEndPass=false;
 static bool g_publishB1DuringEnumeration=false, g_midB1Published=false;
 static Il2CppClass* g_physical=nullptr;
 static Il2CppClass* g_otherPhysical=nullptr;
@@ -253,6 +256,13 @@ public:
             g_physical->cctor_started=0; // after second-pass fact check
             g_mutatedCctorInsideTypeKey=true;
         }
+        if(g_mutateEarlierClassDuringLaterTypeKey &&
+           !g_mutatedEarlierClass && g_physicalPasses==2 &&
+           g_physical && g_otherPhysical &&
+           handle==g_otherPhysical->typeMetadataHandle) {
+            g_physical->cctor_started=0; // earlier row was already copied
+            g_mutatedEarlierClass=true;
+        }
         auto* def=static_cast<Il2CppTypeDefinition*>(handle);
         return {def->ns,def->name};
     }
@@ -275,7 +285,12 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
         if(g_mutateCctorOnSecond)g_physical->cctor_started=0;
         if(g_mutateStaticOnSecond)g_physical->static_fields=nullptr;
     }
-    if(g_emitPhysical && !(g_dropSecondPass && g_physicalPasses==2)) {
+    if(g_physical && g_physicalPasses==3) {
+        if(g_mutateCctorOnEndPass)g_physical->cctor_started=0;
+        if(g_mutateStaticOnEndPass)g_physical->static_fields=nullptr;
+    }
+    if(g_emitPhysical && !(g_dropSecondPass && g_physicalPasses==2) &&
+       !(g_dropEndPass && g_physicalPasses==3)) {
         if(g_reversePhysicalCallbacks && g_otherPhysical)
             callback(g_otherPhysical,context);
         callback(g_physical,context);
@@ -283,6 +298,8 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
             callback(g_otherPhysical,context);
     }
     if(g_duplicate && g_emitPhysical)callback(g_physical,context);
+    if(g_duplicateEndPass && g_physicalPasses==3 && g_emitPhysical)
+        callback(g_physical,context);
     if(g_publishB1DuringEnumeration && !g_midB1Published) {
         static const char firstReason[]="mid-capture native B1 first error";
         g_midB1Published=s_firstFailureV2.TryFreeze(
@@ -542,6 +559,9 @@ enum class Mode {
     StagedNestedIndex,
     UnsupportedImage, SourceChanged, CounterChanged,
     CctorFactsChanged, StaticFactsChanged, CctorFactsDuringTypeKey,
+    CctorFactsChangedAtEnd, StaticFactsChangedAtEnd,
+    EarlierClassFactsChangedDuringLaterTypeKey,
+    MissingEndPass, DuplicateEndPass,
     MissingSecondPass,
     TerminalDuringCapture,
     MissingEnumeration, DuplicateEnumeration, BadAssembly
@@ -566,6 +586,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_changeRevision=false;g_changeCounter=false;
     g_mutateCctorOnSecond=g_mutateStaticOnSecond=false;
     g_mutateCctorInsideTypeKey=g_mutatedCctorInsideTypeKey=false;
+    g_mutateCctorOnEndPass=g_mutateStaticOnEndPass=false;
+    g_mutateEarlierClassDuringLaterTypeKey=g_mutatedEarlierClass=false;
+    g_dropEndPass=g_duplicateEndPass=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
     g_otherPhysical=nullptr;g_reversePhysicalCallbacks=false;
@@ -746,11 +769,13 @@ static void Exercise(Mode mode,src::Error expectedError) {
             fixture.primitiveClass.genericContainerHandle=&fixture.def;
     }
     if(mode==Mode::StagedGenericContainer)fixture.def.genericContainerIndex=-2;
-    if(mode==Mode::TwoClassesReversedPhysicalCallback) {
+    if(mode==Mode::TwoClassesReversedPhysicalCallback ||
+       mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey) {
         fixture.image.typeCount=2;
         fixture.image.handles[1]=&fixture.secondary;
         g_otherPhysical=&fixture.other;
-        g_reversePhysicalCallbacks=true;
+        g_reversePhysicalCallbacks=
+            mode==Mode::TwoClassesReversedPhysicalCallback;
     }
     if(mode==Mode::BadImageOwner)fixture.image.handles[0]=nullptr;
     if(mode==Mode::RegisteredAotInvalidOwner)
@@ -793,6 +818,12 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::CctorFactsChanged)g_mutateCctorOnSecond=true;
     if(mode==Mode::StaticFactsChanged)g_mutateStaticOnSecond=true;
     if(mode==Mode::CctorFactsDuringTypeKey)g_mutateCctorInsideTypeKey=true;
+    if(mode==Mode::CctorFactsChangedAtEnd)g_mutateCctorOnEndPass=true;
+    if(mode==Mode::StaticFactsChangedAtEnd)g_mutateStaticOnEndPass=true;
+    if(mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey)
+        g_mutateEarlierClassDuringLaterTypeKey=true;
+    if(mode==Mode::MissingEndPass)g_dropEndPass=true;
+    if(mode==Mode::DuplicateEndPass)g_duplicateEndPass=true;
     if(mode==Mode::TerminalDuringCapture)g_publishB1DuringEnumeration=true;
     if(mode==Mode::MissingEnumeration)g_emitPhysical=false;
     if(mode==Mode::MissingSecondPass)g_dropSecondPass=true;
@@ -850,6 +881,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     }
     Register(&fixture.klass);
     if(mode==Mode::TwoClassesReversedPhysicalCallback ||
+       mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
        mode==Mode::CrossImageGeneric ||
        mode==Mode::CrossImageGenericAmbiguous ||
        mode==Mode::CrossImageInterpreter ||
@@ -857,6 +889,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Register(&fixture.other);
     const bool twoRows=
         mode==Mode::TwoClassesReversedPhysicalCallback ||
+        mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
         mode==Mode::CrossImageGeneric ||
         mode==Mode::CrossImageGenericAmbiguous ||
         mode==Mode::RegisteredAotChanged ||
@@ -888,6 +921,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.originalV1FirstEmplaceOwnerMatched);
         Check(receipt.observedClassFactsTwoPassStable);
         Check(receipt.observedClassFactsMatched==expectedRows);
+        Check(receipt.observedClassFactsEndPassStable);
+        Check(receipt.observedClassFactsEndPassMatched==expectedRows);
+        Check(g_physicalPasses==3);
         Check(receipt.originalV1HandlesMatched>=1);
         Check(receipt.originalV1MetadataLookups>=
               receipt.originalV1HandlesMatched);
@@ -1046,6 +1082,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!receipt.originalV1FirstEmplaceOwnerMatched);
         Check(!receipt.observedClassFactsTwoPassStable);
         Check(receipt.observedClassFactsMatched==0);
+        Check(!receipt.observedClassFactsEndPassStable);
+        Check(receipt.observedClassFactsEndPassMatched==0);
         Check(!receipt.originalV1ImageSetStable);
         Check(!receipt.originalV1CompleteField15Parity);
         Check(receipt.originalV1HandlesMatched==0);
@@ -1202,6 +1240,13 @@ int main(){
     Exercise(Mode::StaticFactsChanged,src::Error::ObservedClassFactsChanged);
     Exercise(Mode::CctorFactsDuringTypeKey,src::Error::ObservedClassFactsChanged);
     Check(g_mutatedCctorInsideTypeKey);
+    Exercise(Mode::CctorFactsChangedAtEnd,src::Error::ObservedClassFactsChanged);
+    Exercise(Mode::StaticFactsChangedAtEnd,src::Error::ObservedClassFactsChanged);
+    Exercise(Mode::EarlierClassFactsChangedDuringLaterTypeKey,
+             src::Error::ObservedClassFactsChanged);
+    Check(g_mutatedEarlierClass);
+    Exercise(Mode::MissingEndPass,src::Error::UnmatchedClass);
+    Exercise(Mode::DuplicateEndPass,src::Error::BadPhysicalEnumeration);
     Exercise(Mode::MissingEnumeration,src::Error::UnmatchedClass);
     Exercise(Mode::MissingSecondPass,src::Error::UnmatchedClass);
     Exercise(Mode::DuplicateEnumeration,src::Error::BadPhysicalEnumeration);
