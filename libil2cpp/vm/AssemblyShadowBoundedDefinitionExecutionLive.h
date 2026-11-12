@@ -33,7 +33,7 @@ enum class Error : uint8_t {
     AmbiguousMetadataOwner, OriginalV1ImageSourceUnavailable,
     OriginalV1OwnerMissing, OriginalV1FirstOwnerConflict,
     OriginalV1LookupBudget, ObservedClassFactsChanged,
-    OriginalV1ImageFactsChanged
+    OriginalV1ImageFactsChanged, ObservedClassRootChanged
 };
 
 // Bounded source limit: deliberately caps metadata-owner handle lookups per
@@ -59,6 +59,8 @@ struct Receipt {
     bool originalV1CompleteField15Parity=false; // never set by this source
     size_t observedClassFactsMatched=0; // admitted first/second-pass matches
     bool observedClassFactsTwoPassStable=false; // no whole VM epoch
+    size_t observedClassRootFactsMatched=0; // pointer/tag source observations
+    bool observedClassRootFactsThreePassStable=false; // NOT a VM epoch
     size_t observedClassFactsEndPassMatched=0; // third, end-of-collection pass
     bool observedClassFactsEndPassStable=false; // observational, not atomic
     bool usedCrossImageArgument=false;
@@ -121,6 +123,8 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.originalV1HandlesMatched=0;
     receipt.observedClassFactsMatched=0;
     receipt.observedClassFactsTwoPassStable=false;
+    receipt.observedClassRootFactsMatched=0;
+    receipt.observedClassRootFactsThreePassStable=false;
     receipt.observedClassFactsEndPassMatched=0;
     receipt.observedClassFactsEndPassStable=false;
     receipt.observedRegistryAndCounterFenceStable=false;

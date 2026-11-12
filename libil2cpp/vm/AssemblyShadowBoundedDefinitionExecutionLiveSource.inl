@@ -96,8 +96,15 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     // lifecycle/GC epoch. It owns value bits and an address value ONLY;
     // no class pointer is saved after a callback. The initial-session Reader
     // and g_MetadataLock cover both authenticated class enumerations.
+    // V1 source includes image/TypeDef/byval root identity, not only
+    // per-class cctor/static facts. Snapshot raw pointer VALUES only under
+    // authenticated physical callbacks + g_MetadataLock/initial Reader.
+    // Exact root comparisons detect observed mutation but not GC provenance,
+    // ABA, changing metadata bytes or a coherent whole-VM epoch.
     struct ClassFacts {
         uintptr_t storage=0;
+        uintptr_t image=0,definition=0,typeData=0,generic=0;
+        uint32_t typeCode=0;
         uint8_t bits=0; // started=1, finished=2, exception=4
         bool observed=false;
         static ClassFacts Read(const Il2CppClass* klass) noexcept {
@@ -113,16 +120,36 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                   reinterpret_cast<const int32_t*>(&klass->initializationExceptionGCHandle))!=0)
                 out.bits|=4;
             out.storage=reinterpret_cast<uintptr_t>(klass->static_fields);
+            out.image=reinterpret_cast<uintptr_t>(klass->image);
+            out.definition=reinterpret_cast<uintptr_t>(klass->typeMetadataHandle);
+            out.generic=reinterpret_cast<uintptr_t>(klass->generic_class);
+            const Il2CppType& type=klass->byval_arg;
+            out.typeCode=static_cast<uint32_t>(type.type);
+            if(type.type==IL2CPP_TYPE_CLASS ||
+               type.type==IL2CPP_TYPE_VALUETYPE)
+                out.typeData=reinterpret_cast<uintptr_t>(type.data.typeHandle);
+            else if(type.type==IL2CPP_TYPE_GENERICINST)
+                out.typeData=reinterpret_cast<uintptr_t>(type.data.generic_class);
+            // Other type roots fail the restricted source's shape check:
+            // do not read an inactive type-data union member here.
             out.observed=true;
             return out;
         }
-        bool Same(const ClassFacts& other) const noexcept {
+        bool SameClassState(const ClassFacts& other) const noexcept {
             return observed && other.observed &&
-                bits==other.bits && storage==other.storage;
+                   bits==other.bits && storage==other.storage;
+        }
+        bool SameRoot(const ClassFacts& other) const noexcept {
+            return observed && other.observed &&
+                   image==other.image && definition==other.definition &&
+                   typeData==other.typeData && typeCode==other.typeCode &&
+                   generic==other.generic;
         }
     };
-    static_assert(sizeof(ClassFacts)<=16,
-                  "B2 cctor/static class facts stack bound changed");
+    // Up to 2048 slots * 48 B = 96 KiB at 64-bit (64 KiB over the old
+    // 16-byte class facts). Requires actual Unity thread-stack validation.
+    static_assert(sizeof(ClassFacts)<=48,
+                  "B2 original class source facts stack bound changed");
     struct Context {
         physical::Scratch* membership;
         owned::Rows* rows;
@@ -130,7 +157,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         live::Error error=live::Error::None;
         size_t lookups=0, rejected=0;
         size_t originalV1Lookups=0, originalV1Matches=0;
-        size_t classFactsMatched=0;
+        size_t classFactsMatched=0, classRootFactsMatched=0;
         ClassFacts* firstPassFacts=nullptr;
         assembly_shadow_observed_images::Inventory<live::kMaximumRegisteredAotImages>* images=nullptr;
         assembly_shadow_observed_images::Inventory<64>* observedImages=nullptr;
@@ -378,7 +405,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 c.error=live::Error::InvalidRegistry;return;
             }
             const ClassFacts secondFacts=ClassFacts::Read(klass);
-            if(!c.firstPassFacts[registration].Same(secondFacts)) {
+            if(!c.firstPassFacts[registration].SameRoot(secondFacts)) {
+                ++c.rejected;
+                c.error=live::Error::ObservedClassRootChanged;return;
+            }
+            if(!c.firstPassFacts[registration].SameClassState(secondFacts)) {
                 ++c.rejected;
                 c.error=live::Error::ObservedClassFactsChanged;return;
             }
@@ -879,11 +910,16 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             // If a cctor or static field address visibly changed while the
             // bounded source was executing, revoke the entire class record.
             const ClassFacts finalFacts=ClassFacts::Read(klass);
-            if(!secondFacts.Same(finalFacts)) {
+            if(!secondFacts.SameRoot(finalFacts)) {
+                ++c.rejected;
+                c.error=live::Error::ObservedClassRootChanged;return;
+            }
+            if(!secondFacts.SameClassState(finalFacts)) {
                 ++c.rejected;
                 c.error=live::Error::ObservedClassFactsChanged;return;
             }
             ++c.classFactsMatched;
+            ++c.classRootFactsMatched;
             flags.cctorStarted=(finalFacts.bits&1)!=0;
             flags.cctorFinished=(finalFacts.bits&2)!=0;
             flags.hasInitializationException=(finalFacts.bits&4)!=0;
@@ -961,7 +997,10 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 }
                 end.seen[slot]=1;
                 ++end.matched;
-                if(!end.facts[slot].Same(ClassFacts::Read(klass)))
+                const ClassFacts observed=ClassFacts::Read(klass);
+                if(!end.facts[slot].SameRoot(observed))
+                    end.error=live::Error::ObservedClassRootChanged;
+                else if(!end.facts[slot].SameClassState(observed))
                     end.error=live::Error::ObservedClassFactsChanged;
             },&endPass);
             if(endPass.error!=live::Error::None)
@@ -1014,6 +1053,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.originalV1MetadataLookups=context.originalV1Lookups;
     receipt.originalV1HandlesMatched=context.originalV1Matches;
     receipt.observedClassFactsMatched=context.classFactsMatched;
+    receipt.observedClassRootFactsMatched=context.classRootFactsMatched;
     receipt.rejectedUnsupported=context.rejected;
     receipt.usedCrossImageArgument=context.usedCrossImageArgument;
     receipt.usedUnobservedAotArgumentImage=context.usedUnobservedAotArgumentImage;
@@ -1121,8 +1161,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.observedClassFactsEndPassStable=
         receipt.observedClassFactsTwoPassStable &&
         receipt.observedClassFactsEndPassMatched==receipt.registered;
-    // Same observed facts across three physical traversals, plus the final
-    // row-callback read: NOT a coherent cctor/GC/metadata transaction or V2.
+    receipt.observedClassRootFactsThreePassStable=
+        receipt.observedClassFactsEndPassStable &&
+        receipt.observedClassRootFactsMatched==receipt.registered;
+    // Exact class root pointer/tag equality and cctor/static observations
+    // across three passes are NOT a VM, GC/class lifetime or TypeDef epoch.
     receipt.originalV1ImageFactsTwoPassStable=
         receipt.originalV1ImageSetStable &&
         receipt.originalV1ImageFactsMatched==receipt.originalV1Images &&

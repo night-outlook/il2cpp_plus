@@ -189,6 +189,14 @@ static bool g_changeRevision=false, g_changeCounter=false;
 static bool g_mutateCctorOnSecond=false,g_mutateStaticOnSecond=false;
 static bool g_mutateCctorInsideTypeKey=false,g_mutatedCctorInsideTypeKey=false;
 static bool g_mutateCctorOnEndPass=false,g_mutateStaticOnEndPass=false;
+static bool g_changeRootDefinitionOnSecond=false;
+static bool g_changeRootImageOnEnd=false,g_changeRootDefinitionOnEnd=false;
+static bool g_changeRootTypeCodeOnEnd=false,g_changeRootDataOnEnd=false;
+static bool g_changeRootGenericOnEnd=false;
+static bool g_changeEarlierRootDuringLaterTypeKey=false,g_changedEarlierRoot=false;
+static void* g_alternateTypeHandle=nullptr;
+static Il2CppImage* g_alternateRootImage=nullptr;
+static Il2CppGenericClass* g_alternateGenericClass=nullptr;
 static bool g_mutateEarlierClassDuringLaterTypeKey=false,g_mutatedEarlierClass=false;
 static bool g_dropEndPass=false,g_duplicateEndPass=false;
 static bool g_publishB1DuringEnumeration=false, g_midB1Published=false;
@@ -275,6 +283,13 @@ public:
             g_physical->cctor_started=0; // earlier row was already copied
             g_mutatedEarlierClass=true;
         }
+        if(g_changeEarlierRootDuringLaterTypeKey &&
+           !g_changedEarlierRoot && g_physicalPasses==2 &&
+           g_physical && g_otherPhysical && g_alternateTypeHandle &&
+           handle==g_otherPhysical->typeMetadataHandle) {
+            g_physical->typeMetadataHandle=g_alternateTypeHandle;
+            g_changedEarlierRoot=true; // row already copied, final pass must reject
+        }
         auto* def=static_cast<Il2CppTypeDefinition*>(handle);
         return {def->ns,def->name};
     }
@@ -296,10 +311,22 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
     if(g_physical && g_physicalPasses==2) {
         if(g_mutateCctorOnSecond)g_physical->cctor_started=0;
         if(g_mutateStaticOnSecond)g_physical->static_fields=nullptr;
+        if(g_changeRootDefinitionOnSecond)
+            g_physical->typeMetadataHandle=g_alternateTypeHandle;
     }
     if(g_physical && g_physicalPasses==3) {
         if(g_mutateCctorOnEndPass)g_physical->cctor_started=0;
         if(g_mutateStaticOnEndPass)g_physical->static_fields=nullptr;
+        if(g_changeRootImageOnEnd)
+            g_physical->image=g_alternateRootImage;
+        if(g_changeRootDefinitionOnEnd)
+            g_physical->typeMetadataHandle=g_alternateTypeHandle;
+        if(g_changeRootTypeCodeOnEnd)
+            g_physical->byval_arg.type=IL2CPP_TYPE_VALUETYPE;
+        if(g_changeRootDataOnEnd)
+            g_physical->byval_arg.data.typeHandle=g_alternateTypeHandle;
+        if(g_changeRootGenericOnEnd)
+            g_physical->generic_class=g_alternateGenericClass;
     }
     if(g_emitPhysical && !(g_dropSecondPass && g_physicalPasses==2) &&
        !(g_dropEndPass && g_physicalPasses==3)) {
@@ -582,6 +609,10 @@ enum class Mode {
     UnsupportedImage, SourceChanged, CounterChanged,
     CctorFactsChanged, StaticFactsChanged, CctorFactsDuringTypeKey,
     CctorFactsChangedAtEnd, StaticFactsChangedAtEnd,
+    RootDefinitionChangedOnSecond, RootImageChangedAtEnd,
+    RootDefinitionChangedAtEnd, RootTypeCodeChangedAtEnd,
+    RootTypeDataChangedAtEnd, RootGenericChangedAtEnd,
+    EarlierRootChangedDuringLaterTypeKey,
     EarlierClassFactsChangedDuringLaterTypeKey,
     MissingEndPass, DuplicateEndPass,
     MissingSecondPass,
@@ -593,6 +624,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
     ++cases;
     currentMode=static_cast<int>(mode);
     Fixture fixture;
+    g_alternateTypeHandle=&fixture.outer;
+    g_alternateRootImage=&fixture.supportImage;
+    g_alternateGenericClass=&fixture.genericClass;
     s_executionClasses.fill(nullptr);
     s_executionClassCount=0;
     s_executionRegistryRevision=Revision{};
@@ -612,6 +646,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_mutateCctorOnSecond=g_mutateStaticOnSecond=false;
     g_mutateCctorInsideTypeKey=g_mutatedCctorInsideTypeKey=false;
     g_mutateCctorOnEndPass=g_mutateStaticOnEndPass=false;
+    g_changeRootDefinitionOnSecond=false;
+    g_changeRootImageOnEnd=g_changeRootDefinitionOnEnd=false;
+    g_changeRootTypeCodeOnEnd=g_changeRootDataOnEnd=false;
+    g_changeRootGenericOnEnd=false;
+    g_changeEarlierRootDuringLaterTypeKey=g_changedEarlierRoot=false;
     g_mutateEarlierClassDuringLaterTypeKey=g_mutatedEarlierClass=false;
     g_dropEndPass=g_duplicateEndPass=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
@@ -851,7 +890,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
     }
     if(mode==Mode::StagedGenericContainer)fixture.def.genericContainerIndex=-2;
     if(mode==Mode::TwoClassesReversedPhysicalCallback ||
-       mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey) {
+       mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
+       mode==Mode::EarlierRootChangedDuringLaterTypeKey) {
         fixture.image.typeCount=2;
         fixture.image.handles[1]=&fixture.secondary;
         g_otherPhysical=&fixture.other;
@@ -908,6 +948,20 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::CctorFactsChanged)g_mutateCctorOnSecond=true;
     if(mode==Mode::StaticFactsChanged)g_mutateStaticOnSecond=true;
     if(mode==Mode::CctorFactsDuringTypeKey)g_mutateCctorInsideTypeKey=true;
+    if(mode==Mode::RootDefinitionChangedOnSecond)
+        g_changeRootDefinitionOnSecond=true;
+    if(mode==Mode::RootImageChangedAtEnd)
+        g_changeRootImageOnEnd=true;
+    if(mode==Mode::RootDefinitionChangedAtEnd)
+        g_changeRootDefinitionOnEnd=true;
+    if(mode==Mode::RootTypeCodeChangedAtEnd)
+        g_changeRootTypeCodeOnEnd=true;
+    if(mode==Mode::RootTypeDataChangedAtEnd)
+        g_changeRootDataOnEnd=true;
+    if(mode==Mode::RootGenericChangedAtEnd)
+        g_changeRootGenericOnEnd=true;
+    if(mode==Mode::EarlierRootChangedDuringLaterTypeKey)
+        g_changeEarlierRootDuringLaterTypeKey=true;
     if(mode==Mode::CctorFactsChangedAtEnd)g_mutateCctorOnEndPass=true;
     if(mode==Mode::StaticFactsChangedAtEnd)g_mutateStaticOnEndPass=true;
     if(mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey)
@@ -972,6 +1026,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     Register(&fixture.klass);
     if(mode==Mode::TwoClassesReversedPhysicalCallback ||
        mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
+       mode==Mode::EarlierRootChangedDuringLaterTypeKey ||
        mode==Mode::CrossImageGeneric ||
        mode==Mode::CrossImageGenericAmbiguous ||
        mode==Mode::CrossImageInterpreter ||
@@ -980,6 +1035,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     const bool twoRows=
         mode==Mode::TwoClassesReversedPhysicalCallback ||
         mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
+        mode==Mode::EarlierRootChangedDuringLaterTypeKey ||
         mode==Mode::CrossImageGeneric ||
         mode==Mode::CrossImageGenericAmbiguous ||
         mode==Mode::RegisteredAotChanged ||
@@ -1015,6 +1071,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.observedClassFactsMatched==expectedRows);
         Check(receipt.observedClassFactsEndPassStable);
         Check(receipt.observedClassFactsEndPassMatched==expectedRows);
+        Check(receipt.observedClassRootFactsThreePassStable);
+        Check(receipt.observedClassRootFactsMatched==expectedRows);
         Check(g_physicalPasses==3);
         Check(receipt.originalV1HandlesMatched>=1);
         Check(receipt.originalV1MetadataLookups>=
@@ -1193,6 +1251,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.observedClassFactsMatched==0);
         Check(!receipt.observedClassFactsEndPassStable);
         Check(receipt.observedClassFactsEndPassMatched==0);
+        Check(!receipt.observedClassRootFactsThreePassStable);
+        Check(receipt.observedClassRootFactsMatched==0);
         Check(!receipt.originalV1ImageSetStable);
         Check(!receipt.originalV1ImageFactsTwoPassStable);
         Check(receipt.originalV1ImageFactsMatched==0);
@@ -1368,6 +1428,14 @@ int main(){
     Exercise(Mode::UnsupportedImage,src::Error::UnsupportedImage);
     Exercise(Mode::SourceChanged,src::Error::SourceChanged);
     Exercise(Mode::CounterChanged,src::Error::CounterChanged);
+    Exercise(Mode::RootDefinitionChangedOnSecond,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootImageChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootDefinitionChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootTypeCodeChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootTypeDataChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootGenericChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::EarlierRootChangedDuringLaterTypeKey,src::Error::ObservedClassRootChanged);
+    Check(g_changedEarlierRoot);
     Exercise(Mode::CctorFactsChanged,src::Error::ObservedClassFactsChanged);
     Exercise(Mode::StaticFactsChanged,src::Error::ObservedClassFactsChanged);
     Exercise(Mode::CctorFactsDuringTypeKey,src::Error::ObservedClassFactsChanged);
