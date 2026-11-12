@@ -1111,7 +1111,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
         }
         if(mode==Mode::InterpreterSimpleClass ||
            mode==Mode::InterpreterSimpleValueType)
-            Check(body.find("\"physicalInterpreter\":true")!=std::string::npos);
+            Check(body.find("\"physicalImageKind\":\"Interpreter\"")!=std::string::npos);
         Check(body.find("\"r02\":{\"schemaVersion\":1")!=std::string::npos);
         Check(body.find("\"cctorStarted\":true")!=std::string::npos);
         Check(body.find("\"staticStorageAvailable\":true")!=std::string::npos);
