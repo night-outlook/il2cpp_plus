@@ -1013,8 +1013,8 @@ int main(){
 #endif
     std::printf("{\"kind\":\"R03B2ActualNativeSourceMock\","
         "\"result\":\"PassedActualInlWithMockedVmOnly\","
-        "\"buildFlavor\":\"%s\",\"cases\":%d,\"assertions\":%d,\"primitivePeekCases\":20,\"realUnity\":false,"
+        "\"buildFlavor\":\"%s\",\"cases\":%d,\"assertions\":%d,\"primitivePeekCases\":%u,\"realUnity\":false,"
         "\"physicalClassProvenInRealPlayer\":false,"
         "\"fullCanonicalTypeKeys\":false,\"nativeV2TransportImplemented\":false,"
-        "\"runtimeAcceptance\":false,\"R03Accepted\":false}\n",flavor,cases,assertions);
+        "\"runtimeAcceptance\":false,\"R03Accepted\":false}\n",flavor,cases,assertions,primitivePeekCases);
 }
