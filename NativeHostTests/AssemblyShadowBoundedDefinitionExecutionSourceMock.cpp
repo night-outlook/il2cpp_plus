@@ -540,6 +540,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
         fixture.genericArg1.type=IL2CPP_TYPE_I4;
         fixture.genericArg1.data.typeHandle=nullptr;
         fixture.supportImage.typeCount=2;
+        // The second concrete generic argument is a Methods TypeDef;
+        // it must not also be spuriously duplicated in Support.
+        fixture.supportImage.handles[0]=nullptr;
         fixture.supportImage.handles[1]=&fixture.primitiveDefinition;
         g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
         g_existingPrimitiveDefault=&fixture.primitiveClass;
