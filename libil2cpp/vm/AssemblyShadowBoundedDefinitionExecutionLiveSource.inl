@@ -577,7 +577,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                             if(!primitive || !primitive->image ||
                                !primitive->image->assembly ||
                                !primitive->typeMetadataHandle ||
-                               primitive->rank || primitive->generic_class)
+                               primitive->rank || primitive->generic_class ||
+                               primitive->genericContainerHandle)
                                 return Fail();
                             key::Capture existingDefault;
                             uint32_t arity=0;
