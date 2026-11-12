@@ -15,7 +15,7 @@ enum class Error : uint8_t {
     None, Reused, MissingInput, OutsideBudget, DifferentLength,
     DifferentByte, UnavailableLegacy, UnavailableBounded
 };
-struct View { const char* data=nullptr; size_t bytes=0; };
+struct View { const char* data; size_t bytes; View(const char* p=nullptr,size_t n=0) noexcept : data(p),bytes(n) {} };
 struct Receipt {
     Error error=Error::None;
     size_t legacyBytes=0, boundedBytes=0;
