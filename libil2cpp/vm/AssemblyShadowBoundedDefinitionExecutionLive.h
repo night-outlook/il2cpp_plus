@@ -1,9 +1,10 @@
 #pragma once
-// R03 B2 INACTIVE genuine native observed-class source, restricted to
-// physically matched AOT TypeDef definitions and bounded GENERICINST with
-// independently owner-verified concrete AOT TypeDef args from matched class
-// images. NOT a complete execution-V1 source, V2 field15, coherent VM epoch,
-// or terminal/release recovery API.
+// R03 B2 INACTIVE physical observed-class source: restricted AOT TypeDef,
+// bounded composite/Unicode/default-primitive keys with registered physical
+// AOT owner proof AND first-emplace owner matching the ORIGINAL V1 token-valid
+// physical image enumeration (interpreter and zero-TypeDef included).
+// NOT complete execution V1 field15, terminal-safe V2, coherent VM epoch
+// or a Player/recovery API.
 // Caller owns/preallocates all 3 objects while healthy, one thread only.
 // No registered Il2CppClass* escapes the synchronous physical enumerator.
 #include "AssemblyShadowOwnedExecutionRows.h"
