@@ -9,6 +9,7 @@
 #include "AssemblyShadowOwnedExecutionRows.h"
 #include "AssemblyShadowPhysicalMembership.h"
 #include "AssemblyShadowObservedPhysicalImages.h"
+#include "AssemblyShadowOriginalV1OwnerJoin.h"
 #include "AssemblyShadowFrozenExecutionRecord.h"
 #include "AssemblyShadowMetadataLifetime.h"
 #include <cstddef>
@@ -27,13 +28,16 @@ enum class Error : uint8_t {
     UnsupportedMetadataAncestry, InvalidTypeIdentity, TypeKeyFailed,
     RowsFailed, CounterUnavailable, CounterChanged, FrozenRecordFailed,
     SourceOutsideBudget, PhysicalImageLimit, UnadmittedMetadataOwner,
-    AmbiguousMetadataOwner
+    AmbiguousMetadataOwner, OriginalV1ImageSourceUnavailable,
+    OriginalV1OwnerMissing, OriginalV1FirstOwnerConflict,
+    OriginalV1LookupBudget
 };
 
 // Bounded source limit: deliberately caps metadata-owner handle lookups per
 // class and per capture while holding g_MetadataLock. Not a performance claim.
 static constexpr size_t kMaximumAotImageTypes = 8192;
 static constexpr size_t kMaximumRegisteredAotImages = 1024;
+static constexpr size_t kMaximumOriginalV1Images = 1024;
 static constexpr size_t kMaximumTotalMetadataLookups = 65536;
 
 struct Receipt {
@@ -43,6 +47,11 @@ struct Receipt {
     size_t admittedPhysicalImages=0; // matched observed class images
     size_t registeredPhysicalAotImages=0; // separate raw Assembly table
     bool registeredImageSetStable=false; // two lock-scoped snapshots only
+    size_t originalV1Images=0; // token-valid, interpreter INCLUDED
+    size_t originalV1MetadataLookups=0, originalV1HandlesMatched=0;
+    bool originalV1ImageSetStable=false; // independent second image read
+    bool originalV1FirstEmplaceOwnerMatched=false; // admitted handles ONLY
+    bool originalV1CompleteField15Parity=false; // never set by this source
     bool usedCrossImageArgument=false;
     bool usedUnobservedAotArgumentImage=false;
     bool usedUnicodeAssemblyFold=false;
@@ -93,6 +102,10 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.compositeNodesVisited=0;
     receipt.maximumCompositeDepth=0;
     receipt.registeredImageSetStable=false;
+    receipt.originalV1ImageSetStable=false;
+    receipt.originalV1FirstEmplaceOwnerMatched=false;
+    receipt.originalV1CompleteField15Parity=false;
+    receipt.originalV1HandlesMatched=0;
     receipt.observedRegistryAndCounterFenceStable=false;
     receipt.completeArbitraryTypeKeys=false;
     receipt.completeExecutionDiagnostics=false;
