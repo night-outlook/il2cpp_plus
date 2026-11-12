@@ -186,6 +186,7 @@ static bool g_emitPhysical=true, g_duplicate=false;
 static bool g_dropSecondPass=false;
 static unsigned g_physicalPasses=0;
 static bool g_changeRevision=false, g_changeCounter=false;
+static bool g_mutateCctorOnSecond=false,g_mutateStaticOnSecond=false;
 static bool g_publishB1DuringEnumeration=false, g_midB1Published=false;
 static Il2CppClass* g_physical=nullptr;
 static Il2CppClass* g_otherPhysical=nullptr;
@@ -264,6 +265,10 @@ public:
 static bool Interpreter(const Il2CppAssembly* owner){return owner->interpreter;}
 static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* context){
     ++g_physicalPasses;
+    if(g_physical && g_physicalPasses==2) {
+        if(g_mutateCctorOnSecond)g_physical->cctor_started=0;
+        if(g_mutateStaticOnSecond)g_physical->static_fields=nullptr;
+    }
     if(g_emitPhysical && !(g_dropSecondPass && g_physicalPasses==2)) {
         if(g_reversePhysicalCallbacks && g_otherPhysical)
             callback(g_otherPhysical,context);
@@ -530,6 +535,7 @@ enum class Mode {
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
     StagedNestedIndex,
     UnsupportedImage, SourceChanged, CounterChanged,
+    CctorFactsChanged, StaticFactsChanged,
     MissingSecondPass,
     TerminalDuringCapture,
     MissingEnumeration, DuplicateEnumeration, BadAssembly
@@ -552,6 +558,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_rawAssemblies[g_rawCount++]=&fixture.assembly;
     il2cpp_defaults=Il2CppDefaults{};
     g_changeRevision=false;g_changeCounter=false;
+    g_mutateCctorOnSecond=g_mutateStaticOnSecond=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
     g_otherPhysical=nullptr;g_reversePhysicalCallbacks=false;
@@ -776,6 +783,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::UnsupportedImage)fixture.image.typeCount=8193;
     if(mode==Mode::SourceChanged)g_changeRevision=true;
     if(mode==Mode::CounterChanged)g_changeCounter=true;
+    if(mode==Mode::CctorFactsChanged)g_mutateCctorOnSecond=true;
+    if(mode==Mode::StaticFactsChanged)g_mutateStaticOnSecond=true;
     if(mode==Mode::TerminalDuringCapture)g_publishB1DuringEnumeration=true;
     if(mode==Mode::MissingEnumeration)g_emitPhysical=false;
     if(mode==Mode::MissingSecondPass)g_dropSecondPass=true;
@@ -869,6 +878,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.registeredImageSetStable);
         Check(receipt.originalV1ImageSetStable);
         Check(receipt.originalV1FirstEmplaceOwnerMatched);
+        Check(receipt.observedClassFactsTwoPassStable);
+        Check(receipt.observedClassFactsMatched==expectedRows);
         Check(receipt.originalV1HandlesMatched>=1);
         Check(receipt.originalV1MetadataLookups>=
               receipt.originalV1HandlesMatched);
@@ -1025,6 +1036,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!owned->Complete() && owned->Count()==0);
         Check(!receipt.callbackPhysicalMembershipProven);
         Check(!receipt.originalV1FirstEmplaceOwnerMatched);
+        Check(!receipt.observedClassFactsTwoPassStable);
+        Check(receipt.observedClassFactsMatched==0);
         Check(!receipt.originalV1ImageSetStable);
         Check(!receipt.originalV1CompleteField15Parity);
         Check(receipt.originalV1HandlesMatched==0);
@@ -1177,6 +1190,8 @@ int main(){
     Exercise(Mode::UnsupportedImage,src::Error::UnsupportedImage);
     Exercise(Mode::SourceChanged,src::Error::SourceChanged);
     Exercise(Mode::CounterChanged,src::Error::CounterChanged);
+    Exercise(Mode::CctorFactsChanged,src::Error::ObservedClassFactsChanged);
+    Exercise(Mode::StaticFactsChanged,src::Error::ObservedClassFactsChanged);
     Exercise(Mode::MissingEnumeration,src::Error::UnmatchedClass);
     Exercise(Mode::MissingSecondPass,src::Error::UnmatchedClass);
     Exercise(Mode::DuplicateEnumeration,src::Error::BadPhysicalEnumeration);
