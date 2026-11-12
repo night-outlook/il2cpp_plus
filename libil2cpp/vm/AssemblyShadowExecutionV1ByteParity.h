@@ -49,6 +49,7 @@ public:
     Probe(Probe&&)=delete;
     Probe& operator=(Probe&&)=delete;
     const Receipt& Result() const noexcept {return receipt_;}
+    bool Fresh() const noexcept {return !consumed_ && receipt_.error==Error::None;}
     bool Compare(View legacy,View bounded) noexcept {
         if(consumed_)return Reject(Error::Reused);
         consumed_=true;
