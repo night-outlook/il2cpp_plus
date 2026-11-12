@@ -11,6 +11,7 @@
 #include "AssemblyShadowBoundedGeneralLive.h"
 #include "AssemblyShadowBoundedExecutionEmptyLive.h"
 #include "AssemblyShadowBoundedDefinitionExecutionLive.h"
+#include "AssemblyShadowExecutionV1ByteParity.h"
 #include "AssemblyShadowObservationMemo.h"
 #include "AssemblyShadowOpaqueExecutionInventory.h"
 #include "AssemblyShadowExecutionRegistryRevision.h"
@@ -1893,6 +1894,8 @@ AssemblyShadowError AssemblyShadow::GetExecutionDiagnosticsJson(std::string& jso
 
 // P1 inactive reader around the original (unmodified) V1 getter.
 #include "AssemblyShadowAdmittedExecutionDiagnosticsSource.inl"
+// R03 B2 inactive healthy-time original V1 byte-parity probe; no Player caller.
+#include "AssemblyShadowExecutionV1ByteParitySource.inl"
 
 const Il2CppAssembly* AssemblyShadow::ResolveAssembly(const Il2CppAssembly* assembly)
 {
