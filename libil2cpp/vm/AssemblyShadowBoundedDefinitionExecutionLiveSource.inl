@@ -587,7 +587,20 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                                                existingDefault,arity,resolved))
                                 return false;
                             if(!resolved || resolved!=primitive->image ||
-                               arity!=0)return Fail();
+                               arity!=0 || primitive->declaringType)
+                                return Fail();
+                            // The original V1 Make(primitive) uses *class*
+                            // declaration names. Our owned key uses physical
+                            // TypeDef names. Require equality before claiming
+                            // primitive V1 grammar parity in this subset.
+                            const auto names=GlobalMetadata::GetTypeNamespaceAndName(
+                                primitive->typeMetadataHandle);
+                            if(!primitive->name || !names.second ||
+                               std::strcmp(primitive->name,names.second)!=0 ||
+                               std::strcmp(primitive->namespaze?
+                                   primitive->namespaze:"",names.first?
+                                   names.first:"")!=0)
+                                return Fail();
                             if(!destination.FromDefinition(existingDefault))
                                 return Fail();
                             if(resolved!=sourceImage)
