@@ -171,6 +171,61 @@ static void Positive() {
     r02::ObservationCounters::Add(r02::Metric::CounterpartMisses,789);
     CompareCase(edge,3,9,"FailedAfterCommit",18446744073709551610ULL);
 }
+// Two independent observations that are internally well-formed can differ.
+// Never treat such a mismatch as permission to emit original V1 field15.
+static void DivergentClassFacts() {
+    ++cases;
+    r02::Snapshot s; r02::SnapshotReceipt receipt;
+    CHECK(r02::Snapshot::TryCaptureCurrent(s,receipt));
+    const ex::ClassRow before[]={
+        Row("Methods","type(7:methods/4:Demo/4:Hero@0)",
+            false,false,true,false,false,false,"",false,false)
+    };
+    ex::ClassRow after=before[0];
+    after.cctorStarted=true;
+    const std::string legacy=Legacy(Header(s,6,"Committed",17),before,1);
+    auto* record=new frozen::Record();
+    frozen::Identity identity;
+    identity.stateCode=6;identity.state=diagnostic::Quoted("Committed");
+    identity.generation=17;
+    CHECK(record->Begin(identity,s,1));
+    CHECK(record->AddClass(after));
+    CHECK(record->Freeze());
+    const std::string fromFrozen(record->Data(),record->Bytes());
+    CHECK(legacy!=fromFrozen);
+    CHECK(legacy.find("\"cctorStarted\":false")!=std::string::npos);
+    CHECK(fromFrozen.find("\"cctorStarted\":true")!=std::string::npos);
+    CHECK(record->Complete());
+    delete record;
+}
+static void DivergentR02Counter() {
+    ++cases;
+    r02::Snapshot before; r02::SnapshotReceipt receipt;
+    CHECK(r02::Snapshot::TryCaptureCurrent(before,receipt));
+    // The original live R02 formatter reads current counters; unlike the
+    // frozen formatter, it may see an independent increment between reads.
+    const uint64_t hits=before.Read(r02::Metric::ObservationMemoHits);
+    r02::ObservationCounters::Add(r02::Metric::ObservationMemoHits,1);
+    auto* record=new frozen::Record();
+    frozen::Identity identity;
+    identity.stateCode=6;identity.state=diagnostic::Quoted("Committed");
+    identity.generation=18;
+    CHECK(record->Begin(identity,before,0));
+    CHECK(record->Freeze());
+    const std::string frozenText(record->Data(),record->Bytes());
+    // Keep the legacy header identical to the earlier owned snapshot;
+    // changing only the *live* R02 suffix reveals the temporal difference.
+    const std::string legacy=Legacy(Header(before,6,"Committed",18),nullptr,0);
+    CHECK(legacy!=frozenText);
+    const size_t legacyR02=legacy.find("\"r02\":{");
+    const size_t frozenR02=frozenText.find("\"r02\":{");
+    CHECK(legacyR02!=std::string::npos && legacyR02==frozenR02);
+    CHECK(std::memcmp(legacy.data(),frozenText.data(),legacyR02)==0);
+    CHECK(hits+1==r02::ObservationCounters::Read(
+        r02::Metric::ObservationMemoHits));
+    CHECK(record->Complete());
+    delete record;
+}
 static void Negative() {
     r02::Snapshot snapshot; r02::SnapshotReceipt receipt;
     CHECK(r02::Snapshot::TryCaptureCurrent(snapshot,receipt));
@@ -216,9 +271,9 @@ int main() {
     static_assert(!std::is_copy_constructible<frozen::Record>::value,
                   "Frozen diagnostics must retain a unique owner");
     CHECK(std::locale()==std::locale::classic());
-    Positive();Negative();
+    Positive();DivergentClassFacts();DivergentR02Counter();Negative();
     CHECK(guardedAllocations==0);
-    CHECK(cases==8 && matchedRows==6);
+    CHECK(cases==10 && matchedRows==6);
     std::printf("{\"kind\":\"R03B2OriginalV1ExecutionSerializerParityHost\","
                 "\"result\":\"PassedActualLegacyAndFrozenSerializerBytes\","
                 "\"cases\":%u,\"assertions\":%u,\"rows\":%u,"
