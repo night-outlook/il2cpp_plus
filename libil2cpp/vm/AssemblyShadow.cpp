@@ -29,6 +29,8 @@
 #include "AssemblyShadowVisibility.h"
 #include "AssemblyShadowTypeResolver.h"
 #include "il2cpp-class-internals.h"
+// B2 inactive null-safe read of preinitialized primitive defaults.
+#include "AssemblyShadowExistingPrimitiveDefaults.h"
 #include "il2cpp-api.h"
 #include "il2cpp-object-internals.h"
 #include "vm/Assembly.h"
@@ -36,8 +38,6 @@
 #include "vm/Image.h"
 #include "vm/MetadataCache.h"
 #include "vm/GlobalMetadata.h"
-// B2 inactive primitive source reads existing il2cpp_defaults only.
-#include "vm/Class.h"
 // B2 restricted physical TypeDef source reads Il2CppTypeDefinition members;
 // GlobalMetadata.h alone only forward-declares this file-format type.
 #include "vm/GlobalMetadataFileInternals.h"
