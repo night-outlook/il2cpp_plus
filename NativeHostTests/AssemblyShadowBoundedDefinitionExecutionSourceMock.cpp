@@ -20,6 +20,7 @@
 
 static constexpr int kTypeIndexInvalid=-1;
 static constexpr int kGenericContainerIndexInvalid=-1;
+static constexpr int IL2CPP_TYPE_I4=8;
 static constexpr int IL2CPP_TYPE_CLASS=18;
 static constexpr int IL2CPP_TYPE_VALUETYPE=17;
 static constexpr int IL2CPP_TYPE_GENERICINST=21;
@@ -151,6 +152,15 @@ static size_t g_rawCount=0,g_rawVisits=0;
 static bool g_dropRegisteredOnSecond=false;
 static std::array<Il2CppAssembly,1025> g_extraAssemblies{};
 static std::array<Il2CppImage,1025> g_extraImages{};
+static Il2CppClass* g_existingPrimitiveDefault=nullptr;
+// Mirror the control flow of actual Class.cpp::FromIl2CppTypeEnum:
+// a preinitialized il2cpp_defaults class, never a new class/cache entry.
+class Class {
+public:
+    static Il2CppClass* FromIl2CppTypeEnum(int code) noexcept {
+        return code==IL2CPP_TYPE_I4?g_existingPrimitiveDefault:nullptr;
+    }
+};
 class Assembly {
 public:
     static bool TryVisitRegisteredAotImages(
@@ -260,6 +270,7 @@ struct Fixture {
     Il2CppTypeDefinition def{};
     Il2CppTypeDefinition outer{};
     Il2CppTypeDefinition secondary{};
+    Il2CppTypeDefinition primitiveDefinition{};
     Il2CppType declaring{};
     Il2CppType genericBase{},genericArg1{},genericArg2{};
     Il2CppType nestedBase{},compositeLeaf{},chain[11]{};
@@ -275,6 +286,7 @@ struct Fixture {
     Il2CppImage supportImage{};
     Il2CppClass klass{};
     Il2CppClass other{};
+    Il2CppClass primitiveClass{};
     ActiveSnapshot active{};
     Fixture() {
         assembly.aname.name="Methods";
@@ -282,6 +294,7 @@ struct Fixture {
         def.ns="Demo";def.name="Hero";
         outer.ns="Demo";outer.name="Outer";
         secondary.ns="Demo";secondary.name="Friend";
+        primitiveDefinition.ns="System";primitiveDefinition.name="Int32";
         declaring.data.typeHandle=&outer;
         genericBase.type=IL2CPP_TYPE_CLASS;
         genericBase.data.typeHandle=&def;
@@ -311,6 +324,10 @@ struct Fixture {
         supportImage.assembly=&supportAssembly;
         supportAssembly.image=&supportImage;supportImage.token=0;
         supportImage.typeCount=1;supportImage.handles[0]=&secondary;
+        primitiveClass.image=&supportImage;
+        primitiveClass.typeMetadataHandle=&primitiveDefinition;
+        primitiveClass.name=primitiveDefinition.name;
+        primitiveClass.namespaze=primitiveDefinition.ns;
         image.handles[0]=&def;
         klass.image=&image;klass.typeMetadataHandle=&def;
         klass.namespaze=def.ns;klass.name=def.name;
@@ -336,6 +353,9 @@ enum class Mode {
     CrossImageNestedArgument,
     GenericWrongArity, GenericTooManyArguments,
     GenericQualifiedArgument, GenericConstructedArgument,
+    PrimitiveDefault, PrimitiveQualified, PrimitiveMissingDefault,
+    PrimitiveUnregistered, PrimitiveWrongHandle, PrimitiveWrongImage,
+    PrimitiveUnsupportedTag, PrimitiveAmbiguousOwner, PrimitiveGenericArity,
     GenericPointerArgument, GenericSzArrayArgument,
     GenericArrayArgument, GenericQualifiedPointerArgument,
     GenericArrayBadSizes, GenericArrayMissingElement,
@@ -367,6 +387,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_rawAssemblies.fill(nullptr);g_rawCount=0;g_rawVisits=0;
     g_dropRegisteredOnSecond=false;
     g_rawAssemblies[g_rawCount++]=&fixture.assembly;
+    g_existingPrimitiveDefault=nullptr;
     g_changeRevision=false;g_changeCounter=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
@@ -378,6 +399,15 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument ||
        mode==Mode::GenericArgumentMissingOwner ||
        mode==Mode::GenericWrongArity || mode==Mode::GenericTooManyArguments ||
+       mode==Mode::PrimitiveDefault ||
+       mode==Mode::PrimitiveQualified ||
+       mode==Mode::PrimitiveMissingDefault ||
+       mode==Mode::PrimitiveUnregistered ||
+       mode==Mode::PrimitiveWrongHandle ||
+       mode==Mode::PrimitiveWrongImage ||
+       mode==Mode::PrimitiveUnsupportedTag ||
+       mode==Mode::PrimitiveAmbiguousOwner ||
+       mode==Mode::PrimitiveGenericArity ||
        mode==Mode::GenericQualifiedArgument ||
        mode==Mode::GenericConstructedArgument ||
        mode==Mode::GenericPointerArgument ||
@@ -494,6 +524,35 @@ static void Exercise(Mode mode,src::Error expectedError) {
             fixture.supportImage.handles[1]=&fixture.outer;
         }
     }
+
+    const bool primitiveMode=
+        mode==Mode::PrimitiveDefault || mode==Mode::PrimitiveQualified ||
+        mode==Mode::PrimitiveMissingDefault || mode==Mode::PrimitiveUnregistered ||
+        mode==Mode::PrimitiveWrongHandle || mode==Mode::PrimitiveWrongImage ||
+        mode==Mode::PrimitiveUnsupportedTag || mode==Mode::PrimitiveAmbiguousOwner ||
+        mode==Mode::PrimitiveGenericArity;
+    if(primitiveMode) {
+        fixture.genericArg1.type=IL2CPP_TYPE_I4;
+        fixture.genericArg1.data.typeHandle=nullptr;
+        fixture.supportImage.typeCount=2;
+        fixture.supportImage.handles[1]=&fixture.primitiveDefinition;
+        g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
+        g_existingPrimitiveDefault=&fixture.primitiveClass;
+        if(mode==Mode::PrimitiveQualified)fixture.genericArg1.byref=1;
+        if(mode==Mode::PrimitiveMissingDefault)g_existingPrimitiveDefault=nullptr;
+        if(mode==Mode::PrimitiveUnregistered)--g_rawCount;
+        if(mode==Mode::PrimitiveWrongHandle)
+            fixture.primitiveClass.typeMetadataHandle=&fixture.outer;
+        if(mode==Mode::PrimitiveWrongImage)
+            fixture.primitiveClass.image=&fixture.image;
+        if(mode==Mode::PrimitiveUnsupportedTag)fixture.genericArg1.type=42;
+        if(mode==Mode::PrimitiveAmbiguousOwner) {
+            fixture.image.typeCount=2;
+            fixture.image.handles[1]=&fixture.primitiveDefinition;
+        }
+        if(mode==Mode::PrimitiveGenericArity)
+            fixture.primitiveDefinition.genericContainerIndex=0;
+    }
     if(mode==Mode::StagedGenericContainer)fixture.def.genericContainerIndex=-2;
     if(mode==Mode::TwoClassesReversedPhysicalCallback) {
         fixture.image.typeCount=2;
@@ -590,6 +649,14 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.admittedMetadataEpoch==1);
         Check(receipt.registeredImageSetStable);
         Check(receipt.registeredPhysicalAotImages>=receipt.admittedPhysicalImages);
+        const bool admittedPrimitive=
+            mode==Mode::PrimitiveDefault||mode==Mode::PrimitiveQualified;
+        Check(receipt.usedExistingPrimitiveDefault==admittedPrimitive);
+        Check(receipt.admittedPrimitiveArguments==(admittedPrimitive?1u:0u));
+        if(admittedPrimitive) {
+            Check(receipt.registeredPhysicalAotImages==2);
+            Check(receipt.admittedPhysicalImages==1);
+        }
         const bool unicode=(mode==Mode::UnicodeAssembly ||
             mode==Mode::UnicodePathVersionAssembly ||
             mode==Mode::UnicodeSupplementaryAssembly);
@@ -599,7 +666,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
                                     mode==Mode::GenericQualifiedPointerArgument);
         const bool szArrayArgument=(mode==Mode::GenericSzArrayArgument);
         const bool mdArrayArgument=(mode==Mode::GenericArrayArgument);
-        const bool qualifiedArgument=(mode==Mode::GenericQualifiedArgument ||
+        const bool qualifiedArgument=(mode==Mode::PrimitiveQualified ||
+                                      mode==Mode::PrimitiveDefault ||
+                         mode==Mode::PrimitiveQualified ||
+                         mode==Mode::GenericQualifiedArgument ||
                                       mode==Mode::GenericQualifiedPointerArgument);
         Check(receipt.usedNestedGenericArgument==nestedGeneric);
         Check(receipt.usedPointerArgument==pointerArgument);
@@ -613,10 +683,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
 
         const bool crossImage=(mode==Mode::CrossImageGeneric ||
                                mode==Mode::CrossImageNestedArgument ||
-                               mode==Mode::CrossImageGenericUnobserved);
+                               mode==Mode::CrossImageGenericUnobserved ||
+                               admittedPrimitive);
         Check(receipt.usedCrossImageArgument==crossImage);
         Check(receipt.usedUnobservedAotArgumentImage==
-              (mode==Mode::CrossImageGenericUnobserved));
+              (mode==Mode::CrossImageGenericUnobserved||admittedPrimitive));
         Check(receipt.admittedPhysicalImages==(twoRows?2u:1u) ||
               mode==Mode::TwoClassesReversedPhysicalCallback);
         Check(owned->Complete() && owned->Count()==expectedRows &&
@@ -674,6 +745,13 @@ static void Exercise(Mode mode,src::Error expectedError) {
             Check(body.find(generic)!=std::string::npos);
             Check(body.find("\"typeKey\":\"generic(")!=std::string::npos);
         }
+        if(admittedPrimitive) {
+            const std::string primitive="type(7:support/6:System/5:Int32@0)";
+            Check(body.find(primitive)!=std::string::npos);
+            if(mode==Mode::PrimitiveQualified)
+                Check(body.find("qualified(0,0,1,0,"+primitive+")")!=
+                      std::string::npos);
+        }
         if(mode==Mode::GenericQualifiedArgument)
             Check(body.find("qualified(0,0,1,0,type(")!=std::string::npos);
         if(mode==Mode::GenericPointerArgument)
@@ -719,6 +797,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!owned->Complete() && owned->Count()==0);
         Check(!receipt.callbackPhysicalMembershipProven);
         Check(!receipt.usedUnicodeAssemblyFold);
+        Check(!receipt.usedExistingPrimitiveDefault);
+        Check(receipt.admittedPrimitiveArguments==0);
         Check(!receipt.usedNestedGenericArgument &&
               !receipt.usedPointerArgument && !receipt.usedSzArrayArgument &&
               !receipt.usedMdArrayArgument && !receipt.usedQualifiedArgument);
@@ -728,6 +808,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     delete record;
     delete owned;
     s_active.store(nullptr);
+    g_existingPrimitiveDefault=nullptr;
 }
 static void TestPhysicalImageInventoryBounds() {
     namespace physical_images=il2cpp::vm::assembly_shadow_observed_images;
@@ -760,6 +841,15 @@ int main(){
     Exercise(Mode::InvalidUnicodeOverlong,src::Error::TypeKeyFailed);
     Exercise(Mode::InvalidUnicodeSurrogate,src::Error::TypeKeyFailed);
     Exercise(Mode::GenericDefinition,src::Error::None);
+    Exercise(Mode::PrimitiveDefault,src::Error::None);
+    Exercise(Mode::PrimitiveQualified,src::Error::None);
+    Exercise(Mode::PrimitiveMissingDefault,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::PrimitiveUnregistered,src::Error::UnadmittedMetadataOwner);
+    Exercise(Mode::PrimitiveWrongHandle,src::Error::UnadmittedMetadataOwner);
+    Exercise(Mode::PrimitiveWrongImage,src::Error::InvalidTypeIdentity);
+    Exercise(Mode::PrimitiveUnsupportedTag,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::PrimitiveAmbiguousOwner,src::Error::AmbiguousMetadataOwner);
+    Exercise(Mode::PrimitiveGenericArity,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericSameImage,src::Error::None);
     Exercise(Mode::GenericNestedArgument,src::Error::None);
     Exercise(Mode::CrossImageGeneric,src::Error::None);
