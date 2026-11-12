@@ -706,7 +706,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!receipt.completeExecutionDiagnostics);
         Check(!receipt.coherentVmEpochProven && !receipt.runtimeAcceptance);
         const std::string body(record->Data(),record->Bytes());
-        const char* key=(mode==Mode::GenericDefinition ||
+        const char* key=(mode==Mode::PrimitiveDefault ||
+                         mode==Mode::PrimitiveQualified ||
+                         mode==Mode::GenericDefinition ||
                          mode==Mode::GenericSameImage ||
                          mode==Mode::GenericNestedArgument ||
                          mode==Mode::GenericQualifiedArgument ||
