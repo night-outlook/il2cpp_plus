@@ -14,6 +14,8 @@ on:
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h
       - libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl
+      - libil2cpp/vm/AssemblyShadowExecutionV1ByteParity.h
+      - libil2cpp/vm/AssemblyShadowExecutionV1ByteParitySource.inl
       - libil2cpp/vm/AssemblyShadowExistingPrimitiveDefaults.h
       - libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
       - libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h
@@ -61,6 +63,8 @@ jobs:
           grep -Fq 'assembly_shadow_registered_aot_scan::Scan(' libil2cpp/vm/Assembly.cpp
           shasum -a 256 "$SRC" \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl \
+            libil2cpp/vm/AssemblyShadowExecutionV1ByteParity.h \
+            libil2cpp/vm/AssemblyShadowExecutionV1ByteParitySource.inl \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h \
             libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h \
             libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h \
@@ -97,6 +101,8 @@ jobs:
           assert j['buildFlavor']==sys.argv[2]
           assert j['cases']>=67 and j['assertions']>=1186
           assert j['primitivePeekCases']==20
+          assert j['parityProbeCases']==3
+          assert j['realLegacyGetter'] is False
           assert j['realUnity'] is False
           assert j['physicalClassProvenInRealPlayer'] is False
           assert j['fullCanonicalTypeKeys'] is False
