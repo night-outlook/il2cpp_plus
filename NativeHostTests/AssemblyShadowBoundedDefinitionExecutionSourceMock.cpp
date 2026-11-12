@@ -187,6 +187,7 @@ static bool g_dropSecondPass=false;
 static unsigned g_physicalPasses=0;
 static bool g_changeRevision=false, g_changeCounter=false;
 static bool g_mutateCctorOnSecond=false,g_mutateStaticOnSecond=false;
+static bool g_mutateCctorInsideTypeKey=false,g_mutatedCctorInsideTypeKey=false;
 static bool g_publishB1DuringEnumeration=false, g_midB1Published=false;
 static Il2CppClass* g_physical=nullptr;
 static Il2CppClass* g_otherPhysical=nullptr;
@@ -247,6 +248,11 @@ public:
 class GlobalMetadata {
 public:
     static std::pair<const char*,const char*> GetTypeNamespaceAndName(void* handle){
+        if(g_mutateCctorInsideTypeKey && !g_mutatedCctorInsideTypeKey &&
+           g_physicalPasses==2 && g_physical) {
+            g_physical->cctor_started=0; // after second-pass fact check
+            g_mutatedCctorInsideTypeKey=true;
+        }
         auto* def=static_cast<Il2CppTypeDefinition*>(handle);
         return {def->ns,def->name};
     }
@@ -535,7 +541,7 @@ enum class Mode {
     NestedType, WrongNestedOwner, CyclicNested, InvalidDeclaringShape,
     StagedNestedIndex,
     UnsupportedImage, SourceChanged, CounterChanged,
-    CctorFactsChanged, StaticFactsChanged,
+    CctorFactsChanged, StaticFactsChanged, CctorFactsDuringTypeKey,
     MissingSecondPass,
     TerminalDuringCapture,
     MissingEnumeration, DuplicateEnumeration, BadAssembly
@@ -559,6 +565,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     il2cpp_defaults=Il2CppDefaults{};
     g_changeRevision=false;g_changeCounter=false;
     g_mutateCctorOnSecond=g_mutateStaticOnSecond=false;
+    g_mutateCctorInsideTypeKey=g_mutatedCctorInsideTypeKey=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
     g_otherPhysical=nullptr;g_reversePhysicalCallbacks=false;
@@ -785,6 +792,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::CounterChanged)g_changeCounter=true;
     if(mode==Mode::CctorFactsChanged)g_mutateCctorOnSecond=true;
     if(mode==Mode::StaticFactsChanged)g_mutateStaticOnSecond=true;
+    if(mode==Mode::CctorFactsDuringTypeKey)g_mutateCctorInsideTypeKey=true;
     if(mode==Mode::TerminalDuringCapture)g_publishB1DuringEnumeration=true;
     if(mode==Mode::MissingEnumeration)g_emitPhysical=false;
     if(mode==Mode::MissingSecondPass)g_dropSecondPass=true;
@@ -1192,6 +1200,8 @@ int main(){
     Exercise(Mode::CounterChanged,src::Error::CounterChanged);
     Exercise(Mode::CctorFactsChanged,src::Error::ObservedClassFactsChanged);
     Exercise(Mode::StaticFactsChanged,src::Error::ObservedClassFactsChanged);
+    Exercise(Mode::CctorFactsDuringTypeKey,src::Error::ObservedClassFactsChanged);
+    Check(g_mutatedCctorInsideTypeKey);
     Exercise(Mode::MissingEnumeration,src::Error::UnmatchedClass);
     Exercise(Mode::MissingSecondPass,src::Error::UnmatchedClass);
     Exercise(Mode::DuplicateEnumeration,src::Error::BadPhysicalEnumeration);
