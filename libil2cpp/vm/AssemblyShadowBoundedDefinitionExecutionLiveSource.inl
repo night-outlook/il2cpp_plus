@@ -95,6 +95,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         bool usedCrossImageArgument=false;
         bool usedUnobservedAotArgumentImage=false;
         bool usedUnicodeAssemblyFold=false;
+        bool usedExistingPrimitiveDefault=false;
+        size_t admittedPrimitiveArguments=0;
         bool usedNestedGenericArgument=false;
         bool usedPointerArgument=false;
         bool usedSzArrayArgument=false;
@@ -560,10 +562,42 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                                 return Fail();
                             return true;
                         }
-                        default:
-                            // Primitive class resolution and open VAR/MVAR
-                            // need a separately proven metadata-owned source.
-                            return Fail();
+                        default: {
+                            // The original V1 default branch uses
+                            // Class::FromIl2CppTypeEnum(type->type), a switch
+                            // over preinitialized il2cpp_defaults pointers.
+                            // It does not create a class or populate caches.
+                            // The returned class MUST independently pass
+                            // registered physical AOT TypeDef ownership.
+                            // VAR/MVAR and unsupported tags return null and
+                            // still fail closed, matching original metadata-
+                            // only VAR/MVAR rejection without class creation.
+                            const Il2CppClass* primitive=
+                                Class::FromIl2CppTypeEnum(value->type);
+                            if(!primitive || !primitive->image ||
+                               !primitive->image->assembly ||
+                               !primitive->typeMetadataHandle ||
+                               primitive->rank || primitive->generic_class)
+                                return Fail();
+                            key::Capture existingDefault;
+                            uint32_t arity=0;
+                            const Il2CppImage* resolved=nullptr;
+                            if(!makeDefinition(primitive->typeMetadataHandle,
+                                               primitive->image,
+                                               existingDefault,arity,resolved))
+                                return false;
+                            if(!resolved || resolved!=primitive->image ||
+                               arity!=0)return Fail();
+                            if(!destination.FromDefinition(existingDefault))
+                                return Fail();
+                            if(resolved!=sourceImage)
+                                context.usedCrossImageArgument=true;
+                            if(!context.observedImages->Contains(resolved))
+                                context.usedUnobservedAotArgumentImage=true;
+                            context.usedExistingPrimitiveDefault=true;
+                            ++context.admittedPrimitiveArguments;
+                            return true;
+                        }
                     }
                 }
             };
@@ -650,6 +684,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.usedCrossImageArgument=context.usedCrossImageArgument;
     receipt.usedUnobservedAotArgumentImage=context.usedUnobservedAotArgumentImage;
     receipt.usedUnicodeAssemblyFold=context.usedUnicodeAssemblyFold;
+    receipt.usedExistingPrimitiveDefault=context.usedExistingPrimitiveDefault;
+    receipt.admittedPrimitiveArguments=context.admittedPrimitiveArguments;
     receipt.usedNestedGenericArgument=context.usedNestedGenericArgument;
     receipt.usedPointerArgument=context.usedPointerArgument;
     receipt.usedSzArrayArgument=context.usedSzArrayArgument;
