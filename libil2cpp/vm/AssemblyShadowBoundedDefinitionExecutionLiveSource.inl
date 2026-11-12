@@ -89,6 +89,38 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     if(!assembly_shadow_bounded_execution_empty_live::CompleteCoverage(counters))
         return reject(live::Error::CounterUnavailable);
 
+    // This exact primitive snapshot covers the fields printed by the
+    // ORIGINAL execution V1 per-class serializer, not a class-initialization
+    // lifecycle/GC epoch. It owns value bits and an address value ONLY;
+    // no class pointer is saved after a callback. The initial-session Reader
+    // and g_MetadataLock cover both authenticated class enumerations.
+    struct ClassFacts {
+        uintptr_t storage=0;
+        uint8_t bits=0; // started=1, finished=2, exception=4
+        bool observed=false;
+        static ClassFacts Read(const Il2CppClass* klass) noexcept {
+            ClassFacts out{};
+            if(!klass)return out;
+            if(os::Atomic::LoadRelaxed(
+                  reinterpret_cast<const int32_t*>(&klass->cctor_started))!=0)
+                out.bits|=1;
+            if(os::Atomic::LoadRelaxed(
+                  reinterpret_cast<const int32_t*>(&klass->cctor_finished_or_no_cctor))!=0)
+                out.bits|=2;
+            if(os::Atomic::LoadRelaxed(
+                  reinterpret_cast<const int32_t*>(&klass->initializationExceptionGCHandle))!=0)
+                out.bits|=4;
+            out.storage=reinterpret_cast<uintptr_t>(klass->static_fields);
+            out.observed=true;
+            return out;
+        }
+        bool Same(const ClassFacts& other) const noexcept {
+            return observed && other.observed &&
+                bits==other.bits && storage==other.storage;
+        }
+    };
+    static_assert(sizeof(ClassFacts)<=16,
+                  "B2 cctor/static class facts stack bound changed");
     struct Context {
         physical::Scratch* membership;
         owned::Rows* rows;
@@ -96,6 +128,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         live::Error error=live::Error::None;
         size_t lookups=0, rejected=0;
         size_t originalV1Lookups=0, originalV1Matches=0;
+        size_t classFactsMatched=0;
+        const ClassFacts* firstPassFacts=nullptr;
         assembly_shadow_observed_images::Inventory<live::kMaximumRegisteredAotImages>* images=nullptr;
         assembly_shadow_observed_images::Inventory<64>* observedImages=nullptr;
         assembly_shadow_observed_images::Inventory<
@@ -124,6 +158,9 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     {
         os::FastAutoLock metadataLock(&g_MetadataLock);
         assembly_shadow_observed_images::Inventory<64> imageInventory;
+        // One 16-byte observed primitive fact per 2048 registry slots, no
+        // metadata address or class pointer escapes this lock scope.
+        std::array<ClassFacts,physical::kSlots> firstPassFacts{};
         assembly_shadow_observed_images::Inventory<
             live::kMaximumOriginalV1Images> originalV1Images;
         assembly_shadow_observed_images::Inventory<
@@ -192,6 +229,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         context.originalV1Images=&originalV1Images;
         context.images=&registeredAotImages;
         context.observedImages=&imageInventory;
+        context.firstPassFacts=firstPassFacts.data();
         // Physical iterator #1 is observation-only: no output rows and no
         // metadata handles are retained. A class is dereferenced only after
         // it matches one of the authenticated observed registry identities.
@@ -201,11 +239,13 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             assembly_shadow_observed_images::Inventory<64>* images;
             const assembly_shadow_observed_images::Inventory<
                 live::kMaximumRegisteredAotImages>* registry;
+            ClassFacts* firstPassFacts=nullptr;
             live::Error error=live::Error::None;
         } inventoryContext{};
         inventoryContext.matched=&discovery;
         inventoryContext.images=&imageInventory;
         inventoryContext.registry=&registeredAotImages;
+        inventoryContext.firstPassFacts=firstPassFacts.data();
         il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
             DiscoveryContext& d=*static_cast<DiscoveryContext*>(raw);
             if(d.error!=live::Error::None)return;
@@ -227,8 +267,23 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             if(!d.registry->Contains(img)) {
                 d.error=live::Error::UnadmittedMetadataOwner;return;
             }
-            if(!d.images->AddFromMatchedCallback(img))
-                d.error=live::Error::PhysicalImageLimit;
+            if(!d.images->AddFromMatchedCallback(img)) {
+                d.error=live::Error::PhysicalImageLimit;return;
+            }
+            // The first actual physical callback samples original V1
+            // cctor/static primitives only after registered-image and
+            // opaque execution-registry identity proof. These are value
+            // snapshots, not a retained class address or lifetime ticket.
+            size_t slot=physical::kSlots;
+            assembly_shadow_execution_witness::Source source=
+                assembly_shadow_execution_witness::Source::None;
+            if(!d.matched->TryObservedRegistrationBinding(
+                    klass,slot,source) ||
+               !d.firstPassFacts || slot>=physical::kSlots ||
+               d.firstPassFacts[slot].observed) {
+                d.error=live::Error::InvalidRegistry;return;
+            }
+            d.firstPassFacts[slot]=ClassFacts::Read(klass);
         },&inventoryContext);
         if(inventoryContext.error!=live::Error::None)
             return reject(inventoryContext.error);
@@ -254,6 +309,15 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 assembly_shadow_execution_witness::Source::None;
             if(!c.membership->TryObservedRegistrationBinding(klass,registration,witness)) {
                 c.error=live::Error::InvalidRegistry;return;
+            }
+            if(!c.firstPassFacts || registration>=physical::kSlots ||
+               !c.firstPassFacts[registration].observed) {
+                c.error=live::Error::InvalidRegistry;return;
+            }
+            const ClassFacts secondFacts=ClassFacts::Read(klass);
+            if(!c.firstPassFacts[registration].Same(secondFacts)) {
+                ++c.rejected;
+                c.error=live::Error::ObservedClassFactsChanged;return;
             }
             if(!klass || !klass->image || !klass->image->assembly ||
                !klass->image->assembly->aname.name ||
@@ -710,13 +774,20 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             flags.interpreterShadow=baseline||shadow;
             flags.physicalInterpreter=Interpreter(owner);
             flags.isActive=!baseline;
-            flags.cctorStarted=os::Atomic::LoadRelaxed(
-                reinterpret_cast<const int32_t*>(&klass->cctor_started))!=0;
-            flags.cctorFinished=os::Atomic::LoadRelaxed(
-                reinterpret_cast<const int32_t*>(&klass->cctor_finished_or_no_cctor))!=0;
-            flags.hasInitializationException=os::Atomic::LoadRelaxed(
-                reinterpret_cast<const int32_t*>(&klass->initializationExceptionGCHandle))!=0;
-            const void* storage=klass->static_fields;
+            // Third point-in-time check, still during this matched class
+            // callback and under g_MetadataLock, after TypeKey formatting.
+            // If a cctor or static field address visibly changed while the
+            // bounded source was executing, revoke the entire class record.
+            const ClassFacts finalFacts=ClassFacts::Read(klass);
+            if(!secondFacts.Same(finalFacts)) {
+                ++c.rejected;
+                c.error=live::Error::ObservedClassFactsChanged;return;
+            }
+            ++c.classFactsMatched;
+            flags.cctorStarted=(finalFacts.bits&1)!=0;
+            flags.cctorFinished=(finalFacts.bits&2)!=0;
+            flags.hasInitializationException=(finalFacts.bits&4)!=0;
+            const void* storage=reinterpret_cast<const void*>(finalFacts.storage);
             flags.staticStorageAvailable=storage!=nullptr;
             char pointer[2+sizeof(uintptr_t)*2+1]{};
             size_t pointerBytes=0;
@@ -773,11 +844,16 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         context.images=nullptr;
         context.observedImages=nullptr;
         context.originalV1Images=nullptr;
+        context.firstPassFacts=nullptr;
+        // The first-pass per-class address VALUES are destroyed/scrubbed
+        // before releasing original metadata/assembly source admission.
+        firstPassFacts.fill(ClassFacts{});
     }
 
     receipt.metadataLookups=context.lookups;
     receipt.originalV1MetadataLookups=context.originalV1Lookups;
     receipt.originalV1HandlesMatched=context.originalV1Matches;
+    receipt.observedClassFactsMatched=context.classFactsMatched;
     receipt.rejectedUnsupported=context.rejected;
     receipt.usedCrossImageArgument=context.usedCrossImageArgument;
     receipt.usedUnobservedAotArgumentImage=context.usedUnobservedAotArgumentImage;
@@ -878,6 +954,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.ownedBytes=rows.TextBytes();
     receipt.callbackPhysicalMembershipProven=true;
     receipt.restrictedTypeDefSubsetProven=true;
+    receipt.observedClassFactsTwoPassStable=
+        receipt.registered>0 &&
+        receipt.observedClassFactsMatched==receipt.registered;
+    // Same observed class primitives across two enumerations and a final
+    // read: NOT a global cctor/GC/metadata transaction or terminal-safe V2.
     receipt.originalV1FirstEmplaceOwnerMatched=
         receipt.originalV1ImageSetStable &&
         receipt.originalV1HandlesMatched>0;
