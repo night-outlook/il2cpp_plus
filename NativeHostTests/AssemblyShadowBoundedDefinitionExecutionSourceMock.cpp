@@ -199,6 +199,7 @@ static size_t g_rawCount=0,g_rawVisits=0;
 static bool g_dropRegisteredOnSecond=false;
 static size_t g_originalV1Visits=0;
 static bool g_dropOriginalV1OnSecond=false;
+static bool g_omitAotFromOriginalV1=false; // test-only deliberately wrong V1 source
 // The fake original-V1 visitor follows ACTUAL pure CopyValidAssemblies
 // source semantics, never GetAllAssemblies' shadow-resolved view.
 static std::array<Il2CppAssembly,1025> g_extraAssemblies{};
@@ -211,8 +212,10 @@ public:
         ++g_originalV1Visits;
         const size_t count=(g_dropOriginalV1OnSecond &&
             g_originalV1Visits==2 && g_rawCount>0) ? g_rawCount-1:g_rawCount;
+        auto first=g_rawAssemblies.begin();
+        if(g_omitAotFromOriginalV1 && count>0)++first;
         return assembly_shadow_original_v1_image_scan::Scan(
-            g_rawAssemblies.begin(),g_rawAssemblies.begin()+count,
+            first,g_rawAssemblies.begin()+count,
             [=](const Il2CppImage* image) noexcept -> bool {
                 return visit(image,context);
             });
@@ -446,6 +449,8 @@ static void TestParityProbeMock(){
         s_executionRegistrationWitnesses=Table{};
         g_rawAssemblies.fill(nullptr);g_rawCount=1;g_rawAssemblies[0]=&f.assembly;
         g_rawVisits=0;g_dropRegisteredOnSecond=false;
+        g_originalV1Visits=0;g_dropOriginalV1OnSecond=false;
+        g_omitAotFromOriginalV1=false;
         g_emitPhysical=true;g_duplicate=false;g_physicalPasses=0;
         g_dropSecondPass=false;g_changeRevision=false;g_changeCounter=false;
         g_publishB1DuringEnumeration=false;g_midB1Published=false;
@@ -542,7 +547,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_physicalPasses=0;g_dropSecondPass=false;
     g_rawAssemblies.fill(nullptr);g_rawCount=0;g_rawVisits=0;
     g_dropRegisteredOnSecond=false;
-    g_originalV1Visits=0;g_dropOriginalV1OnSecond=false;
+    g_originalV1Visits=0;
+    g_dropOriginalV1OnSecond=false;g_omitAotFromOriginalV1=false;
     g_rawAssemblies[g_rawCount++]=&fixture.assembly;
     il2cpp_defaults=Il2CppDefaults{};
     g_changeRevision=false;g_changeCounter=false;
@@ -805,16 +811,24 @@ static void Exercise(Mode mode,src::Error expectedError) {
             g_dropOriginalV1OnSecond=true;
     }
     if(mode==Mode::OriginalV1UnregisteredOwner) {
-        // The raw AOT registry still reports source.image, but this fake
-        // original V1 visitor omits that image (a deliberate mismatch).
-        g_dropOriginalV1OnSecond=true;
-    }
-    if(mode==Mode::OriginalV1InvalidImage) {
-        // This invalid raw interpreter entry fails only the original V1
-        // unfiltered scanner, while registered AOT scan skips it.
+        // Intentionally WRONG mocked V1 enumerator drops the true AOT
+        // assembly while the original physical registry still includes it.
+        // This tests fail-closed missing first-emplace owner, NOT the
+        // behavior of the real CopyValidAssemblies implementation.
         fixture.supportImage.token=-2;
         fixture.supportAssembly.interpreter=true;
-        fixture.supportAssembly.image=nullptr;
+        fixture.supportImage.typeCount=1;
+        fixture.supportImage.handles[0]=&fixture.secondary;
+        g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
+        g_omitAotFromOriginalV1=true;
+    }
+    if(mode==Mode::OriginalV1InvalidImage) {
+        // All interpreter images are excluded from the AOT source, but
+        // the original V1 unfiltered walker must include this oversized
+        // image and the bounded reader must reject it before traversal.
+        fixture.supportImage.token=-2;
+        fixture.supportAssembly.interpreter=true;
+        fixture.supportImage.typeCount=8193;
         g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
     }
     Register(&fixture.klass);
@@ -853,6 +867,15 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.observedRegistryAndCounterFenceStable);
         Check(receipt.admittedMetadataEpoch==1);
         Check(receipt.registeredImageSetStable);
+        Check(receipt.originalV1ImageSetStable);
+        Check(receipt.originalV1FirstEmplaceOwnerMatched);
+        Check(receipt.originalV1HandlesMatched>=1);
+        Check(receipt.originalV1MetadataLookups>=
+              receipt.originalV1HandlesMatched);
+        Check(!receipt.originalV1CompleteField15Parity);
+        if(mode==Mode::OriginalV1InterpreterAfterAot ||
+           mode==Mode::OriginalV1ZeroTypeDefInterpreter)
+            Check(receipt.originalV1Images==2);
         Check(receipt.registeredPhysicalAotImages>=receipt.admittedPhysicalImages);
         const bool admittedPrimitive=
             mode==Mode::PrimitiveDefault||mode==Mode::PrimitiveQualified;
@@ -1001,6 +1024,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!record->Complete() && record->Data()==nullptr);
         Check(!owned->Complete() && owned->Count()==0);
         Check(!receipt.callbackPhysicalMembershipProven);
+        Check(!receipt.originalV1FirstEmplaceOwnerMatched);
+        Check(!receipt.originalV1ImageSetStable);
+        Check(!receipt.originalV1CompleteField15Parity);
+        Check(receipt.originalV1HandlesMatched==0);
         Check(!receipt.usedUnicodeAssemblyFold);
         Check(!receipt.usedExistingPrimitiveDefault);
         Check(receipt.admittedPrimitiveArguments==0);
@@ -1109,6 +1136,15 @@ int main(){
     Exercise(Mode::RegisteredAotOverflow,src::Error::PhysicalImageLimit);
     Exercise(Mode::RegisteredAotInvalidOwner,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::RegisteredEmptyAotAssembly,src::Error::None);
+    Exercise(Mode::OriginalV1InterpreterBeforeAot,
+             src::Error::OriginalV1FirstOwnerConflict);
+    Exercise(Mode::OriginalV1InterpreterAfterAot,src::Error::None);
+    Exercise(Mode::OriginalV1ZeroTypeDefInterpreter,src::Error::None);
+    Exercise(Mode::OriginalV1SnapshotChanged,src::Error::SourceChanged);
+    Exercise(Mode::OriginalV1UnregisteredOwner,
+             src::Error::OriginalV1OwnerMissing);
+    Exercise(Mode::OriginalV1InvalidImage,
+             src::Error::OriginalV1ImageSourceUnavailable);
     Exercise(Mode::CrossImageGenericAmbiguous,src::Error::AmbiguousMetadataOwner);
     Exercise(Mode::CrossImageInterpreter,src::Error::UnsupportedImage);
     Exercise(Mode::CrossImageNestedArgument,src::Error::None);
