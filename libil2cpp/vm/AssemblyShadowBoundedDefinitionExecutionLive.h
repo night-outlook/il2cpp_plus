@@ -31,7 +31,7 @@ enum class Error : uint8_t {
     SourceOutsideBudget, PhysicalImageLimit, UnadmittedMetadataOwner,
     AmbiguousMetadataOwner, OriginalV1ImageSourceUnavailable,
     OriginalV1OwnerMissing, OriginalV1FirstOwnerConflict,
-    OriginalV1LookupBudget
+    OriginalV1LookupBudget, ObservedClassFactsChanged
 };
 
 // Bounded source limit: deliberately caps metadata-owner handle lookups per
@@ -53,6 +53,8 @@ struct Receipt {
     bool originalV1ImageSetStable=false; // independent second image read
     bool originalV1FirstEmplaceOwnerMatched=false; // admitted handles ONLY
     bool originalV1CompleteField15Parity=false; // never set by this source
+    size_t observedClassFactsMatched=0; // only admitted observed classes
+    bool observedClassFactsTwoPassStable=false; // no whole VM epoch
     bool usedCrossImageArgument=false;
     bool usedUnobservedAotArgumentImage=false;
     bool usedUnicodeAssemblyFold=false;
@@ -107,6 +109,8 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.originalV1FirstEmplaceOwnerMatched=false;
     receipt.originalV1CompleteField15Parity=false;
     receipt.originalV1HandlesMatched=0;
+    receipt.observedClassFactsMatched=0;
+    receipt.observedClassFactsTwoPassStable=false;
     receipt.observedRegistryAndCounterFenceStable=false;
     receipt.completeArbitraryTypeKeys=false;
     receipt.completeExecutionDiagnostics=false;
