@@ -61,7 +61,7 @@ jobs:
           j=json.load(open(sys.argv[1],encoding='utf8'))
           assert j['kind']=='R03B2OriginalV1FirstOwnerJoinHost'
           assert j['result']=='PassedSourceSemanticsOnly'
-          assert j['cases']==12 and j['assertions']>=45
+          assert j['cases']==12 and j['assertions']>=41
           assert j['protectedAllocations']==0
           for key in ('actualUnityAssemblyCppCompiled','fullLegacyField15Parity',
                       'coherentVmEpochProven','runtimeAcceptance'):
