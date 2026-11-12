@@ -108,6 +108,31 @@ struct Il2CppClass {
     void* static_fields=nullptr;
 };
 
+struct Il2CppDefaults {
+    Il2CppClass* object_class=nullptr;
+    Il2CppClass* void_class=nullptr;
+    Il2CppClass* boolean_class=nullptr;
+    Il2CppClass* char_class=nullptr;
+    Il2CppClass* sbyte_class=nullptr;
+    Il2CppClass* byte_class=nullptr;
+    Il2CppClass* int16_class=nullptr;
+    Il2CppClass* uint16_class=nullptr;
+    Il2CppClass* int32_class=nullptr;
+    Il2CppClass* uint32_class=nullptr;
+    Il2CppClass* int_class=nullptr;
+    Il2CppClass* uint_class=nullptr;
+    Il2CppClass* int64_class=nullptr;
+    Il2CppClass* uint64_class=nullptr;
+    Il2CppClass* single_class=nullptr;
+    Il2CppClass* double_class=nullptr;
+    Il2CppClass* string_class=nullptr;
+    Il2CppClass* typed_reference_class=nullptr;
+    Il2CppClass* systemtype_class=nullptr;
+};
+// Fake default data only; compile the ACTUAL no-assert production Peek.
+static Il2CppDefaults il2cpp_defaults{};
+#include "vm/AssemblyShadowExistingPrimitiveDefaults.h"
+
 namespace hybridclr {namespace metadata {
 inline bool IsInterpreterIndex(int token){return token<0;}
 }}
@@ -172,30 +197,6 @@ static size_t g_rawCount=0,g_rawVisits=0;
 static bool g_dropRegisteredOnSecond=false;
 static std::array<Il2CppAssembly,1025> g_extraAssemblies{};
 static std::array<Il2CppImage,1025> g_extraImages{};
-struct Il2CppDefaults {
-    Il2CppClass* object_class=nullptr;
-    Il2CppClass* void_class=nullptr;
-    Il2CppClass* boolean_class=nullptr;
-    Il2CppClass* char_class=nullptr;
-    Il2CppClass* sbyte_class=nullptr;
-    Il2CppClass* byte_class=nullptr;
-    Il2CppClass* int16_class=nullptr;
-    Il2CppClass* uint16_class=nullptr;
-    Il2CppClass* int32_class=nullptr;
-    Il2CppClass* uint32_class=nullptr;
-    Il2CppClass* int_class=nullptr;
-    Il2CppClass* uint_class=nullptr;
-    Il2CppClass* int64_class=nullptr;
-    Il2CppClass* uint64_class=nullptr;
-    Il2CppClass* single_class=nullptr;
-    Il2CppClass* double_class=nullptr;
-    Il2CppClass* string_class=nullptr;
-    Il2CppClass* typed_reference_class=nullptr;
-    Il2CppClass* systemtype_class=nullptr;
-};
-// Fake default data only; compile the ACTUAL no-assert production Peek.
-static Il2CppDefaults il2cpp_defaults{};
-#include "vm/AssemblyShadowExistingPrimitiveDefaults.h"
 class Assembly {
 public:
     static bool TryVisitRegisteredAotImages(
