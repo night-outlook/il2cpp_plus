@@ -200,6 +200,29 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         if(!registeredAotImages.Healthy())
             return reject(live::Error::UnadmittedMetadataOwner);
         receipt.registeredPhysicalAotImages=registeredAotImages.Count();
+        // Exact borrowed original-V1 image primitives, not an all-VM epoch.
+        // The existing second physical image visit checks these without
+        // retaining images/TypeDef handles outside the metadata-lock scope.
+        // Bounded additional stack: 12 bytes x 1024 image visits = 12 KiB.
+        struct OriginalV1ImageFacts {
+            uint32_t typeCount=0,imageToken=0,assemblyToken=0;
+            static OriginalV1ImageFacts Read(const Il2CppImage* image) noexcept {
+                OriginalV1ImageFacts value{};
+                value.typeCount=static_cast<uint32_t>(image->typeCount);
+                value.imageToken=static_cast<uint32_t>(image->token);
+                value.assemblyToken=static_cast<uint32_t>(image->assembly->token);
+                return value;
+            }
+            bool Same(const OriginalV1ImageFacts& other) const noexcept {
+                return typeCount==other.typeCount &&
+                       imageToken==other.imageToken &&
+                       assemblyToken==other.assemblyToken;
+            }
+        };
+        static_assert(sizeof(OriginalV1ImageFacts)==12,
+                      "B2 original V1 image primitive stack bound changed");
+        std::array<OriginalV1ImageFacts,live::kMaximumOriginalV1Images>
+            firstOriginalV1Facts{};
         // The ORIGINAL GetExecutionDiagnosticsJson uses
         // Assembly::CaptureShadowEnumeration->CopyValidAssemblies, which
         // visits token-valid PHYSICAL images including interpreter images.
@@ -209,9 +232,13 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         struct OriginalV1Sink {
             assembly_shadow_observed_images::Inventory<
                 live::kMaximumOriginalV1Images>* images;
+            OriginalV1ImageFacts* firstFacts=nullptr;
+            size_t visits=0;
+            bool compareFacts=false;
             live::Error error=live::Error::None;
         } originalSink{};
         originalSink.images=&originalV1Images;
+        originalSink.firstFacts=firstOriginalV1Facts.data();
         auto readOriginalV1=[](const Il2CppImage* img,void* raw)->bool {
             OriginalV1Sink& sink=*static_cast<OriginalV1Sink*>(raw);
             if(!img || !img->assembly || !img->assembly->image ||
@@ -221,8 +248,27 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 sink.error=live::Error::OriginalV1ImageSourceUnavailable;
                 return false;
             }
+            if(!sink.firstFacts ||
+               sink.visits==live::kMaximumOriginalV1Images) {
+                sink.error=live::Error::PhysicalImageLimit;return false;
+            }
+            const size_t slot=sink.visits++;
+            const OriginalV1ImageFacts current=OriginalV1ImageFacts::Read(img);
+            if(sink.compareFacts) {
+                if(!sink.firstFacts[slot].Same(current)) {
+                    sink.error=live::Error::OriginalV1ImageFactsChanged;
+                    return false;
+                }
+            } else sink.firstFacts[slot]=current;
+            const size_t before=sink.images->Count();
             if(!sink.images->AddFromRegisteredAssembly(img)) {
                 sink.error=live::Error::PhysicalImageLimit;return false;
+            }
+            // Original V1 enumerates physical registrations, not a deduped
+            // subset. A duplicate would otherwise silently collapse here.
+            if(sink.images->Count()!=before+1) {
+                sink.error=live::Error::OriginalV1ImageSourceUnavailable;
+                return false;
             }
             return true;
         };
@@ -942,11 +988,17 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             live::kMaximumOriginalV1Images> originalAfter;
         OriginalV1Sink originalAfterSink{};
         originalAfterSink.images=&originalAfter;
+        originalAfterSink.firstFacts=firstOriginalV1Facts.data();
+        originalAfterSink.compareFacts=true;
         if(!Assembly::TryVisitOriginalV1ExecutionImages(
                readOriginalV1,&originalAfterSink) ||
+           originalAfterSink.visits!=originalSink.visits ||
            !originalAfter.SameOrderedImageSet(originalV1Images))
-            return reject(live::Error::SourceChanged);
+            return reject(originalAfterSink.error==live::Error::None ?
+                live::Error::SourceChanged:originalAfterSink.error);
         receipt.originalV1ImageSetStable=true;
+        receipt.originalV1ImageFactsMatched=originalAfterSink.visits;
+        firstOriginalV1Facts.fill(OriginalV1ImageFacts{});
         // Borrowed metadata pointers are scrubbed while g_MetadataLock is
         // still held. Nothing escapes to the frozen writer after this scope.
         context.images=nullptr;
@@ -1071,8 +1123,12 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         receipt.observedClassFactsEndPassMatched==receipt.registered;
     // Same observed facts across three physical traversals, plus the final
     // row-callback read: NOT a coherent cctor/GC/metadata transaction or V2.
-    receipt.originalV1FirstEmplaceOwnerMatched=
+    receipt.originalV1ImageFactsTwoPassStable=
         receipt.originalV1ImageSetStable &&
+        receipt.originalV1ImageFactsMatched==receipt.originalV1Images &&
+        receipt.originalV1ImageFactsMatched>0;
+    receipt.originalV1FirstEmplaceOwnerMatched=
+        receipt.originalV1ImageFactsTwoPassStable &&
         receipt.originalV1HandlesMatched>0;
     // No claim of complete legacy execution field15, only those handles
     // actually used in the restricted rows. Other original V1 source rows,

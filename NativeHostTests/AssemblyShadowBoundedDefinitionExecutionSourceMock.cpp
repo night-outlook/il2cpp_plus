@@ -204,6 +204,9 @@ static size_t g_rawCount=0,g_rawVisits=0;
 static bool g_dropRegisteredOnSecond=false;
 static size_t g_originalV1Visits=0;
 static bool g_dropOriginalV1OnSecond=false;
+static bool g_changeOriginalV1TypeCountOnSecond=false;
+static bool g_changeOriginalV1ImageTokenOnSecond=false;
+static bool g_changeOriginalV1AssemblyTokenOnSecond=false;
 static bool g_omitAotFromOriginalV1=false; // test-only deliberately wrong V1 source
 // The fake original-V1 visitor follows ACTUAL pure CopyValidAssemblies
 // source semantics, never GetAllAssemblies' shadow-resolved view.
@@ -215,6 +218,15 @@ public:
         bool(*visit)(const Il2CppImage*,void*),void* context) noexcept {
         if(!visit)return false;
         ++g_originalV1Visits;
+        if(g_originalV1Visits==2 && g_physical && g_physical->image) {
+            if(g_changeOriginalV1TypeCountOnSecond)
+                g_physical->image->typeCount=2;
+            if(g_changeOriginalV1ImageTokenOnSecond)
+                g_physical->image->token=
+                    g_physical->image->token<0?-3:1;
+            if(g_changeOriginalV1AssemblyTokenOnSecond)
+                g_physical->image->assembly->token=2;
+        }
         const size_t count=(g_dropOriginalV1OnSecond &&
             g_originalV1Visits==2 && g_rawCount>0) ? g_rawCount-1:g_rawCount;
         auto first=g_rawAssemblies.begin();
@@ -544,6 +556,9 @@ enum class Mode {
     PrimitiveClassGenericContainer,
     OriginalV1InterpreterBeforeAot, OriginalV1InterpreterAfterAot,
     OriginalV1ZeroTypeDefInterpreter, OriginalV1SnapshotChanged,
+    OriginalV1TypeCountChanged, OriginalV1ImageTokenChanged,
+    OriginalV1AssemblyTokenChanged, OriginalV1DuplicatePhysicalImage,
+    OriginalV1InterpreterTokenChanged,
     InterpreterSimpleClass, InterpreterSimpleValueType,
     InterpreterWrongTypeHandle, InterpreterGenericDefinition,
     InterpreterNestedDefinition, InterpreterFirstOwnerAlias,
@@ -588,6 +603,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_dropRegisteredOnSecond=false;
     g_originalV1Visits=0;
     g_dropOriginalV1OnSecond=false;g_omitAotFromOriginalV1=false;
+    g_changeOriginalV1TypeCountOnSecond=false;
+    g_changeOriginalV1ImageTokenOnSecond=false;
+    g_changeOriginalV1AssemblyTokenOnSecond=false;
     g_rawAssemblies[g_rawCount++]=&fixture.assembly;
     il2cpp_defaults=Il2CppDefaults{};
     g_changeRevision=false;g_changeCounter=false;
@@ -616,7 +634,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         mode==Mode::InterpreterGenericDefinition ||
         mode==Mode::InterpreterNestedDefinition ||
         mode==Mode::InterpreterFirstOwnerAlias ||
-        mode==Mode::InterpreterNotRegistered;
+        mode==Mode::InterpreterNotRegistered ||
+        mode==Mode::OriginalV1InterpreterTokenChanged;
     if(interpreterMode) {
         fixture.image.token=-2; // physical interpreter image in original V1
         fixture.assembly.interpreter=true;
@@ -874,6 +893,15 @@ static void Exercise(Mode mode,src::Error expectedError) {
         if(mode==Mode::StagedNestedIndex)
             fixture.def.declaringTypeIndex=-2;
     }
+    if(mode==Mode::OriginalV1TypeCountChanged)
+        g_changeOriginalV1TypeCountOnSecond=true;
+    if(mode==Mode::OriginalV1ImageTokenChanged ||
+       mode==Mode::OriginalV1InterpreterTokenChanged)
+        g_changeOriginalV1ImageTokenOnSecond=true;
+    if(mode==Mode::OriginalV1AssemblyTokenChanged)
+        g_changeOriginalV1AssemblyTokenOnSecond=true;
+    if(mode==Mode::OriginalV1DuplicatePhysicalImage)
+        g_rawAssemblies[g_rawCount++]=&fixture.assembly;
     if(mode==Mode::UnsupportedImage)fixture.image.typeCount=8193;
     if(mode==Mode::SourceChanged)g_changeRevision=true;
     if(mode==Mode::CounterChanged)g_changeCounter=true;
@@ -980,6 +1008,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.admittedMetadataEpoch==1);
         Check(receipt.registeredImageSetStable);
         Check(receipt.originalV1ImageSetStable);
+        Check(receipt.originalV1ImageFactsTwoPassStable);
+        Check(receipt.originalV1ImageFactsMatched==receipt.originalV1Images);
         Check(receipt.originalV1FirstEmplaceOwnerMatched);
         Check(receipt.observedClassFactsTwoPassStable);
         Check(receipt.observedClassFactsMatched==expectedRows);
@@ -1164,6 +1194,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!receipt.observedClassFactsEndPassStable);
         Check(receipt.observedClassFactsEndPassMatched==0);
         Check(!receipt.originalV1ImageSetStable);
+        Check(!receipt.originalV1ImageFactsTwoPassStable);
+        Check(receipt.originalV1ImageFactsMatched==0);
         Check(!receipt.originalV1CompleteField15Parity);
         Check(receipt.originalV1HandlesMatched==0);
         Check(!receipt.usedUnicodeAssemblyFold);
@@ -1280,6 +1312,11 @@ int main(){
     Exercise(Mode::OriginalV1InterpreterAfterAot,src::Error::None);
     Exercise(Mode::OriginalV1ZeroTypeDefInterpreter,src::Error::None);
     Exercise(Mode::OriginalV1SnapshotChanged,src::Error::SourceChanged);
+    Exercise(Mode::OriginalV1TypeCountChanged,src::Error::OriginalV1ImageFactsChanged);
+    Exercise(Mode::OriginalV1ImageTokenChanged,src::Error::OriginalV1ImageFactsChanged);
+    Exercise(Mode::OriginalV1AssemblyTokenChanged,src::Error::OriginalV1ImageFactsChanged);
+    Exercise(Mode::OriginalV1DuplicatePhysicalImage,src::Error::OriginalV1ImageSourceUnavailable);
+    Exercise(Mode::OriginalV1InterpreterTokenChanged,src::Error::OriginalV1ImageFactsChanged);
     Exercise(Mode::OriginalV1UnregisteredOwner,
              src::Error::OriginalV1OwnerMissing);
     Exercise(Mode::OriginalV1InvalidImage,

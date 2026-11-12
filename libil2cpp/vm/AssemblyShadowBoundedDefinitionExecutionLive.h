@@ -32,7 +32,8 @@ enum class Error : uint8_t {
     SourceOutsideBudget, PhysicalImageLimit, UnadmittedMetadataOwner,
     AmbiguousMetadataOwner, OriginalV1ImageSourceUnavailable,
     OriginalV1OwnerMissing, OriginalV1FirstOwnerConflict,
-    OriginalV1LookupBudget, ObservedClassFactsChanged
+    OriginalV1LookupBudget, ObservedClassFactsChanged,
+    OriginalV1ImageFactsChanged
 };
 
 // Bounded source limit: deliberately caps metadata-owner handle lookups per
@@ -51,7 +52,9 @@ struct Receipt {
     bool registeredImageSetStable=false; // two lock-scoped snapshots only
     size_t originalV1Images=0; // token-valid, interpreter INCLUDED
     size_t originalV1MetadataLookups=0, originalV1HandlesMatched=0;
-    bool originalV1ImageSetStable=false; // independent second image read
+    bool originalV1ImageSetStable=false; // independently revisited image order
+    size_t originalV1ImageFactsMatched=0; // physical visits, not VM epoch
+    bool originalV1ImageFactsTwoPassStable=false; // typeCount/tokens only
     bool originalV1FirstEmplaceOwnerMatched=false; // admitted handles ONLY
     bool originalV1CompleteField15Parity=false; // never set by this source
     size_t observedClassFactsMatched=0; // admitted first/second-pass matches
@@ -111,6 +114,8 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.maximumCompositeDepth=0;
     receipt.registeredImageSetStable=false;
     receipt.originalV1ImageSetStable=false;
+    receipt.originalV1ImageFactsMatched=0;
+    receipt.originalV1ImageFactsTwoPassStable=false;
     receipt.originalV1FirstEmplaceOwnerMatched=false;
     receipt.originalV1CompleteField15Parity=false;
     receipt.originalV1HandlesMatched=0;
