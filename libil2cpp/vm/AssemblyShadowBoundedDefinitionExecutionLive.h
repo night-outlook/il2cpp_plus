@@ -1,8 +1,9 @@
 #pragma once
-// R03 B2 INACTIVE physical observed-class source: restricted AOT TypeDef,
+// R03 B2 INACTIVE physical observed-class source: restricted AOT TypeDefs,
 // bounded composite/Unicode/default-primitive keys with registered physical
-// AOT owner proof AND first-emplace owner matching the ORIGINAL V1 token-valid
-// physical image enumeration (interpreter and zero-TypeDef included).
+// AOT owner proof; simple nongeneric/nonnested interpreter TypeDefs are
+// separately first-owner-matched to ORIGINAL V1 token-valid physical images.
+// Interpreter composites/VAR/MVAR remain unsupported.
 // NOT complete execution V1 field15, terminal-safe V2, coherent VM epoch
 // or a Player/recovery API.
 // Caller owns/preallocates all 3 objects while healthy, one thread only.
@@ -61,6 +62,7 @@ struct Receipt {
     bool usedUnobservedAotArgumentImage=false;
     bool usedUnicodeAssemblyFold=false;
     bool usedExistingPrimitiveDefault=false;
+    bool usedSimpleInterpreterDefinition=false; // plain V1 TypeDef only
     size_t admittedPrimitiveArguments=0;
     // Diagnostic-only subset coverage. All are false on rejected source.
     bool usedNestedGenericArgument=false;
@@ -98,6 +100,7 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.usedUnobservedAotArgumentImage=false;
     receipt.usedUnicodeAssemblyFold=false;
     receipt.usedExistingPrimitiveDefault=false;
+    receipt.usedSimpleInterpreterDefinition=false;
     receipt.admittedPrimitiveArguments=0;
     receipt.usedNestedGenericArgument=false;
     receipt.usedPointerArgument=false;

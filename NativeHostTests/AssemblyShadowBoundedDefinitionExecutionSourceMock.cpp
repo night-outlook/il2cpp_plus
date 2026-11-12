@@ -544,6 +544,10 @@ enum class Mode {
     PrimitiveClassGenericContainer,
     OriginalV1InterpreterBeforeAot, OriginalV1InterpreterAfterAot,
     OriginalV1ZeroTypeDefInterpreter, OriginalV1SnapshotChanged,
+    InterpreterSimpleClass, InterpreterSimpleValueType,
+    InterpreterWrongTypeHandle, InterpreterGenericDefinition,
+    InterpreterNestedDefinition, InterpreterFirstOwnerAlias,
+    InterpreterNotRegistered,
     OriginalV1UnregisteredOwner, OriginalV1InvalidImage,
     GenericPointerArgument, GenericSzArrayArgument,
     GenericArrayArgument, GenericQualifiedPointerArgument,
@@ -595,6 +599,38 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_active.store(&fixture.active);
     s_state.store(AssemblyShadowState::Committed);
     g_physical=&fixture.klass;
+    const bool interpreterMode=
+        mode==Mode::InterpreterSimpleClass ||
+        mode==Mode::InterpreterSimpleValueType ||
+        mode==Mode::InterpreterWrongTypeHandle ||
+        mode==Mode::InterpreterGenericDefinition ||
+        mode==Mode::InterpreterNestedDefinition ||
+        mode==Mode::InterpreterFirstOwnerAlias ||
+        mode==Mode::InterpreterNotRegistered;
+    if(interpreterMode) {
+        fixture.image.token=-2; // physical interpreter image in original V1
+        fixture.assembly.interpreter=true;
+        g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly; // AOT baseline
+        if(mode==Mode::InterpreterSimpleValueType)
+            fixture.klass.byval_arg.type=IL2CPP_TYPE_VALUETYPE;
+        if(mode==Mode::InterpreterWrongTypeHandle) {
+            fixture.klass.typeMetadataHandle=&fixture.outer;
+            fixture.klass.byval_arg.data.typeHandle=&fixture.outer;
+        }
+        if(mode==Mode::InterpreterGenericDefinition)
+            fixture.def.genericContainerIndex=0;
+        if(mode==Mode::InterpreterNestedDefinition)
+            fixture.def.declaringTypeIndex=3;
+        if(mode==Mode::InterpreterFirstOwnerAlias) {
+            fixture.supportImage.handles[0]=&fixture.def;
+            g_rawAssemblies[0]=&fixture.supportAssembly;
+            g_rawAssemblies[1]=&fixture.assembly;
+        }
+        if(mode==Mode::InterpreterNotRegistered) {
+            g_rawAssemblies[0]=&fixture.supportAssembly;
+            g_rawCount=1;
+        }
+    }
     if(mode==Mode::GenericDefinition)fixture.def.genericContainerIndex=0;
     if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument ||
        mode==Mode::GenericArgumentMissingOwner ||
@@ -935,7 +971,16 @@ static void Exercise(Mode mode,src::Error expectedError) {
         const bool admittedPrimitive=
             mode==Mode::PrimitiveDefault||mode==Mode::PrimitiveQualified;
         Check(receipt.usedExistingPrimitiveDefault==admittedPrimitive);
+        const bool admittedInterpreter=
+            mode==Mode::InterpreterSimpleClass ||
+            mode==Mode::InterpreterSimpleValueType;
+        Check(receipt.usedSimpleInterpreterDefinition==admittedInterpreter);
         Check(receipt.admittedPrimitiveArguments==(admittedPrimitive?1u:0u));
+        if(admittedInterpreter) {
+            Check(receipt.registeredPhysicalAotImages==1);
+            Check(receipt.originalV1Images==2);
+            Check(receipt.admittedPhysicalImages==1);
+        }
         if(admittedPrimitive) {
             Check(receipt.registeredPhysicalAotImages==2);
             Check(receipt.admittedPhysicalImages==1);
@@ -1064,6 +1109,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
             Check(owned->Get(0,row0) && owned->Get(1,row1));
             Check(row0.registrySlot < row1.registrySlot);
         }
+        if(mode==Mode::InterpreterSimpleClass ||
+           mode==Mode::InterpreterSimpleValueType)
+            Check(body.find("\"physicalInterpreter\":true")!=std::string::npos);
         Check(body.find("\"r02\":{\"schemaVersion\":1")!=std::string::npos);
         Check(body.find("\"cctorStarted\":true")!=std::string::npos);
         Check(body.find("\"staticStorageAvailable\":true")!=std::string::npos);
@@ -1089,6 +1137,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.originalV1HandlesMatched==0);
         Check(!receipt.usedUnicodeAssemblyFold);
         Check(!receipt.usedExistingPrimitiveDefault);
+        Check(!receipt.usedSimpleInterpreterDefinition);
         Check(receipt.admittedPrimitiveArguments==0);
         Check(!receipt.usedNestedGenericArgument &&
               !receipt.usedPointerArgument && !receipt.usedSzArrayArgument &&
@@ -1204,8 +1253,15 @@ int main(){
              src::Error::OriginalV1OwnerMissing);
     Exercise(Mode::OriginalV1InvalidImage,
              src::Error::OriginalV1ImageSourceUnavailable);
+    Exercise(Mode::InterpreterSimpleClass,src::Error::None);
+    Exercise(Mode::InterpreterSimpleValueType,src::Error::None);
+    Exercise(Mode::InterpreterWrongTypeHandle,src::Error::UnadmittedMetadataOwner);
+    Exercise(Mode::InterpreterGenericDefinition,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::InterpreterNestedDefinition,src::Error::UnsupportedTypeShape);
+    Exercise(Mode::InterpreterFirstOwnerAlias,src::Error::OriginalV1FirstOwnerConflict);
+    Exercise(Mode::InterpreterNotRegistered,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::CrossImageGenericAmbiguous,src::Error::AmbiguousMetadataOwner);
-    Exercise(Mode::CrossImageInterpreter,src::Error::UnsupportedImage);
+    Exercise(Mode::CrossImageInterpreter,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::CrossImageNestedArgument,src::Error::None);
     Exercise(Mode::GenericArgumentMissingOwner,src::Error::UnadmittedMetadataOwner);
     Exercise(Mode::GenericWrongArity,src::Error::UnsupportedTypeShape);

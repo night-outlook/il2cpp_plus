@@ -2,8 +2,10 @@
 // rows -> original frozen execution/R02 record. Included ONCE by
 // AssemblyShadow.cpp inside il2cpp::vm; NEVER called by a Player or V1 getter.
 // Nested physical metadata definitions require an owner-checked ancestry.
-// Restricted AOT TypeDef and bounded composite/Unicode/primitive arguments
+// Restricted AOT TypeDefs and bounded composite/Unicode/primitive arguments
 // use registered PHYSICAL AOT owners, including unobserved argument images.
+// Plain nongeneric/nonnested interpreter TypeDefs can use their ORIGINAL V1
+// physical owner; interpreter composites/VAR/MVAR still fail closed.
 // A second visitor mirrors the ORIGINAL V1 CopyValidAssemblies token-valid
 // PHYSICAL registration order, including interpreter and zero-TypeDef images,
 // and verifies every admitted key handle has the same FIRST-emplace owner.
@@ -138,6 +140,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         bool usedUnobservedAotArgumentImage=false;
         bool usedUnicodeAssemblyFold=false;
         bool usedExistingPrimitiveDefault=false;
+        bool usedSimpleInterpreterDefinition=false;
         size_t admittedPrimitiveArguments=0;
         bool usedNestedGenericArgument=false;
         bool usedPointerArgument=false;
@@ -239,12 +242,15 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             assembly_shadow_observed_images::Inventory<64>* images;
             const assembly_shadow_observed_images::Inventory<
                 live::kMaximumRegisteredAotImages>* registry;
+            const assembly_shadow_observed_images::Inventory<
+                live::kMaximumOriginalV1Images>* originalV1Images=nullptr;
             ClassFacts* firstPassFacts=nullptr;
             live::Error error=live::Error::None;
         } inventoryContext{};
         inventoryContext.matched=&discovery;
         inventoryContext.images=&imageInventory;
         inventoryContext.registry=&registeredAotImages;
+        inventoryContext.originalV1Images=&originalV1Images;
         inventoryContext.firstPassFacts=firstPassFacts.data();
         il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
             DiscoveryContext& d=*static_cast<DiscoveryContext*>(raw);
@@ -259,12 +265,19 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 d.error=live::Error::InvalidTypeIdentity;return;
             }
             const Il2CppImage* img=klass->image;
-            if(!img->assembly || !img->assembly->aname.name ||
-               hybridclr::metadata::IsInterpreterIndex(img->token) ||
+            if(!img->assembly || img->assembly->image!=img ||
+               !img->assembly->aname.name ||
                !img->typeCount || img->typeCount>live::kMaximumAotImageTypes) {
                 d.error=live::Error::UnsupportedImage;return;
             }
-            if(!d.registry->Contains(img)) {
+            const bool interpreter=
+                hybridclr::metadata::IsInterpreterIndex(img->token);
+            // No arbitrary image source: AOT rows must be in the registered
+            // AOT table; interpreter rows must have a token-valid physical
+            // original V1 image in the separately authenticated image table.
+            if(interpreter ?
+               !d.originalV1Images || !d.originalV1Images->Contains(img) :
+               !d.registry->Contains(img)) {
                 d.error=live::Error::UnadmittedMetadataOwner;return;
             }
             if(!d.images->AddFromMatchedCallback(img)) {
@@ -327,17 +340,22 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             const Il2CppImage* image=klass->image;
             const Il2CppAssembly* owner=image->assembly;
             const Il2CppType& type=klass->byval_arg;
-            // Only physical AOT definitions and a narrowly owned constructed
-            // generic whose definition AND each concrete TypeDef argument
-            // belong to this same physical image. Generic arguments from
-            // another image, recursively constructed types, arrays and
-            // qualifiers fail closed. The existing legacy getter is unchanged.
-            if(hybridclr::metadata::IsInterpreterIndex(image->token) ||
-               image->typeCount==0 ||
+            // Original V1 enumerates token-valid PHYSICAL interpreter images.
+            // Accept only their plain CLASS/VALUETYPE TypeDefs, not constructed
+            // or open-generic shapes, with a separate first-emplace owner proof.
+            if(image->typeCount==0 ||
                image->typeCount>live::kMaximumAotImageTypes) {
                 ++c.rejected;c.error=live::Error::UnsupportedImage;return;
             }
+            const bool interpreterDefinition=
+                hybridclr::metadata::IsInterpreterIndex(image->token);
             const bool constructed=type.type==IL2CPP_TYPE_GENERICINST;
+            if(interpreterDefinition && (constructed ||
+               klass->generic_class || klass->genericContainerHandle ||
+               klass->declaringType || !c.originalV1Images ||
+               !c.originalV1Images->Contains(image))) {
+                ++c.rejected;c.error=live::Error::UnsupportedTypeShape;return;
+            }
             const Il2CppGenericClass* generic=constructed?
                 type.data.generic_class:nullptr;
             if(klass->rank || type.attrs || type.num_mods ||
@@ -390,7 +408,31 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 if(!handle || !c.images || !c.images->Healthy()) {
                     c.error=live::Error::UnadmittedMetadataOwner;return false;
                 }
-                for(size_t sourceIndex=0;sourceIndex<c.images->Count();++sourceIndex) {
+                // A simple interpreter root may only resolve to its own
+                // physical original-V1 registered image. Unconstrained generic
+                // arguments stay on the prior registered-AOT owner path.
+                const bool interpreterRoot=constrained &&
+                    hybridclr::metadata::IsInterpreterIndex(constrained->token);
+                if(interpreterRoot) {
+                    if(!c.originalV1Images ||
+                       !c.originalV1Images->Contains(constrained) ||
+                       !constrained->typeCount ||
+                       constrained->typeCount>live::kMaximumAotImageTypes) {
+                        c.error=live::Error::UnadmittedMetadataOwner;return false;
+                    }
+                    for(uint32_t i=0;i<constrained->typeCount;++i) {
+                        if(c.lookups==live::kMaximumTotalMetadataLookups) {
+                            c.error=live::Error::SourceOutsideBudget;return false;
+                        }
+                        ++c.lookups;
+                        if(MetadataCache::GetAssemblyTypeHandle(constrained,i)==handle) {
+                            resolved=constrained;break;
+                        }
+                    }
+                    if(!resolved) {
+                        c.error=live::Error::UnadmittedMetadataOwner;return false;
+                    }
+                } else for(size_t sourceIndex=0;sourceIndex<c.images->Count();++sourceIndex) {
                     const auto* ownerImage=c.images->Get<Il2CppImage>(sourceIndex);
                     if(!ownerImage || !ownerImage->assembly ||
                        !ownerImage->assembly->aname.name ||
@@ -482,6 +524,14 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     // full physical-image ownership scan and under the same
                     // metadata lock + initial epoch Reader.
                     const auto* def=reinterpret_cast<const Il2CppTypeDefinition*>(handle);
+                    // Avoid staged container/declaring-type lookup for now.
+                    // Only the plain interpreter TypeDef itself is admitted.
+                    if(hybridclr::metadata::IsInterpreterIndex(currentOwner->token) &&
+                       (depth!=0 ||
+                        def->genericContainerIndex!=kGenericContainerIndexInvalid ||
+                        def->declaringTypeIndex!=kTypeIndexInvalid)) {
+                        c.error=live::Error::UnsupportedTypeShape;return false;
+                    }
                     const auto name=GlobalMetadata::GetTypeNamespaceAndName(handle);
                     if(!name.second) {
                         c.error=live::Error::InvalidTypeIdentity;return false;
@@ -815,6 +865,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             if(!stored) {
                 c.error=live::Error::RowsFailed;return;
             }
+            if(interpreterDefinition)
+                c.usedSimpleInterpreterDefinition=true;
             // Save the last observed primitive AFTER the owned row has been
             // recorded. A later row's TypeKey source may mutate an earlier
             // class; a final per-row read cannot detect that late change.
@@ -911,6 +963,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     receipt.usedUnobservedAotArgumentImage=context.usedUnobservedAotArgumentImage;
     receipt.usedUnicodeAssemblyFold=context.usedUnicodeAssemblyFold;
     receipt.usedExistingPrimitiveDefault=context.usedExistingPrimitiveDefault;
+    receipt.usedSimpleInterpreterDefinition=context.usedSimpleInterpreterDefinition;
     receipt.admittedPrimitiveArguments=context.admittedPrimitiveArguments;
     receipt.usedNestedGenericArgument=context.usedNestedGenericArgument;
     receipt.usedPointerArgument=context.usedPointerArgument;
