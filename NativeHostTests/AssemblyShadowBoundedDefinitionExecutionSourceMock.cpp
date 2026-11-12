@@ -20,7 +20,26 @@
 
 static constexpr int kTypeIndexInvalid=-1;
 static constexpr int kGenericContainerIndexInvalid=-1;
+using Il2CppTypeEnum=int;
+static constexpr int IL2CPP_TYPE_VOID=1;
+static constexpr int IL2CPP_TYPE_BOOLEAN=2;
+static constexpr int IL2CPP_TYPE_CHAR=3;
+static constexpr int IL2CPP_TYPE_I1=4;
+static constexpr int IL2CPP_TYPE_U1=5;
+static constexpr int IL2CPP_TYPE_I2=6;
+static constexpr int IL2CPP_TYPE_U2=7;
 static constexpr int IL2CPP_TYPE_I4=8;
+static constexpr int IL2CPP_TYPE_U4=9;
+static constexpr int IL2CPP_TYPE_I8=10;
+static constexpr int IL2CPP_TYPE_U8=11;
+static constexpr int IL2CPP_TYPE_R4=12;
+static constexpr int IL2CPP_TYPE_R8=13;
+static constexpr int IL2CPP_TYPE_STRING=14;
+static constexpr int IL2CPP_TYPE_TYPEDBYREF=22;
+static constexpr int IL2CPP_TYPE_I=24;
+static constexpr int IL2CPP_TYPE_U=25;
+static constexpr int IL2CPP_TYPE_OBJECT=28;
+static constexpr int IL2CPP_TYPE_IL2CPP_TYPE_INDEX=100;
 static constexpr int IL2CPP_TYPE_CLASS=18;
 static constexpr int IL2CPP_TYPE_VALUETYPE=17;
 static constexpr int IL2CPP_TYPE_GENERICINST=21;
@@ -153,15 +172,30 @@ static size_t g_rawCount=0,g_rawVisits=0;
 static bool g_dropRegisteredOnSecond=false;
 static std::array<Il2CppAssembly,1025> g_extraAssemblies{};
 static std::array<Il2CppImage,1025> g_extraImages{};
-static Il2CppClass* g_existingPrimitiveDefault=nullptr;
-// Mirror the control flow of actual Class.cpp::FromIl2CppTypeEnum:
-// a preinitialized il2cpp_defaults class, never a new class/cache entry.
-class Class {
-public:
-    static Il2CppClass* FromIl2CppTypeEnum(int code) noexcept {
-        return code==IL2CPP_TYPE_I4?g_existingPrimitiveDefault:nullptr;
-    }
+struct Il2CppDefaults {
+    Il2CppClass* object_class=nullptr;
+    Il2CppClass* void_class=nullptr;
+    Il2CppClass* boolean_class=nullptr;
+    Il2CppClass* char_class=nullptr;
+    Il2CppClass* sbyte_class=nullptr;
+    Il2CppClass* byte_class=nullptr;
+    Il2CppClass* int16_class=nullptr;
+    Il2CppClass* uint16_class=nullptr;
+    Il2CppClass* int32_class=nullptr;
+    Il2CppClass* uint32_class=nullptr;
+    Il2CppClass* int_class=nullptr;
+    Il2CppClass* uint_class=nullptr;
+    Il2CppClass* int64_class=nullptr;
+    Il2CppClass* uint64_class=nullptr;
+    Il2CppClass* single_class=nullptr;
+    Il2CppClass* double_class=nullptr;
+    Il2CppClass* string_class=nullptr;
+    Il2CppClass* typed_reference_class=nullptr;
+    Il2CppClass* systemtype_class=nullptr;
 };
+// Fake default data only; compile the ACTUAL no-assert production Peek.
+static Il2CppDefaults il2cpp_defaults{};
+#include "vm/AssemblyShadowExistingPrimitiveDefaults.h"
 class Assembly {
 public:
     static bool TryVisitRegisteredAotImages(
@@ -390,7 +424,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_rawAssemblies.fill(nullptr);g_rawCount=0;g_rawVisits=0;
     g_dropRegisteredOnSecond=false;
     g_rawAssemblies[g_rawCount++]=&fixture.assembly;
-    g_existingPrimitiveDefault=nullptr;
+    il2cpp_defaults=Il2CppDefaults{};
     g_changeRevision=false;g_changeCounter=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
@@ -549,9 +583,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
         fixture.supportImage.handles[0]=nullptr;
         fixture.supportImage.handles[1]=&fixture.primitiveDefinition;
         g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
-        g_existingPrimitiveDefault=&fixture.primitiveClass;
+        il2cpp_defaults.int32_class=&fixture.primitiveClass;
         if(mode==Mode::PrimitiveQualified)fixture.genericArg1.byref=1;
-        if(mode==Mode::PrimitiveMissingDefault)g_existingPrimitiveDefault=nullptr;
+        if(mode==Mode::PrimitiveMissingDefault)il2cpp_defaults.int32_class=nullptr;
         if(mode==Mode::PrimitiveUnregistered)--g_rawCount;
         if(mode==Mode::PrimitiveWrongHandle)
             fixture.primitiveClass.typeMetadataHandle=&fixture.outer;
@@ -826,7 +860,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     delete record;
     delete owned;
     s_active.store(nullptr);
-    g_existingPrimitiveDefault=nullptr;
+    il2cpp_defaults=Il2CppDefaults{};
 }
 static void TestPhysicalImageInventoryBounds() {
     namespace physical_images=il2cpp::vm::assembly_shadow_observed_images;
