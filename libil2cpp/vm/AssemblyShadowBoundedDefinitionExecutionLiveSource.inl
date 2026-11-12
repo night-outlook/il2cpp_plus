@@ -2,13 +2,17 @@
 // rows -> original frozen execution/R02 record. Included ONCE by
 // AssemblyShadow.cpp inside il2cpp::vm; NEVER called by a Player or V1 getter.
 // Nested physical metadata definitions require an owner-checked ancestry.
-// Limited GENERICINST AOT argument owners now come from the raw physical
-// assembly table (registered AOT images), even when no observed class exists
-// in that argument's image. Both physical registry visits and the two class
-// enumerations run under the initial-session metadata-lock scope. Unregistered,
-// recursive/open/qualified/array and non-ASCII assembly forms reject.
-// Neither two enumerations nor unchanged R02/registry fences prove an
-// atomic VM epoch or complete V2 execution diagnostics.
+// Restricted AOT TypeDef and bounded composite/Unicode/primitive arguments
+// use registered PHYSICAL AOT owners, including unobserved argument images.
+// A second visitor mirrors the ORIGINAL V1 CopyValidAssemblies token-valid
+// PHYSICAL registration order, including interpreter and zero-TypeDef images,
+// and verifies every admitted key handle has the same FIRST-emplace owner.
+// Both V1/registered image inventories are sampled twice while an initial
+// metadata Reader and g_MetadataLock remain active. Unsupported/unowned,
+// conflicting, open-generic and over-budget source always fails closed.
+// These independently sampled inventories, original cctor/static fields and
+// R02/registry fences do NOT establish a VM-wide epoch, full original V1
+// execution field15 or terminal-safe native V2 transport.
 bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     assembly_shadow_physical_membership::Scratch& membership,
     ::r03_b2_owned_execution_rows::Rows& rows,
