@@ -14,6 +14,7 @@ on:
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h
       - libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl
+      - libil2cpp/vm/AssemblyShadowExistingPrimitiveDefaults.h
       - libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h
       - libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h
       - libil2cpp/vm/AssemblyShadowOwnedConstructedTypeKey.h
@@ -52,7 +53,7 @@ jobs:
             libil2cpp/vm/Assembly.cpp libil2cpp/vm/Assembly.h \
             libil2cpp/vm/AssemblyShadowRegisteredAotImageScan.h
           grep -Fqx '#include "vm/GlobalMetadataFileInternals.h"' libil2cpp/vm/AssemblyShadow.cpp
-          grep -Fqx '#include "vm/Class.h"' libil2cpp/vm/AssemblyShadow.cpp
+          grep -Fqx '#include "AssemblyShadowExistingPrimitiveDefaults.h"' libil2cpp/vm/AssemblyShadow.cpp
           grep -Fq 'Il2CppClass* Class::FromIl2CppTypeEnum(Il2CppTypeEnum type)' libil2cpp/vm/Class.cpp
           grep -Fq 'RETURN_DEFAULT_TYPE(int32_class)' libil2cpp/vm/Class.cpp
           grep -Fq 'static Il2CppClass* FromIl2CppTypeEnum(Il2CppTypeEnum type);' libil2cpp/vm/Class.h
@@ -65,6 +66,7 @@ jobs:
             libil2cpp/vm/AssemblyShadowOwnedDefinitionTypeKey.h \
             libil2cpp/vm/AssemblyShadowOwnedExecutionRows.h \
             libil2cpp/vm/AssemblyShadowOwnedConstructedTypeKey.h \
+            libil2cpp/vm/AssemblyShadowExistingPrimitiveDefaults.h \
             libil2cpp/vm/AssemblyShadowOwnedCompositeTypeKey.h \
             libil2cpp/vm/AssemblyShadowTypeKey.cpp \
             libil2cpp/vm/Class.cpp libil2cpp/vm/Class.h \
@@ -94,6 +96,7 @@ jobs:
           assert j['result']=='PassedActualInlWithMockedVmOnly'
           assert j['buildFlavor']==sys.argv[2]
           assert j['cases']>=67 and j['assertions']>=1186
+          assert j['primitivePeekCases']==20
           assert j['realUnity'] is False
           assert j['physicalClassProvenInRealPlayer'] is False
           assert j['fullCanonicalTypeKeys'] is False
