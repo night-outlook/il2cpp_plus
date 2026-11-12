@@ -70,8 +70,8 @@ jobs:
           j=json.load(open(sys.argv[1],encoding="utf8"))
           assert j["kind"]=="R03B2OriginalV1ExecutionSerializerParityHost"
           assert j["result"]=="PassedActualLegacyAndFrozenSerializerBytes"
-          assert j["cases"]==8 and j["rows"]==6
-          assert j["assertions"]>=75
+          assert j["cases"]==10 and j["rows"]==6
+          assert j["assertions"]>=88
           assert j["guardedAllocations"]==0
           assert j["actualLegacyR02Formatter"] is True
           assert j["actualFrozenR02Formatter"] is True
