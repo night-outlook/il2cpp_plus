@@ -214,6 +214,7 @@ static bool g_changeNonRootArityAtEnd=false;
 static char* g_mutableNonRootName=nullptr;
 static Il2CppTypeDefinition* g_nonRootSemanticDefinition=nullptr;
 static Il2CppTypeDefinition* g_nonRootPrimitiveDefinition=nullptr;
+static bool g_debugOversizedNonRootName=false;
 static bool g_changeEarlierIndexedOwnerDuringLaterTypeKey=false;
 static bool g_changedEarlierIndexedOwner=false;
 static Il2CppImage* g_earlierOwnerImage=nullptr;
@@ -322,6 +323,10 @@ public:
             g_changedEarlierIndexedOwner=true;
         }
         auto* def=static_cast<Il2CppTypeDefinition*>(handle);
+        if(g_debugOversizedNonRootName && def==g_nonRootSemanticDefinition)
+            std::fprintf(stderr,"R03 B2 oversized name source: len=%zu name=%p handle=%p pass=%u\\n",
+                         std::strlen(def->name),static_cast<const void*>(def->name),
+                         handle,g_physicalPasses);
         return {def->ns,def->name};
     }
     static Il2CppGenericContainer* GetGenericContainerFromIndex(int index){
@@ -743,6 +748,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_mutableNonRootName=fixture.mutableSecondaryName;
     g_nonRootSemanticDefinition=&fixture.secondary;
     g_nonRootPrimitiveDefinition=&fixture.primitiveDefinition;
+    g_debugOversizedNonRootName=(mode==Mode::NonRootNameBeyondByteBudget);
     g_container.type_argc=2;
     g_changeEarlierRootDuringLaterTypeKey=g_changedEarlierRoot=false;
     g_mutateEarlierClassDuringLaterTypeKey=g_mutatedEarlierClass=false;
@@ -1223,9 +1229,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
     const bool success=AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         membership,*owned,*record,receipt);
     if(success!=(expectedError==src::Error::None) || receipt.error!=expectedError)
-        std::fprintf(stderr,"R03 B2 mode=%d actualSuccess=%d actualError=%u expectedError=%u\\n",
+        std::fprintf(stderr,"R03 B2 mode=%d actualSuccess=%d actualError=%u expectedError=%u finalNameLen=%zu\\n",
             static_cast<int>(mode),static_cast<int>(success),
-            static_cast<unsigned>(receipt.error),static_cast<unsigned>(expectedError));
+            static_cast<unsigned>(receipt.error),static_cast<unsigned>(expectedError),
+            std::strlen(fixture.secondary.name));
     if(expectedError==src::Error::None) {
         Check(success && receipt.error==src::Error::None);
         Check(receipt.registered==expectedRows &&
