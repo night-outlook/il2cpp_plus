@@ -167,7 +167,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     // names fail closed, not truncated or hashed; no metadata char* escapes.
     struct NonRootOwnerAudit {
         using Handle=decltype(static_cast<Il2CppClass*>(nullptr)->typeMetadataHandle);
-        static constexpr size_t kNameBytes=live::kMaximumNonRootTypeDefNameBytes;
+        enum { kNameBytes=live::kMaximumNonRootTypeDefNameBytes }; // C++11 local type
         struct Pair {
             Handle handle=nullptr;
             const Il2CppImage* image=nullptr;
