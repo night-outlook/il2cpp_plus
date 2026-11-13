@@ -194,6 +194,11 @@ static bool g_changeRootDefinitionOnSecond=false;
 static bool g_changeRootImageOnEnd=false,g_changeRootDefinitionOnEnd=false;
 static bool g_changeRootTypeCodeOnEnd=false,g_changeRootDataOnEnd=false;
 static bool g_changeRootGenericOnEnd=false;
+static bool g_removeIndexedRootOwnerAtEnd=false;
+static bool g_aliasEarlierIndexedOwnerAtEnd=false;
+static bool g_changeEarlierIndexedOwnerDuringLaterTypeKey=false;
+static bool g_changedEarlierIndexedOwner=false;
+static Il2CppImage* g_earlierOwnerImage=nullptr;
 static bool g_changeEarlierRootDuringLaterTypeKey=false,g_changedEarlierRoot=false;
 static void* g_alternateTypeHandle=nullptr;
 static Il2CppImage* g_alternateRootImage=nullptr;
@@ -291,6 +296,13 @@ public:
             g_physical->typeMetadataHandle=g_alternateTypeHandle;
             g_changedEarlierRoot=true; // row already copied, final pass must reject
         }
+        if(g_changeEarlierIndexedOwnerDuringLaterTypeKey &&
+           !g_changedEarlierIndexedOwner && g_physicalPasses==2 &&
+           g_physical && g_otherPhysical &&
+           handle==g_otherPhysical->typeMetadataHandle) {
+            g_physical->image->handles[0]=nullptr; // root pointer unchanged
+            g_changedEarlierIndexedOwner=true;
+        }
         auto* def=static_cast<Il2CppTypeDefinition*>(handle);
         return {def->ns,def->name};
     }
@@ -316,6 +328,10 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
             g_physical->typeMetadataHandle=g_alternateTypeHandle;
     }
     if(g_physical && g_physicalPasses==3) {
+        if(g_removeIndexedRootOwnerAtEnd)
+            g_physical->image->handles[0]=nullptr;
+        if(g_aliasEarlierIndexedOwnerAtEnd && g_earlierOwnerImage)
+            g_earlierOwnerImage->handles[0]=g_physical->typeMetadataHandle;
         if(g_mutateCctorOnEndPass)g_physical->cctor_started=0;
         if(g_mutateStaticOnEndPass)g_physical->static_fields=nullptr;
         if(g_changeRootImageOnEnd)
@@ -587,6 +603,9 @@ enum class Mode {
     OriginalV1TypeCountChanged, OriginalV1ImageTokenChanged,
     OriginalV1AssemblyTokenChanged, OriginalV1DuplicatePhysicalImage,
     OriginalV1InterpreterTokenChanged,
+    RootIndexedOwnerRemovedAtEnd, RootEarlierOwnerAppearedAtEnd,
+    InterpreterOnlyRootIndexedOwnerRemovedAtEnd,
+    EarlierRootIndexedOwnerRemovedDuringLaterTypeKey,
     InterpreterSimpleClass, InterpreterSimpleValueType,
     InterpreterWrongTypeHandle, InterpreterGenericDefinition,
     InterpreterNestedDefinition, InterpreterFirstOwnerAlias,
@@ -651,6 +670,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_changeRootImageOnEnd=g_changeRootDefinitionOnEnd=false;
     g_changeRootTypeCodeOnEnd=g_changeRootDataOnEnd=false;
     g_changeRootGenericOnEnd=false;
+    g_removeIndexedRootOwnerAtEnd=false;
+    g_aliasEarlierIndexedOwnerAtEnd=false;
+    g_changeEarlierIndexedOwnerDuringLaterTypeKey=false;
+    g_changedEarlierIndexedOwner=false;
+    g_earlierOwnerImage=nullptr;
     g_changeEarlierRootDuringLaterTypeKey=g_changedEarlierRoot=false;
     g_mutateEarlierClassDuringLaterTypeKey=g_mutatedEarlierClass=false;
     g_dropEndPass=g_duplicateEndPass=false;
@@ -666,7 +690,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         mode==Mode::InterpreterOnlyMissingTypeHandle ||
         mode==Mode::InterpreterOnlyGenericDefinition ||
         mode==Mode::InterpreterOnlyConstructedGeneric ||
-        mode==Mode::InterpreterOnlyNoOriginalImage;
+        mode==Mode::InterpreterOnlyNoOriginalImage ||
+        mode==Mode::InterpreterOnlyRootIndexedOwnerRemovedAtEnd;
     const bool interpreterMode=interpreterOnlyMode ||
         mode==Mode::InterpreterSimpleClass ||
         mode==Mode::InterpreterSimpleValueType ||
@@ -892,7 +917,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::StagedGenericContainer)fixture.def.genericContainerIndex=-2;
     if(mode==Mode::TwoClassesReversedPhysicalCallback ||
        mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
-       mode==Mode::EarlierRootChangedDuringLaterTypeKey) {
+       mode==Mode::EarlierRootChangedDuringLaterTypeKey ||
+       mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey) {
         fixture.image.typeCount=2;
         fixture.image.handles[1]=&fixture.secondary;
         g_otherPhysical=&fixture.other;
@@ -946,6 +972,20 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::UnsupportedImage)fixture.image.typeCount=8193;
     if(mode==Mode::SourceChanged)g_changeRevision=true;
     if(mode==Mode::CounterChanged)g_changeCounter=true;
+    if(mode==Mode::RootIndexedOwnerRemovedAtEnd ||
+       mode==Mode::InterpreterOnlyRootIndexedOwnerRemovedAtEnd)
+        g_removeIndexedRootOwnerAtEnd=true;
+    if(mode==Mode::RootEarlierOwnerAppearedAtEnd) {
+        fixture.supportImage.token=-2;
+        fixture.supportAssembly.interpreter=true;
+        g_rawAssemblies[1]=g_rawAssemblies[0];
+        g_rawAssemblies[0]=&fixture.supportAssembly;
+        g_rawCount=2;
+        g_earlierOwnerImage=&fixture.supportImage;
+        fixture.supportImage.handles[0]=&fixture.secondary;
+    }
+    if(mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey)
+        g_changeEarlierIndexedOwnerDuringLaterTypeKey=true;
     if(mode==Mode::CctorFactsChanged)g_mutateCctorOnSecond=true;
     if(mode==Mode::StaticFactsChanged)g_mutateStaticOnSecond=true;
     if(mode==Mode::CctorFactsDuringTypeKey)g_mutateCctorInsideTypeKey=true;
@@ -1028,6 +1068,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::TwoClassesReversedPhysicalCallback ||
        mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
        mode==Mode::EarlierRootChangedDuringLaterTypeKey ||
+       mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey ||
        mode==Mode::CrossImageGeneric ||
        mode==Mode::CrossImageGenericAmbiguous ||
        mode==Mode::CrossImageInterpreter ||
@@ -1037,6 +1078,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
         mode==Mode::TwoClassesReversedPhysicalCallback ||
         mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
         mode==Mode::EarlierRootChangedDuringLaterTypeKey ||
+        mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey ||
         mode==Mode::CrossImageGeneric ||
         mode==Mode::CrossImageGenericAmbiguous ||
         mode==Mode::RegisteredAotChanged ||
@@ -1068,6 +1110,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.originalV1ImageFactsTwoPassStable);
         Check(receipt.originalV1ImageFactsMatched==receipt.originalV1Images);
         Check(receipt.originalV1FirstEmplaceOwnerMatched);
+        Check(receipt.originalV1RootOwnerEndPassStable);
+        Check(receipt.originalV1RootOwnerEndPassMatched==expectedRows);
+        Check(receipt.originalV1RootOwnerEndPassLookups>=expectedRows);
         Check(receipt.observedClassFactsTwoPassStable);
         Check(receipt.observedClassFactsMatched==expectedRows);
         Check(receipt.observedClassFactsEndPassStable);
@@ -1248,6 +1293,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!owned->Complete() && owned->Count()==0);
         Check(!receipt.callbackPhysicalMembershipProven);
         Check(!receipt.originalV1FirstEmplaceOwnerMatched);
+        Check(!receipt.originalV1RootOwnerEndPassStable);
+        Check(receipt.originalV1RootOwnerEndPassMatched==0);
+        Check(receipt.originalV1RootOwnerEndPassLookups==0);
         Check(!receipt.observedClassFactsTwoPassStable);
         Check(receipt.observedClassFactsMatched==0);
         Check(!receipt.observedClassFactsEndPassStable);
@@ -1423,6 +1471,13 @@ int main(){
     Exercise(Mode::OriginalV1AssemblyTokenChanged,src::Error::OriginalV1ImageFactsChanged);
     Exercise(Mode::OriginalV1DuplicatePhysicalImage,src::Error::OriginalV1ImageSourceUnavailable);
     Exercise(Mode::OriginalV1InterpreterTokenChanged,src::Error::OriginalV1ImageFactsChanged);
+    Exercise(Mode::RootIndexedOwnerRemovedAtEnd,src::Error::OriginalV1OwnerMissing);
+    Exercise(Mode::RootEarlierOwnerAppearedAtEnd,src::Error::OriginalV1FirstOwnerConflict);
+    Exercise(Mode::InterpreterOnlyRootIndexedOwnerRemovedAtEnd,
+             src::Error::OriginalV1OwnerMissing);
+    Exercise(Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey,
+             src::Error::OriginalV1OwnerMissing);
+    Check(g_changedEarlierIndexedOwner);
     Exercise(Mode::OriginalV1UnregisteredOwner,
              src::Error::OriginalV1OwnerMissing);
     Exercise(Mode::OriginalV1InvalidImage,
