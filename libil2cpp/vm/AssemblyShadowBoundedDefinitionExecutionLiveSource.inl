@@ -160,9 +160,37 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     // while formatting nested declarations, composite generic arguments or
     // primitive defaults. The separate third class pass covers class roots.
     // This finite inventory does not cover arbitrary VM TypeDef maps.
+    // Existing V1 physical-owner admission is necessary but not sufficient
+    // for declaration consistency: the same owned handle may later expose
+    // different namespace/name bytes or declaration ancestry/arity.
+    // Bounded EXACT copies for admitted non-root TypeDefs only. Oversized
+    // names fail closed, not truncated or hashed; no metadata char* escapes.
     struct NonRootOwnerAudit {
         using Handle=decltype(static_cast<Il2CppClass*>(nullptr)->typeMetadataHandle);
-        struct Pair {Handle handle=nullptr;const Il2CppImage* image=nullptr;};
+        static constexpr size_t kNameBytes=live::kMaximumNonRootTypeDefNameBytes;
+        struct Pair {
+            Handle handle=nullptr;
+            const Il2CppImage* image=nullptr;
+            char nameSpace[kNameBytes]{};
+            char simpleName[kNameBytes]{};
+            uint32_t namespaceBytes=0,nameBytes=0;
+            int32_t genericIndex=0,declaringIndex=0;
+            uint32_t arity=0;
+            bool captured=false;
+            bool Same(const char* ns,size_t nsLength,const char* name,
+                      size_t nameLength,int32_t generic,int32_t declaring,
+                      uint32_t expectedArity) const noexcept {
+                if(!captured || !ns || !name || namespaceBytes!=nsLength ||
+                   nameBytes!=nameLength || genericIndex!=generic ||
+                   declaringIndex!=declaring || arity!=expectedArity)
+                    return false;
+                for(size_t i=0;i<nsLength;++i)
+                    if(nameSpace[i]!=ns[i])return false;
+                for(size_t i=0;i<nameLength;++i)
+                    if(simpleName[i]!=name[i])return false;
+                return true;
+            }
+        };
         std::array<Pair,live::kMaximumNonRootTypeDefOwnerPairs> pairs{};
         size_t used=0;
         enum class NoteResult : uint8_t {Accepted,Conflict,Overflow};
@@ -177,11 +205,41 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             ++used;
             return NoteResult::Accepted;
         }
+        bool Capture(Handle handle,const char* ns,size_t nsLength,
+                     const char* name,size_t nameLength,int32_t generic,
+                     int32_t declaring,uint32_t arity) noexcept {
+            if(!handle || !ns || !name || nsLength>kNameBytes ||
+               nameLength>kNameBytes)return false;
+            for(size_t i=0;i<used;++i)if(pairs[i].handle==handle) {
+                Pair& entry=pairs[i];
+                if(entry.captured)
+                    return entry.Same(ns,nsLength,name,nameLength,
+                                      generic,declaring,arity);
+                entry.namespaceBytes=static_cast<uint32_t>(nsLength);
+                entry.nameBytes=static_cast<uint32_t>(nameLength);
+                entry.genericIndex=generic;
+                entry.declaringIndex=declaring;
+                entry.arity=arity;
+                for(size_t j=0;j<nsLength;++j)entry.nameSpace[j]=ns[j];
+                for(size_t j=0;j<nameLength;++j)entry.simpleName[j]=name[j];
+                entry.captured=true;
+                return true;
+            }
+            return false;
+        }
+        static bool CountBounded(const char* p,size_t& length) noexcept {
+            if(!p)return false;
+            length=0;
+            while(length<=kNameBytes && p[length])++length;
+            return length<=kNameBytes;
+        }
         void Scrub() noexcept {pairs.fill(Pair{});used=0;}
         ~NonRootOwnerAudit() noexcept {Scrub();}
     };
-    static_assert(sizeof(NonRootOwnerAudit)<=2064,
-                  "B2 nonroot TypeDef owner audit stack bound changed");
+    // At most 128 exact copies, two <=64-byte fields per entry.
+    // Test the native ABI/stack profile before ever activating this source.
+    static_assert(sizeof(NonRootOwnerAudit)<=24576,
+                  "B2 non-root declaration snapshot stack bound changed");
     struct Context {
         physical::Scratch* membership;
         owned::Rows* rows;
@@ -690,6 +748,21 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     parts[depth].nameSpace={ns,nsBytes};
                     parts[depth].simpleName={name.second,nameBytes};
                     parts[depth].arity=arity;
+                    if(handle!=klass->typeMetadataHandle) {
+                        // The original first-emplace owner is already proven.
+                        // Make a BYTE-EXACT declaration copy for the final
+                        // bounded non-root metadata-content recheck.
+                        if(!c.nonRootOwners || !c.nonRootOwners->Capture(
+                               handle,ns,nsBytes,name.second,nameBytes,
+                               static_cast<int32_t>(def->genericContainerIndex),
+                               static_cast<int32_t>(def->declaringTypeIndex),arity)) {
+                            c.error=nsBytes>NonRootOwnerAudit::kNameBytes ||
+                                nameBytes>NonRootOwnerAudit::kNameBytes ?
+                                live::Error::SourceOutsideBudget :
+                                live::Error::OriginalV1TypeDefContentChanged;
+                            return false;
+                        }
+                    }
                     if(depth==0)leafArity=arity;
                     if(def->declaringTypeIndex==kTypeIndexInvalid) {
                         ancestryComplete=true;++depth;break;
@@ -1145,7 +1218,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         // previous third class pass only checked roots. Each pair's expected
         // owner is the independently authenticated ORIGINAL first owner.
         // A separate 65536 indexed-lookup limit fails closed on large source.
-        size_t nonRootLookups=0,nonRootChecked=0;
+        size_t nonRootLookups=0,nonRootChecked=0,nonRootContentsChecked=0;
         for(size_t i=0;i<nonRootOwners.used;++i) {
             const auto& entry=nonRootOwners.pairs[i];
             original_join::Receipt checked{};
@@ -1164,7 +1237,32 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 return reject(live::Error::OriginalV1ImageSourceUnavailable);
             }
             ++nonRootChecked;
+            // First-owner equality alone does not freeze a TypeDef's name,
+            // generic arity or declaring-type metadata. Recheck every
+            // previously copied non-root declaration before source release.
+            const auto* def=reinterpret_cast<const Il2CppTypeDefinition*>(
+                entry.handle);
+            if(!entry.captured || !def ||
+               static_cast<int32_t>(def->genericContainerIndex)!=entry.genericIndex ||
+               static_cast<int32_t>(def->declaringTypeIndex)!=entry.declaringIndex)
+                return reject(live::Error::OriginalV1TypeDefContentChanged);
+            const auto name=GlobalMetadata::GetTypeNamespaceAndName(entry.handle);
+            const char* ns=name.first?name.first:"";
+            size_t nsBytes=0,nameBytes=0;
+            if(!NonRootOwnerAudit::CountBounded(ns,nsBytes) ||
+               !NonRootOwnerAudit::CountBounded(name.second,nameBytes))
+                return reject(live::Error::OriginalV1TypeDefContentChanged);
+            // Generic index is already verified BEFORE resolving container
+            // count; never feed a newly changed/staged index to the API.
+            const auto container=GlobalMetadata::GetGenericContainerFromIndex(
+                def->genericContainerIndex);
+            const uint32_t arity=GlobalMetadata::GetGenericContainerCount(container);
+            if(!entry.Same(ns,nsBytes,name.second,nameBytes,
+                           entry.genericIndex,entry.declaringIndex,arity))
+                return reject(live::Error::OriginalV1TypeDefContentChanged);
+            ++nonRootContentsChecked;
         }
+        receipt.originalV1NonRootTypeDefContentMatched=nonRootContentsChecked;
         receipt.originalV1NonRootTypeDefOwnersRecorded=nonRootOwners.used;
         receipt.originalV1NonRootTypeDefOwnersRechecked=nonRootChecked;
         receipt.originalV1NonRootTypeDefOwnerLookups=nonRootLookups;
@@ -1317,9 +1415,14 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             live::kMaximumNonRootTypeDefOwnerPairs &&
         receipt.originalV1NonRootTypeDefOwnerLookups>=
             receipt.originalV1NonRootTypeDefOwnersRechecked;
+    receipt.originalV1NonRootTypeDefContentEndPassStable=
+        receipt.originalV1NonRootTypeDefOwnersEndPassStable &&
+        receipt.originalV1NonRootTypeDefContentMatched==
+            receipt.originalV1NonRootTypeDefOwnersRecorded;
     receipt.originalV1FirstEmplaceOwnerMatched=
         receipt.originalV1RootOwnerEndPassStable &&
         receipt.originalV1NonRootTypeDefOwnersEndPassStable &&
+        receipt.originalV1NonRootTypeDefContentEndPassStable &&
         receipt.originalV1HandlesMatched>0;
     // No claim of complete legacy execution field15, only those handles
     // actually used in the restricted rows. Other original V1 source rows,
