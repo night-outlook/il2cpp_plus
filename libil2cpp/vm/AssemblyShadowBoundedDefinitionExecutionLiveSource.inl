@@ -598,6 +598,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             // never dereference a borrowed metadata handle before owner proof.
             auto resolveOwner=[&](decltype(klass->typeMetadataHandle) handle,
                                   const Il2CppImage* constrained,
+                                  bool classRootUse,
                                   const Il2CppImage*& resolved)->bool {
                 resolved=nullptr;
                 if(!handle || !c.images || !c.images->Healthy()) {
@@ -683,15 +684,16 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     return false;
                 }
                 ++c.originalV1Matches;
-                // Already independently first-owner authenticated. Reuse
-                // one exact bounded handle+owner record for ROOTS and other
-                // TypeDefs. Root ownership still has its separate third-pass
-                // check; this record additionally protects root CONTENT.
+                // Already independently first-owner authenticated. Classify
+                // ROOT vs non-root by the call path, not handle equality: a
+                // root used inside its own generic TypeKey is ALSO non-root.
+                // Keep both role receipts on one exact handle+owner record.
+                // Root ownership has a separate third-pass check.
                 if(!c.nonRootOwners) {
                     c.error=live::Error::InvalidRegistry;return false;
                 }
                 const auto noted=c.nonRootOwners->Note(
-                    handle,resolved,handle==klass->typeMetadataHandle);
+                    handle,resolved,classRootUse);
                 if(noted!=NonRootOwnerAudit::NoteResult::Accepted) {
                     c.error=noted==NonRootOwnerAudit::NoteResult::Overflow ?
                         live::Error::SourceOutsideBudget:
@@ -703,7 +705,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             auto buildDefinition=[&](decltype(klass->typeMetadataHandle) handle,
                                      const Il2CppImage* requiredOwner,
                                      key::Capture& result,uint32_t& leafArity,
-                                     const Il2CppImage*& provenOwner)->bool {
+                                     const Il2CppImage*& provenOwner,
+                                     bool classRootDefinition)->bool {
                 struct Component {
                     key::ByteView nameSpace{};
                     key::ByteView simpleName{};
@@ -726,8 +729,9 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                             return false;
                         }
                     const Il2CppImage* currentOwner=nullptr;
+                    const bool classRootUse=classRootDefinition && depth==0;
                     if(!resolveOwner(handle,depth?provenOwner:requiredOwner,
-                                     currentOwner))return false;
+                                     classRootUse,currentOwner))return false;
                     if(!depth)provenOwner=currentOwner;
                     verifiedHandles[depth]=handle;
                     // The only dereference of this TypeDef occurs after the
@@ -840,7 +844,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             uint32_t definitionArity=0;
             const Il2CppImage* definitionOwner=nullptr;
             if(!buildDefinition(definition,image,definitionKey,
-                                definitionArity,definitionOwner)) {
+                                definitionArity,definitionOwner,true)) {
                 ++c.rejected;return;
             }
             // Preserve the pinned native FormatType spelling while owning
@@ -894,7 +898,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                             uint32_t arity=0;
                             const Il2CppImage* resolved=nullptr;
                             if(!makeDefinition(value->data.typeHandle,nullptr,
-                                               definition,arity,resolved))
+                                               definition,arity,resolved,false))
                                 return false;
                             if(resolved!=sourceImage)
                                 context.usedCrossImageArgument=true;
@@ -923,7 +927,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                             uint32_t arity=0;
                             const Il2CppImage* resolved=nullptr;
                             if(!makeDefinition(g->type->data.typeHandle,nullptr,
-                                               definition,arity,resolved))
+                                               definition,arity,resolved,false))
                                 return false;
                             if(arity!=args->type_argc)return Fail();
                             if(resolved!=sourceImage)
@@ -993,7 +997,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                             const Il2CppImage* resolved=nullptr;
                             if(!makeDefinition(primitive->typeMetadataHandle,
                                                primitive->image,
-                                               existingDefault,arity,resolved))
+                                               existingDefault,arity,resolved,false))
                                 return false;
                             if(!resolved || resolved!=primitive->image ||
                                arity!=0 || primitive->declaringType)

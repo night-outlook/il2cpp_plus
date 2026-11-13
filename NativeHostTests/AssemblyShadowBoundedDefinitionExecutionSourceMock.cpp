@@ -650,7 +650,8 @@ static void TestParityProbeMock(){
 }
 enum class Mode {
     Good, GenericDefinition, StagedGenericContainer,
-    GenericSameImage, GenericNestedArgument, GenericArgumentMissingOwner,
+    GenericSameImage, GenericRootAlsoArgument,
+    GenericNestedArgument, GenericArgumentMissingOwner,
     CrossImageGeneric, CrossImageGenericUnobserved,
     CrossImageGenericNotRegistered, CrossImageGenericAmbiguous,
     CrossImageInterpreter, RegisteredAotChanged,
@@ -849,7 +850,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
        mode==Mode::RootGenericIndexChangedAtEnd ||
        mode==Mode::RootGenericArityChangedAtEnd)
         fixture.def.genericContainerIndex=0;
-    if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument ||
+    if(mode==Mode::GenericSameImage || mode==Mode::GenericRootAlsoArgument ||
+       mode==Mode::GenericNestedArgument ||
        mode==Mode::GenericArgumentOwnerRemovedAtEnd ||
        mode==Mode::NonRootNameBytesChangedAtEnd ||
        mode==Mode::NonRootDeclaringChangedAtEnd ||
@@ -906,6 +908,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
                     r03_b2_owned_constructed_type_key::Capture::kMaximumArguments+1);
         if(mode==Mode::GenericWrongArity)
             fixture.genericInstance.type_argc=1;
+        // The same TypeDef is both the observed root and a generic argument.
+        if(mode==Mode::GenericRootAlsoArgument)
+            fixture.genericArg1.data.typeHandle=&fixture.def;
         if(mode==Mode::GenericQualifiedArgument)
             fixture.genericArg1.byref=1;
         if(mode==Mode::GenericConstructedArgument ||
@@ -1327,6 +1332,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
         if(mode==Mode::Good || mode==Mode::InterpreterSimpleClass ||
            mode==Mode::InterpreterOnlySimpleClass)
             Check(receipt.originalV1NonRootTypeDefOwnersRecorded==0);
+        if(mode==Mode::GenericRootAlsoArgument) {
+            Check(receipt.originalV1RootTypeDefContentRecorded==1);
+            Check(receipt.originalV1NonRootTypeDefOwnersRecorded==2);
+            Check(receipt.originalV1AdmittedTypeDefPairsRecorded==2);
+        }
         if(mode==Mode::GenericSameImage ||
            mode==Mode::CrossImageGenericUnobserved)
             Check(receipt.originalV1NonRootTypeDefOwnersRecorded>=1);
@@ -1413,6 +1423,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
                          mode==Mode::PrimitiveQualified ||
                          mode==Mode::GenericDefinition ||
                          mode==Mode::GenericSameImage ||
+                         mode==Mode::GenericRootAlsoArgument ||
                          mode==Mode::GenericNestedArgument ||
                          mode==Mode::GenericQualifiedArgument ||
                          mode==Mode::GenericConstructedArgument ||
@@ -1459,6 +1470,14 @@ static void Exercise(Mode mode,src::Error expectedError) {
                 std::to_string(arg.size())+":"+arg+")";
             Check(body.find(generic)!=std::string::npos);
             Check(body.find("\"typeKey\":\"generic(")!=std::string::npos);
+        }
+        if(mode==Mode::GenericRootAlsoArgument) {
+            const std::string root="type(7:methods/4:Demo/4:Hero@2)";
+            const std::string friendKey="type(7:methods/4:Demo/6:Friend@0)";
+            const std::string generic="generic("+root+","+
+                std::to_string(root.size())+":"+root+","+
+                std::to_string(friendKey.size())+":"+friendKey+")";
+            Check(body.find(generic)!=std::string::npos);
         }
         if(admittedPrimitive) {
             const std::string primitive="type(7:support/6:System/5:Int32@0)";
@@ -1686,6 +1705,7 @@ int main(){
     Exercise(Mode::PrimitiveClassNested,src::Error::UnsupportedTypeShape);
     Exercise(Mode::PrimitiveClassGenericContainer,src::Error::UnsupportedTypeShape);
     Exercise(Mode::GenericSameImage,src::Error::None);
+    Exercise(Mode::GenericRootAlsoArgument,src::Error::None);
     Exercise(Mode::GenericNestedArgument,src::Error::None);
     Exercise(Mode::CrossImageGeneric,src::Error::None);
     Exercise(Mode::CrossImageGenericUnobserved,src::Error::None);
