@@ -172,7 +172,9 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 return pairs[i].image==image ?
                     NoteResult::Accepted:NoteResult::Conflict;
             if(used==pairs.size())return NoteResult::Overflow;
-            pairs[used++]={handle,image};
+            pairs[used].handle=handle;
+            pairs[used].image=image;
+            ++used;
             return NoteResult::Accepted;
         }
         void Scrub() noexcept {pairs.fill(Pair{});used=0;}
