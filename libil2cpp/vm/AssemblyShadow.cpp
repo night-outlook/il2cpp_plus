@@ -11,6 +11,7 @@
 #include "AssemblyShadowBoundedGeneralLive.h"
 #include "AssemblyShadowBoundedExecutionEmptyLive.h"
 #include "AssemblyShadowBoundedDefinitionExecutionLive.h"
+#include "AssemblyShadowPackedClassFacts.h"
 #include "AssemblyShadowExecutionV1ByteParity.h"
 #include "AssemblyShadowObservationMemo.h"
 #include "AssemblyShadowOpaqueExecutionInventory.h"

@@ -150,6 +150,10 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     // 16-byte class facts). Requires actual Unity thread-stack validation.
     static_assert(sizeof(ClassFacts)<=48,
                   "B2 original class source facts stack bound changed");
+    using PackedFacts=assembly_shadow_packed_class_facts::Scratch<
+        ClassFacts,physical::kSlots,physical::kMaximumObserved>;
+    static_assert(sizeof(PackedFacts)<=53264,
+                  "B2 packed class facts exceeds 52-KiB bound");
     struct Context {
         physical::Scratch* membership;
         owned::Rows* rows;
@@ -158,7 +162,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         size_t lookups=0, rejected=0;
         size_t originalV1Lookups=0, originalV1Matches=0;
         size_t classFactsMatched=0, classRootFactsMatched=0;
-        ClassFacts* firstPassFacts=nullptr;
+        PackedFacts* firstPassFacts=nullptr;
         assembly_shadow_observed_images::Inventory<live::kMaximumRegisteredAotImages>* images=nullptr;
         assembly_shadow_observed_images::Inventory<64>* observedImages=nullptr;
         assembly_shadow_observed_images::Inventory<
@@ -190,7 +194,9 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         assembly_shadow_observed_images::Inventory<64> imageInventory;
         // One 16-byte observed primitive fact per 2048 registry slots, no
         // metadata address or class pointer escapes this lock scope.
-        std::array<ClassFacts,physical::kSlots> firstPassFacts{};
+        // At most 1024 physical observed classes fit in 2048 registry slots.
+        // Dense facts with a one-based slot map cost about 52 KiB vs 96 KiB.
+        PackedFacts firstPassFacts{};
         assembly_shadow_observed_images::Inventory<
             live::kMaximumOriginalV1Images> originalV1Images;
         assembly_shadow_observed_images::Inventory<
@@ -309,7 +315,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         context.originalV1Images=&originalV1Images;
         context.images=&registeredAotImages;
         context.observedImages=&imageInventory;
-        context.firstPassFacts=firstPassFacts.data();
+        context.firstPassFacts=&firstPassFacts;
         // Physical iterator #1 is observation-only: no output rows and no
         // metadata handles are retained. A class is dereferenced only after
         // it matches one of the authenticated observed registry identities.
@@ -321,14 +327,14 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 live::kMaximumRegisteredAotImages>* registry;
             const assembly_shadow_observed_images::Inventory<
                 live::kMaximumOriginalV1Images>* originalV1Images=nullptr;
-            ClassFacts* firstPassFacts=nullptr;
+            PackedFacts* firstPassFacts=nullptr;
             live::Error error=live::Error::None;
         } inventoryContext{};
         inventoryContext.matched=&discovery;
         inventoryContext.images=&imageInventory;
         inventoryContext.registry=&registeredAotImages;
         inventoryContext.originalV1Images=&originalV1Images;
-        inventoryContext.firstPassFacts=firstPassFacts.data();
+        inventoryContext.firstPassFacts=&firstPassFacts;
         il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
             DiscoveryContext& d=*static_cast<DiscoveryContext*>(raw);
             if(d.error!=live::Error::None)return;
@@ -370,10 +376,13 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             if(!d.matched->TryObservedRegistrationBinding(
                     klass,slot,source) ||
                !d.firstPassFacts || slot>=physical::kSlots ||
-               d.firstPassFacts[slot].observed) {
+               d.firstPassFacts->Find(slot)) {
                 d.error=live::Error::InvalidRegistry;return;
             }
-            d.firstPassFacts[slot]=ClassFacts::Read(klass);
+            const ClassFacts sampled=ClassFacts::Read(klass);
+            if(!sampled.observed || !d.firstPassFacts->Insert(slot,sampled)) {
+                d.error=live::Error::InvalidRegistry;return;
+            }
         },&inventoryContext);
         if(inventoryContext.error!=live::Error::None)
             return reject(inventoryContext.error);
@@ -400,16 +409,17 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             if(!c.membership->TryObservedRegistrationBinding(klass,registration,witness)) {
                 c.error=live::Error::InvalidRegistry;return;
             }
-            if(!c.firstPassFacts || registration>=physical::kSlots ||
-               !c.firstPassFacts[registration].observed) {
+            const ClassFacts* previous=c.firstPassFacts ?
+                c.firstPassFacts->Find(registration):nullptr;
+            if(!previous || !previous->observed) {
                 c.error=live::Error::InvalidRegistry;return;
             }
             const ClassFacts secondFacts=ClassFacts::Read(klass);
-            if(!c.firstPassFacts[registration].SameRoot(secondFacts)) {
+            if(!previous->SameRoot(secondFacts)) {
                 ++c.rejected;
                 c.error=live::Error::ObservedClassRootChanged;return;
             }
-            if(!c.firstPassFacts[registration].SameClassState(secondFacts)) {
+            if(!previous->SameClassState(secondFacts)) {
                 ++c.rejected;
                 c.error=live::Error::ObservedClassFactsChanged;return;
             }
@@ -956,7 +966,9 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             // Save the last observed primitive AFTER the owned row has been
             // recorded. A later row's TypeKey source may mutate an earlier
             // class; a final per-row read cannot detect that late change.
-            c.firstPassFacts[registration]=finalFacts;
+            if(!c.firstPassFacts->Update(registration,finalFacts)) {
+                c.error=live::Error::InvalidRegistry;return;
+            }
         },&context);
         // Third, end-of-collection physical traversal rechecks EVERY
         // previously admitted class, including early rows that a later
@@ -972,13 +984,13 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
            membership.EnumeratorHealthy() && membership.FullyMatched()) {
             struct EndPassFacts {
                 physical::Scratch* membership=nullptr;
-                const ClassFacts* facts=nullptr;
+                const PackedFacts* facts=nullptr;
                 std::array<uint8_t,physical::kSlots> seen{};
                 size_t enumerated=0,matched=0;
                 live::Error error=live::Error::None;
             } endPass{};
             endPass.membership=&membership;
-            endPass.facts=firstPassFacts.data();
+            endPass.facts=&firstPassFacts;
             il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
                 EndPassFacts& end=*static_cast<EndPassFacts*>(raw);
                 if(end.error!=live::Error::None)return;
@@ -997,10 +1009,15 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 }
                 end.seen[slot]=1;
                 ++end.matched;
+                const ClassFacts* previous=end.facts ?
+                    end.facts->Find(slot):nullptr;
+                if(!previous) {
+                    end.error=live::Error::InvalidRegistry;return;
+                }
                 const ClassFacts observed=ClassFacts::Read(klass);
-                if(!end.facts[slot].SameRoot(observed))
+                if(!previous->SameRoot(observed))
                     end.error=live::Error::ObservedClassRootChanged;
-                else if(!end.facts[slot].SameClassState(observed))
+                else if(!previous->SameClassState(observed))
                     end.error=live::Error::ObservedClassFactsChanged;
             },&endPass);
             if(endPass.error!=live::Error::None)
@@ -1046,7 +1063,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         context.firstPassFacts=nullptr;
         // The first-pass per-class address VALUES are destroyed/scrubbed
         // before releasing original metadata/assembly source admission.
-        firstPassFacts.fill(ClassFacts{});
+        firstPassFacts.Scrub();
     }
 
     receipt.metadataLookups=context.lookups;

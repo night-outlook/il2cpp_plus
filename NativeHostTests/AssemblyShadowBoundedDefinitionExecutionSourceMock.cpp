@@ -2,6 +2,7 @@
 // This is a source-execution mock, NOT Unity/IL2CPP or live metadata authority.
 // Never install this file or its fake VM definitions into libil2cpp/vm.
 #include "vm/AssemblyShadowBoundedDefinitionExecutionLive.h"
+#include "vm/AssemblyShadowPackedClassFacts.h"
 #include "vm/AssemblyShadowExecutionV1ByteParity.h"
 #include "vm/AssemblyShadowBoundedExecutionEmptyLive.h"
 #include "vm/AssemblyShadowExecutionRegistryRevision.h"
@@ -1273,6 +1274,50 @@ static void Exercise(Mode mode,src::Error expectedError) {
     s_active.store(nullptr);
     il2cpp_defaults=Il2CppDefaults{};
 }
+
+static unsigned packedFactsCases=0;
+static void TestPackedClassFactsScratch() {
+    namespace packed=il2cpp::vm::assembly_shadow_packed_class_facts;
+    struct Fact {uintptr_t identity=0;uint32_t flags=0;};
+    packed::Scratch<Fact,2048,1024> scratch;
+    ++cases;++packedFactsCases;
+    Check(scratch.Count()==0 && scratch.Find(0)==nullptr);
+    Check(scratch.Find(2048)==nullptr);
+    Fact value{};value.identity=123;value.flags=7;
+    Check(!scratch.Update(0,value));
+
+    ++cases;++packedFactsCases;
+    Check(scratch.Insert(2047,value));
+    Check(scratch.Count()==1);
+    Check(!scratch.Insert(2047,value));
+    Check(scratch.Find(2047) && scratch.Find(2047)->identity==123);
+    Check(scratch.Find(0)==nullptr);
+
+    ++cases;++packedFactsCases;
+    value.identity=456;
+    Check(scratch.Update(2047,value));
+    Check(scratch.Find(2047)->identity==456);
+    Check(!scratch.Update(2048,value));
+
+    ++cases;++packedFactsCases;
+    for(size_t slot=0;slot<1023;++slot) {
+        value.identity=slot+1;
+        Check(scratch.Insert(slot,value));
+    }
+    Check(scratch.Count()==1024);
+    Check(!scratch.Insert(1023,value));
+    Check(scratch.Find(1022) && scratch.Find(1022)->identity==1023);
+    Check(scratch.Find(2047)->identity==456);
+
+    ++cases;++packedFactsCases;
+    scratch.Scrub();
+    Check(scratch.Count()==0);
+    Check(scratch.Find(2047)==nullptr);
+    Check(scratch.Find(0)==nullptr);
+    Check(!scratch.Update(2047,value));
+    Check(scratch.Insert(2047,value) && scratch.Count()==1);
+    scratch.Scrub();
+}
 static void TestPhysicalImageInventoryBounds() {
     namespace physical_images=il2cpp::vm::assembly_shadow_observed_images;
     char imageSymbols[65]{};
@@ -1336,6 +1381,7 @@ static void TestAssertFreePrimitivePeekMapping(){
 }
 int main(){
     TestPhysicalImageInventoryBounds();
+    TestPackedClassFactsScratch();
     TestAssertFreePrimitivePeekMapping();
     g_container.type_argc=2;
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
