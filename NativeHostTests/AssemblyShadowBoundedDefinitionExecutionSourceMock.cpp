@@ -976,6 +976,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
        mode==Mode::InterpreterOnlyRootIndexedOwnerRemovedAtEnd)
         g_removeIndexedRootOwnerAtEnd=true;
     if(mode==Mode::RootEarlierOwnerAppearedAtEnd) {
+        g_aliasEarlierIndexedOwnerAtEnd=true;
         fixture.supportImage.token=-2;
         fixture.supportAssembly.interpreter=true;
         g_rawAssemblies[1]=g_rawAssemblies[0];
