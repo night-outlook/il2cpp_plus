@@ -205,6 +205,15 @@ static bool g_aliasEarlierGenericArgumentOwnerAtEnd=false;
 static Il2CppImage* g_mainArgumentImage=nullptr;
 static Il2CppImage* g_supportArgumentImage=nullptr;
 static void* g_secondaryArgumentHandle=nullptr;
+// Non-root semantic declaration metadata (not ownership) test mutations.
+static bool g_changeNonRootNameByteAtEnd=false;
+static bool g_changeNonRootNamespaceAtEnd=false;
+static bool g_changeNonRootDeclaringAtEnd=false;
+static bool g_changeNonRootGenericIndexAtEnd=false;
+static bool g_changeNonRootArityAtEnd=false;
+static char* g_mutableNonRootName=nullptr;
+static Il2CppTypeDefinition* g_nonRootSemanticDefinition=nullptr;
+static Il2CppTypeDefinition* g_nonRootPrimitiveDefinition=nullptr;
 static bool g_changeEarlierIndexedOwnerDuringLaterTypeKey=false;
 static bool g_changedEarlierIndexedOwner=false;
 static Il2CppImage* g_earlierOwnerImage=nullptr;
@@ -337,6 +346,16 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
             g_physical->typeMetadataHandle=g_alternateTypeHandle;
     }
     if(g_physical && g_physicalPasses==3) {
+        if(g_changeNonRootNameByteAtEnd && g_mutableNonRootName)
+            g_mutableNonRootName[0]='X'; // SAME char address, different bytes
+        if(g_changeNonRootNamespaceAtEnd && g_nonRootSemanticDefinition)
+            g_nonRootSemanticDefinition->ns="Changed";
+        if(g_changeNonRootDeclaringAtEnd && g_nonRootSemanticDefinition)
+            g_nonRootSemanticDefinition->declaringTypeIndex=kTypeIndexInvalid;
+        if(g_changeNonRootGenericIndexAtEnd && g_nonRootPrimitiveDefinition)
+            g_nonRootPrimitiveDefinition->genericContainerIndex=0;
+        if(g_changeNonRootArityAtEnd)
+            g_container.type_argc=3;
         if(g_removeGenericArgumentOwnerAtEnd && g_mainArgumentImage)
             g_mainArgumentImage->handles[1]=nullptr;
         if(g_removeCrossImageArgumentOwnerAtEnd && g_supportArgumentImage)
@@ -469,6 +488,8 @@ struct Fixture {
     Il2CppTypeDefinition outer{};
     Il2CppTypeDefinition secondary{};
     Il2CppTypeDefinition primitiveDefinition{};
+    char mutableSecondaryName[7]{'F','r','i','e','n','d','\0'};
+    char oversizedSecondaryName[67]{};
     Il2CppType declaring{};
     Il2CppType genericBase{},genericArg1{},genericArg2{};
     Il2CppType nestedBase{},compositeLeaf{},chain[11]{};
@@ -631,6 +652,12 @@ enum class Mode {
     PrimitiveArgumentOwnerRemovedAtEnd,
     NestedDeclarationOwnerRemovedAtEnd,
     EarlierGenericArgumentOwnerAppearedAtEnd,
+    NonRootNameBytesChangedAtEnd,
+    NonRootNamespaceChangedAtEnd,
+    NonRootDeclaringChangedAtEnd,
+    NonRootPrimitiveGenericIndexChangedAtEnd,
+    NonRootArityChangedAtEnd,
+    NonRootNameBeyondByteBudget,
     InterpreterSimpleClass, InterpreterSimpleValueType,
     InterpreterWrongTypeHandle, InterpreterGenericDefinition,
     InterpreterNestedDefinition, InterpreterFirstOwnerAlias,
@@ -708,6 +735,15 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_mainArgumentImage=&fixture.image;
     g_supportArgumentImage=&fixture.supportImage;
     g_secondaryArgumentHandle=&fixture.secondary;
+    g_changeNonRootNameByteAtEnd=false;
+    g_changeNonRootNamespaceAtEnd=false;
+    g_changeNonRootDeclaringAtEnd=false;
+    g_changeNonRootGenericIndexAtEnd=false;
+    g_changeNonRootArityAtEnd=false;
+    g_mutableNonRootName=fixture.mutableSecondaryName;
+    g_nonRootSemanticDefinition=&fixture.secondary;
+    g_nonRootPrimitiveDefinition=&fixture.primitiveDefinition;
+    g_container.type_argc=2;
     g_changeEarlierRootDuringLaterTypeKey=g_changedEarlierRoot=false;
     g_mutateEarlierClassDuringLaterTypeKey=g_mutatedEarlierClass=false;
     g_dropEndPass=g_duplicateEndPass=false;
@@ -777,6 +813,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::GenericDefinition)fixture.def.genericContainerIndex=0;
     if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument ||
        mode==Mode::GenericArgumentOwnerRemovedAtEnd ||
+       mode==Mode::NonRootNameBytesChangedAtEnd ||
+       mode==Mode::NonRootDeclaringChangedAtEnd ||
+       mode==Mode::NonRootNameBeyondByteBudget ||
+       mode==Mode::NonRootArityChangedAtEnd ||
        mode==Mode::NestedDeclarationOwnerRemovedAtEnd ||
        mode==Mode::EarlierGenericArgumentOwnerAppearedAtEnd ||
        mode==Mode::PrimitiveArgumentOwnerRemovedAtEnd ||
@@ -815,6 +855,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
         if(mode==Mode::GenericArgumentMissingOwner)
             fixture.image.handles[1]=nullptr;
         if(mode==Mode::GenericNestedArgument ||
+           mode==Mode::NonRootDeclaringChangedAtEnd ||
            mode==Mode::NestedDeclarationOwnerRemovedAtEnd) {
             fixture.secondary.declaringTypeIndex=3;
             fixture.image.typeCount=3;
@@ -828,7 +869,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
             fixture.genericInstance.type_argc=1;
         if(mode==Mode::GenericQualifiedArgument)
             fixture.genericArg1.byref=1;
-        if(mode==Mode::GenericConstructedArgument) {
+        if(mode==Mode::GenericConstructedArgument ||
+           mode==Mode::NonRootArityChangedAtEnd) {
             fixture.secondary.genericContainerIndex=0;
             fixture.genericArg1.type=IL2CPP_TYPE_GENERICINST;
             fixture.genericArg1.data.generic_class=&fixture.nestedClass;
@@ -881,6 +923,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     }
     if(mode==Mode::CrossImageGeneric ||
        mode==Mode::CrossImageGenericUnobserved ||
+       mode==Mode::NonRootNamespaceChangedAtEnd ||
        mode==Mode::CrossImageUnobservedArgumentOwnerRemovedAtEnd ||
        mode==Mode::CrossImageGenericNotRegistered ||
        mode==Mode::CrossImageGenericAmbiguous ||
@@ -899,6 +942,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
             g_dropRegisteredOnSecond=true;
         g_reversePhysicalCallbacks=true;
         if(mode==Mode::CrossImageGenericUnobserved ||
+           mode==Mode::NonRootNamespaceChangedAtEnd ||
            mode==Mode::CrossImageUnobservedArgumentOwnerRemovedAtEnd)
             g_otherPhysical=nullptr; // No actual matched callback owner
         if(mode==Mode::CrossImageGenericAmbiguous) {
@@ -922,7 +966,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         mode==Mode::PrimitiveGenericArity ||
         mode==Mode::PrimitiveClassNameMismatch ||
         mode==Mode::PrimitiveClassNested ||
-        mode==Mode::PrimitiveClassGenericContainer;
+        mode==Mode::PrimitiveClassGenericContainer ||
+        mode==Mode::NonRootPrimitiveGenericIndexChangedAtEnd;
     if(primitiveMode) {
         fixture.genericArg1.type=IL2CPP_TYPE_I4;
         fixture.genericArg1.data.typeHandle=nullptr;
@@ -1027,6 +1072,23 @@ static void Exercise(Mode mode,src::Error expectedError) {
     }
     if(mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey)
         g_changeEarlierIndexedOwnerDuringLaterTypeKey=true;
+    if(mode==Mode::NonRootNameBytesChangedAtEnd) {
+        fixture.secondary.name=fixture.mutableSecondaryName;
+        g_changeNonRootNameByteAtEnd=true;
+    }
+    if(mode==Mode::NonRootNameBeyondByteBudget) {
+        std::memset(fixture.oversizedSecondaryName,'Q',65);
+        fixture.oversizedSecondaryName[65]='\0';
+        fixture.secondary.name=fixture.oversizedSecondaryName;
+    }
+    if(mode==Mode::NonRootNamespaceChangedAtEnd)
+        g_changeNonRootNamespaceAtEnd=true;
+    if(mode==Mode::NonRootDeclaringChangedAtEnd)
+        g_changeNonRootDeclaringAtEnd=true;
+    if(mode==Mode::NonRootPrimitiveGenericIndexChangedAtEnd)
+        g_changeNonRootGenericIndexAtEnd=true;
+    if(mode==Mode::NonRootArityChangedAtEnd)
+        g_changeNonRootArityAtEnd=true;
     if(mode==Mode::GenericArgumentOwnerRemovedAtEnd)
         g_removeGenericArgumentOwnerAtEnd=true;
     if(mode==Mode::CrossImageUnobservedArgumentOwnerRemovedAtEnd)
@@ -1181,6 +1243,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.originalV1RootOwnerEndPassMatched==expectedRows);
         Check(receipt.originalV1RootOwnerEndPassLookups>=expectedRows);
         Check(receipt.originalV1NonRootTypeDefOwnersEndPassStable);
+        Check(receipt.originalV1NonRootTypeDefContentEndPassStable);
+        Check(receipt.originalV1NonRootTypeDefContentMatched==
+              receipt.originalV1NonRootTypeDefOwnersRecorded);
         Check(receipt.originalV1NonRootTypeDefOwnersRecorded==
               receipt.originalV1NonRootTypeDefOwnersRechecked);
         Check(receipt.originalV1NonRootTypeDefOwnerLookups>=
@@ -1379,6 +1444,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.originalV1RootOwnerEndPassMatched==0);
         Check(receipt.originalV1RootOwnerEndPassLookups==0);
         Check(!receipt.originalV1NonRootTypeDefOwnersEndPassStable);
+        Check(!receipt.originalV1NonRootTypeDefContentEndPassStable);
+        Check(receipt.originalV1NonRootTypeDefContentMatched==0);
         Check(receipt.originalV1NonRootTypeDefOwnersRecorded==0);
         Check(receipt.originalV1NonRootTypeDefOwnersRechecked==0);
         Check(receipt.originalV1NonRootTypeDefOwnerLookups==0);
@@ -1574,6 +1641,18 @@ int main(){
              src::Error::OriginalV1OwnerMissing);
     Exercise(Mode::EarlierGenericArgumentOwnerAppearedAtEnd,
              src::Error::OriginalV1FirstOwnerConflict);
+    Exercise(Mode::NonRootNameBytesChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::NonRootNamespaceChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::NonRootDeclaringChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::NonRootPrimitiveGenericIndexChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::NonRootArityChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::NonRootNameBeyondByteBudget,
+             src::Error::SourceOutsideBudget);
     Exercise(Mode::OriginalV1UnregisteredOwner,
              src::Error::OriginalV1OwnerMissing);
     Exercise(Mode::OriginalV1InvalidImage,
