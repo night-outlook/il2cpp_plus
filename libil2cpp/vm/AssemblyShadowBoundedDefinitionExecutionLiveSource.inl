@@ -146,8 +146,9 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                    generic==other.generic;
         }
     };
-    // Up to 2048 slots * 48 B = 96 KiB at 64-bit (64 KiB over the old
-    // 16-byte class facts). Requires actual Unity thread-stack validation.
+    // Each fact is <=48 bytes; PackedFacts below holds at most 1024 facts
+    // plus a 2048-slot uint16 index (<=53,264 bytes). Actual Unity thread-
+    // stack consumption and native ABI remain unverified.
     static_assert(sizeof(ClassFacts)<=48,
                   "B2 original class source facts stack bound changed");
     using PackedFacts=assembly_shadow_packed_class_facts::Scratch<
