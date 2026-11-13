@@ -155,6 +155,31 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         ClassFacts,physical::kSlots,physical::kMaximumObserved>;
     static_assert(sizeof(PackedFacts)<=53264,
                   "B2 packed class facts exceeds 52-KiB bound");
+
+    // Capture every distinct non-root TypeDef owner admitted by resolveOwner
+    // while formatting nested declarations, composite generic arguments or
+    // primitive defaults. The separate third class pass covers class roots.
+    // This finite inventory does not cover arbitrary VM TypeDef maps.
+    struct NonRootOwnerAudit {
+        using Handle=decltype(static_cast<Il2CppClass*>(nullptr)->typeMetadataHandle);
+        struct Pair {Handle handle=nullptr;const Il2CppImage* image=nullptr;};
+        std::array<Pair,live::kMaximumNonRootTypeDefOwnerPairs> pairs{};
+        size_t used=0;
+        enum class NoteResult : uint8_t {Accepted,Conflict,Overflow};
+        NoteResult Note(Handle handle,const Il2CppImage* image) noexcept {
+            if(!handle || !image)return NoteResult::Conflict;
+            for(size_t i=0;i<used;++i)if(pairs[i].handle==handle)
+                return pairs[i].image==image ?
+                    NoteResult::Accepted:NoteResult::Conflict;
+            if(used==pairs.size())return NoteResult::Overflow;
+            pairs[used++]={handle,image};
+            return NoteResult::Accepted;
+        }
+        void Scrub() noexcept {pairs.fill(Pair{});used=0;}
+        ~NonRootOwnerAudit() noexcept {Scrub();}
+    };
+    static_assert(sizeof(NonRootOwnerAudit)<=2064,
+                  "B2 nonroot TypeDef owner audit stack bound changed");
     struct Context {
         physical::Scratch* membership;
         owned::Rows* rows;
@@ -164,6 +189,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         size_t originalV1Lookups=0, originalV1Matches=0;
         size_t classFactsMatched=0, classRootFactsMatched=0;
         PackedFacts* firstPassFacts=nullptr;
+        NonRootOwnerAudit* nonRootOwners=nullptr;
         assembly_shadow_observed_images::Inventory<live::kMaximumRegisteredAotImages>* images=nullptr;
         assembly_shadow_observed_images::Inventory<64>* observedImages=nullptr;
         assembly_shadow_observed_images::Inventory<
@@ -198,6 +224,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         // At most 1024 physical observed classes fit in 2048 registry slots.
         // Dense facts with a one-based slot map cost about 52 KiB vs 96 KiB.
         PackedFacts firstPassFacts{};
+        NonRootOwnerAudit nonRootOwners{};
+        context.nonRootOwners=&nonRootOwners;
         assembly_shadow_observed_images::Inventory<
             live::kMaximumOriginalV1Images> originalV1Images;
         assembly_shadow_observed_images::Inventory<
@@ -580,6 +608,22 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     return false;
                 }
                 ++c.originalV1Matches;
+                // The final class traversal separately checks each registered
+                // class root. Remember all OTHER proven TypeDef handles used
+                // by this row so a late metadata-index owner change cannot
+                // evade the root-only end pass. Never retain a live TypeDef.
+                if(handle!=klass->typeMetadataHandle) {
+                    if(!c.nonRootOwners) {
+                        c.error=live::Error::InvalidRegistry;return false;
+                    }
+                    const auto noted=c.nonRootOwners->Note(handle,resolved);
+                    if(noted!=NonRootOwnerAudit::NoteResult::Accepted) {
+                        c.error=noted==NonRootOwnerAudit::NoteResult::Overflow ?
+                            live::Error::SourceOutsideBudget:
+                            live::Error::AmbiguousMetadataOwner;
+                        return false;
+                    }
+                }
                 return true;
             };
             auto buildDefinition=[&](decltype(klass->typeMetadataHandle) handle,
@@ -1092,6 +1136,38 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 live::Error::SourceChanged:originalAfterSink.error);
         receipt.originalV1ImageSetStable=true;
         receipt.originalV1ImageFactsMatched=originalAfterSink.visits;
+
+        // No additional physical class traversal. AFTER the second original
+        // image order/token observation, revisit all distinct non-root
+        // TypeDef handles actually used to build the owned TypeKeys. The
+        // previous third class pass only checked roots. Each pair's expected
+        // owner is the independently authenticated ORIGINAL first owner.
+        // A separate 65536 indexed-lookup limit fails closed on large source.
+        size_t nonRootLookups=0,nonRootChecked=0;
+        for(size_t i=0;i<nonRootOwners.used;++i) {
+            const auto& entry=nonRootOwners.pairs[i];
+            original_join::Receipt checked{};
+            if(!original_join::CheckFirstOwner(
+                   originalV1Images,entry.image,entry.handle,
+                   [](const Il2CppImage* image,uint32_t index) {
+                       return MetadataCache::GetAssemblyTypeHandle(image,index);
+                   },nonRootLookups,live::kMaximumTotalMetadataLookups,
+                   live::kMaximumAotImageTypes,checked)) {
+                if(checked.error==original_join::Error::FirstOwnerDifferent)
+                    return reject(live::Error::OriginalV1FirstOwnerConflict);
+                if(checked.error==original_join::Error::OwnerNotFound)
+                    return reject(live::Error::OriginalV1OwnerMissing);
+                if(checked.error==original_join::Error::LookupBudget)
+                    return reject(live::Error::OriginalV1LookupBudget);
+                return reject(live::Error::OriginalV1ImageSourceUnavailable);
+            }
+            ++nonRootChecked;
+        }
+        receipt.originalV1NonRootTypeDefOwnersRecorded=nonRootOwners.used;
+        receipt.originalV1NonRootTypeDefOwnersRechecked=nonRootChecked;
+        receipt.originalV1NonRootTypeDefOwnerLookups=nonRootLookups;
+        nonRootOwners.Scrub();
+        context.nonRootOwners=nullptr;
         firstOriginalV1Facts.fill(OriginalV1ImageFacts{});
         // Borrowed metadata pointers are scrubbed while g_MetadataLock is
         // still held. Nothing escapes to the frozen writer after this scope.
@@ -1231,8 +1307,17 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         receipt.originalV1RootOwnerEndPassMatched>0 &&
         receipt.originalV1RootOwnerEndPassLookups>=
             receipt.originalV1RootOwnerEndPassMatched;
+    receipt.originalV1NonRootTypeDefOwnersEndPassStable=
+        receipt.originalV1ImageFactsTwoPassStable &&
+        receipt.originalV1NonRootTypeDefOwnersRecorded==
+            receipt.originalV1NonRootTypeDefOwnersRechecked &&
+        receipt.originalV1NonRootTypeDefOwnersRecorded<=
+            live::kMaximumNonRootTypeDefOwnerPairs &&
+        receipt.originalV1NonRootTypeDefOwnerLookups>=
+            receipt.originalV1NonRootTypeDefOwnersRechecked;
     receipt.originalV1FirstEmplaceOwnerMatched=
         receipt.originalV1RootOwnerEndPassStable &&
+        receipt.originalV1NonRootTypeDefOwnersEndPassStable &&
         receipt.originalV1HandlesMatched>0;
     // No claim of complete legacy execution field15, only those handles
     // actually used in the restricted rows. Other original V1 source rows,

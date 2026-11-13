@@ -42,6 +42,7 @@ static constexpr size_t kMaximumAotImageTypes = 8192;
 static constexpr size_t kMaximumRegisteredAotImages = 1024;
 static constexpr size_t kMaximumOriginalV1Images = 1024;
 static constexpr size_t kMaximumTotalMetadataLookups = 65536;
+static constexpr size_t kMaximumNonRootTypeDefOwnerPairs = 128; // scoped subset
 
 struct Receipt {
     Error error = Error::None;
@@ -59,6 +60,10 @@ struct Receipt {
     size_t originalV1RootOwnerEndPassMatched=0; // root-only recheck
     size_t originalV1RootOwnerEndPassLookups=0; // separate bounded budget
     bool originalV1RootOwnerEndPassStable=false; // observational only
+    size_t originalV1NonRootTypeDefOwnersRecorded=0; // exact handle + owner
+    size_t originalV1NonRootTypeDefOwnersRechecked=0; // independent final read
+    size_t originalV1NonRootTypeDefOwnerLookups=0; // separate bounded budget
+    bool originalV1NonRootTypeDefOwnersEndPassStable=false; // NOT VM epoch
     bool originalV1CompleteField15Parity=false; // never set by this source
     size_t observedClassFactsMatched=0; // admitted first/second-pass matches
     bool observedClassFactsTwoPassStable=false; // no whole VM epoch
@@ -125,6 +130,10 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.originalV1RootOwnerEndPassMatched=0;
     receipt.originalV1RootOwnerEndPassLookups=0;
     receipt.originalV1RootOwnerEndPassStable=false;
+    receipt.originalV1NonRootTypeDefOwnersRecorded=0;
+    receipt.originalV1NonRootTypeDefOwnersRechecked=0;
+    receipt.originalV1NonRootTypeDefOwnerLookups=0;
+    receipt.originalV1NonRootTypeDefOwnersEndPassStable=false;
     receipt.originalV1CompleteField15Parity=false;
     receipt.originalV1HandlesMatched=0;
     receipt.observedClassFactsMatched=0;
