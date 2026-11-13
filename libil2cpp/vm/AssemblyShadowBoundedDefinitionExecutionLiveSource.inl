@@ -749,17 +749,18 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     parts[depth].simpleName={name.second,nameBytes};
                     parts[depth].arity=arity;
                     if(handle!=klass->typeMetadataHandle) {
-                        // The original first-emplace owner is already proven.
-                        // Make a BYTE-EXACT declaration copy for the final
-                        // bounded non-root metadata-content recheck.
+                        // Do not silently truncate the original declaration:
+                        // reject over-budget names before any snapshot read.
+                        if(nsBytes>NonRootOwnerAudit::kNameBytes ||
+                           nameBytes>NonRootOwnerAudit::kNameBytes) {
+                            c.error=live::Error::SourceOutsideBudget;return false;
+                        }
+                        // The original first owner is already authenticated.
                         if(!c.nonRootOwners || !c.nonRootOwners->Capture(
                                handle,ns,nsBytes,name.second,nameBytes,
                                static_cast<int32_t>(def->genericContainerIndex),
                                static_cast<int32_t>(def->declaringTypeIndex),arity)) {
-                            c.error=nsBytes>NonRootOwnerAudit::kNameBytes ||
-                                nameBytes>NonRootOwnerAudit::kNameBytes ?
-                                live::Error::SourceOutsideBudget :
-                                live::Error::OriginalV1TypeDefContentChanged;
+                            c.error=live::Error::OriginalV1TypeDefContentChanged;
                             return false;
                         }
                     }
