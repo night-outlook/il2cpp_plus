@@ -16,6 +16,7 @@ on:
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h
       - libil2cpp/vm/AssemblyShadowObservedPhysicalImages.h
       - libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl
+      - libil2cpp/vm/AssemblyShadowPackedClassFacts.h
       - libil2cpp/vm/AssemblyShadowExecutionV1ByteParity.h
       - libil2cpp/vm/AssemblyShadowExecutionV1ByteParitySource.inl
       - libil2cpp/vm/AssemblyShadowExistingPrimitiveDefaults.h
@@ -60,6 +61,8 @@ jobs:
             libil2cpp/vm/AssemblyShadowOriginalV1OwnerJoin.h
           grep -Fqx '#include "vm/GlobalMetadataFileInternals.h"' libil2cpp/vm/AssemblyShadow.cpp
           grep -Fqx '#include "AssemblyShadowExistingPrimitiveDefaults.h"' libil2cpp/vm/AssemblyShadow.cpp
+          grep -Fqx '#include "AssemblyShadowPackedClassFacts.h"' libil2cpp/vm/AssemblyShadow.cpp
+          grep -Fqx '#include "vm/AssemblyShadowPackedClassFacts.h"' "$SRC"
           grep -Fq 'Il2CppClass* Class::FromIl2CppTypeEnum(Il2CppTypeEnum type)' libil2cpp/vm/Class.cpp
           grep -Fq 'RETURN_DEFAULT_TYPE(int32_class)' libil2cpp/vm/Class.cpp
           grep -Fq 'static Il2CppClass* FromIl2CppTypeEnum(Il2CppTypeEnum type);' libil2cpp/vm/Class.h
@@ -70,6 +73,7 @@ jobs:
           grep -Fq 'assembly_shadow_registered_aot_scan::Scan(' libil2cpp/vm/Assembly.cpp
           shasum -a 256 "$SRC" \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLiveSource.inl \
+            libil2cpp/vm/AssemblyShadowPackedClassFacts.h \
             libil2cpp/vm/AssemblyShadowExecutionV1ByteParity.h \
             libil2cpp/vm/AssemblyShadowExecutionV1ByteParitySource.inl \
             libil2cpp/vm/AssemblyShadowBoundedDefinitionExecutionLive.h \
