@@ -1222,9 +1222,16 @@ static void Exercise(Mode mode,src::Error expectedError) {
     const bool success=AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         membership,*owned,*record,receipt);
     if(success!=(expectedError==src::Error::None) || receipt.error!=expectedError)
-        std::fprintf(stderr,"R03 B2 mode=%d actualSuccess=%d actualError=%u expectedError=%u\\n",
+        std::fprintf(stderr,"R03 B2 mode=%d actualSuccess=%d actualError=%u expectedError=%u"
+            " nonRootRecorded=%zu nonRootContentMatched=%zu targetGenericIndex=%d"
+            " mutateFlag=%d physicalPasses=%u\\n",
             static_cast<int>(mode),static_cast<int>(success),
-            static_cast<unsigned>(receipt.error),static_cast<unsigned>(expectedError));
+            static_cast<unsigned>(receipt.error),static_cast<unsigned>(expectedError),
+            receipt.originalV1NonRootTypeDefOwnersRecorded,
+            receipt.originalV1NonRootTypeDefContentMatched,
+            fixture.primitiveDefinition.genericContainerIndex,
+            static_cast<int>(g_changeNonRootGenericIndexAtEnd),
+            g_physicalPasses);
     if(expectedError==src::Error::None) {
         Check(success && receipt.error==src::Error::None);
         Check(receipt.registered==expectedRows &&
