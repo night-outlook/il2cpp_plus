@@ -76,7 +76,7 @@ struct Il2CppType {
         const Il2CppArrayType* array;
         Data() noexcept:typeHandle(nullptr){}
     } data;
-    int attrs=0,num_mods=0,byref=0,pinned=0;
+    int attrs=0,num_mods=0,byref=0,pinned=0,valuetype=0;
 };
 struct Il2CppArrayType {
     const Il2CppType* etype=nullptr;
@@ -193,6 +193,9 @@ static bool g_mutateCctorOnEndPass=false,g_mutateStaticOnEndPass=false;
 static bool g_changeRootDefinitionOnSecond=false;
 static bool g_changeRootImageOnEnd=false,g_changeRootDefinitionOnEnd=false;
 static bool g_changeRootTypeCodeOnEnd=false,g_changeRootDataOnEnd=false;
+static bool g_changeRootAttrsOnEnd=false,g_changeRootModsOnEnd=false;
+static bool g_changeRootByrefOnEnd=false,g_changeRootPinnedOnEnd=false;
+static bool g_changeRootValuetypeOnEnd=false;
 static bool g_changeRootGenericOnEnd=false;
 static bool g_removeIndexedRootOwnerAtEnd=false;
 static bool g_aliasEarlierIndexedOwnerAtEnd=false;
@@ -402,6 +405,11 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
             g_physical->typeMetadataHandle=g_alternateTypeHandle;
         if(g_changeRootTypeCodeOnEnd)
             g_physical->byval_arg.type=IL2CPP_TYPE_VALUETYPE;
+        if(g_changeRootAttrsOnEnd)g_physical->byval_arg.attrs=0x40;
+        if(g_changeRootModsOnEnd)g_physical->byval_arg.num_mods=1;
+        if(g_changeRootByrefOnEnd)g_physical->byval_arg.byref=1;
+        if(g_changeRootPinnedOnEnd)g_physical->byval_arg.pinned=1;
+        if(g_changeRootValuetypeOnEnd)g_physical->byval_arg.valuetype=1;
         if(g_changeRootDataOnEnd)
             g_physical->byval_arg.data.typeHandle=g_alternateTypeHandle;
         if(g_changeRootGenericOnEnd)
@@ -713,6 +721,9 @@ enum class Mode {
     CctorFactsChangedAtEnd, StaticFactsChangedAtEnd,
     RootDefinitionChangedOnSecond, RootImageChangedAtEnd,
     RootDefinitionChangedAtEnd, RootTypeCodeChangedAtEnd,
+    RootAttrsChangedAtEnd, RootModsChangedAtEnd,
+    RootByrefChangedAtEnd, RootPinnedChangedAtEnd,
+    RootValuetypeChangedAtEnd,
     RootTypeDataChangedAtEnd, RootGenericChangedAtEnd,
     EarlierRootChangedDuringLaterTypeKey,
     EarlierClassFactsChangedDuringLaterTypeKey,
@@ -751,6 +762,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_changeRootDefinitionOnSecond=false;
     g_changeRootImageOnEnd=g_changeRootDefinitionOnEnd=false;
     g_changeRootTypeCodeOnEnd=g_changeRootDataOnEnd=false;
+    g_changeRootAttrsOnEnd=g_changeRootModsOnEnd=false;
+    g_changeRootByrefOnEnd=g_changeRootPinnedOnEnd=false;
+    g_changeRootValuetypeOnEnd=false;
     g_changeRootGenericOnEnd=false;
     g_removeIndexedRootOwnerAtEnd=false;
     g_aliasEarlierIndexedOwnerAtEnd=false;
@@ -1193,6 +1207,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
         g_changeRootDefinitionOnEnd=true;
     if(mode==Mode::RootTypeCodeChangedAtEnd)
         g_changeRootTypeCodeOnEnd=true;
+    if(mode==Mode::RootAttrsChangedAtEnd)g_changeRootAttrsOnEnd=true;
+    if(mode==Mode::RootModsChangedAtEnd)g_changeRootModsOnEnd=true;
+    if(mode==Mode::RootByrefChangedAtEnd)g_changeRootByrefOnEnd=true;
+    if(mode==Mode::RootPinnedChangedAtEnd)g_changeRootPinnedOnEnd=true;
+    if(mode==Mode::RootValuetypeChangedAtEnd)g_changeRootValuetypeOnEnd=true;
     if(mode==Mode::RootTypeDataChangedAtEnd)
         g_changeRootDataOnEnd=true;
     if(mode==Mode::RootGenericChangedAtEnd)
@@ -1822,6 +1841,11 @@ int main(){
     Exercise(Mode::RootImageChangedAtEnd,src::Error::ObservedClassRootChanged);
     Exercise(Mode::RootDefinitionChangedAtEnd,src::Error::ObservedClassRootChanged);
     Exercise(Mode::RootTypeCodeChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootAttrsChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootModsChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootByrefChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootPinnedChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootValuetypeChangedAtEnd,src::Error::ObservedClassRootChanged);
     Exercise(Mode::RootTypeDataChangedAtEnd,src::Error::ObservedClassRootChanged);
     Exercise(Mode::RootGenericChangedAtEnd,src::Error::ObservedClassRootChanged);
     Exercise(Mode::EarlierRootChangedDuringLaterTypeKey,src::Error::ObservedClassRootChanged);

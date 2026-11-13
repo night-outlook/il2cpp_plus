@@ -104,7 +104,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
     struct ClassFacts {
         uintptr_t storage=0;
         uintptr_t image=0,definition=0,typeData=0,generic=0;
-        uint32_t typeCode=0;
+        uint32_t typeBits=0; // all six original Il2CppType bitfields
         uint8_t bits=0; // started=1, finished=2, exception=4
         bool observed=false;
         static ClassFacts Read(const Il2CppClass* klass) noexcept {
@@ -124,7 +124,15 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             out.definition=reinterpret_cast<uintptr_t>(klass->typeMetadataHandle);
             out.generic=reinterpret_cast<uintptr_t>(klass->generic_class);
             const Il2CppType& type=klass->byval_arg;
-            out.typeCode=static_cast<uint32_t>(type.type);
+            // Original Il2CppType uses attrs:16, type:8, num_mods:5,
+            // byref:1, pinned:1 and valuetype:1. Pack members directly;
+            // never alias compiler-specific bitfield storage.
+            out.typeBits=static_cast<uint32_t>(type.attrs) |
+                (static_cast<uint32_t>(type.type)<<16) |
+                (static_cast<uint32_t>(type.num_mods)<<24) |
+                (static_cast<uint32_t>(type.byref)<<29) |
+                (static_cast<uint32_t>(type.pinned)<<30) |
+                (static_cast<uint32_t>(type.valuetype)<<31);
             if(type.type==IL2CPP_TYPE_CLASS ||
                type.type==IL2CPP_TYPE_VALUETYPE)
                 out.typeData=reinterpret_cast<uintptr_t>(type.data.typeHandle);
@@ -142,7 +150,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         bool SameRoot(const ClassFacts& other) const noexcept {
             return observed && other.observed &&
                    image==other.image && definition==other.definition &&
-                   typeData==other.typeData && typeCode==other.typeCode &&
+                   typeData==other.typeData && typeBits==other.typeBits &&
                    generic==other.generic;
         }
     };
