@@ -214,6 +214,13 @@ static bool g_changeNonRootArityAtEnd=false;
 static char* g_mutableNonRootName=nullptr;
 static Il2CppTypeDefinition* g_nonRootSemanticDefinition=nullptr;
 static Il2CppTypeDefinition* g_nonRootPrimitiveDefinition=nullptr;
+static bool g_changeRootNameByteAtEnd=false,g_changeRootNamespaceAtEnd=false;
+static bool g_changeRootDeclaringAtEnd=false,g_changeRootGenericIndexAtEnd=false;
+static bool g_changeRootArityAtEnd=false;
+static bool g_changeEarlierRootNameDuringLaterTypeKey=false;
+static bool g_changedEarlierRootName=false;
+static char* g_mutableRootName=nullptr;
+static Il2CppTypeDefinition* g_rootSemanticDefinition=nullptr;
 static bool g_changeEarlierIndexedOwnerDuringLaterTypeKey=false;
 static bool g_changedEarlierIndexedOwner=false;
 static Il2CppImage* g_earlierOwnerImage=nullptr;
@@ -321,6 +328,13 @@ public:
             g_physical->image->handles[0]=nullptr; // root pointer unchanged
             g_changedEarlierIndexedOwner=true;
         }
+        if(g_changeEarlierRootNameDuringLaterTypeKey &&
+           !g_changedEarlierRootName && g_physicalPasses==2 &&
+           g_physical && g_otherPhysical && g_mutableRootName &&
+           handle==g_otherPhysical->typeMetadataHandle) {
+            g_mutableRootName[0]='X';
+            g_changedEarlierRootName=true;
+        }
         auto* def=static_cast<Il2CppTypeDefinition*>(handle);
         return {def->ns,def->name};
     }
@@ -346,6 +360,15 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
             g_physical->typeMetadataHandle=g_alternateTypeHandle;
     }
     if(g_physical && g_physicalPasses==3) {
+        if(g_changeRootNameByteAtEnd && g_mutableRootName)
+            g_mutableRootName[0]='X';
+        if(g_changeRootNamespaceAtEnd && g_rootSemanticDefinition)
+            g_rootSemanticDefinition->ns="Changed";
+        if(g_changeRootDeclaringAtEnd && g_rootSemanticDefinition)
+            g_rootSemanticDefinition->declaringTypeIndex=kTypeIndexInvalid;
+        if(g_changeRootGenericIndexAtEnd && g_rootSemanticDefinition)
+            g_rootSemanticDefinition->genericContainerIndex=kGenericContainerIndexInvalid;
+        if(g_changeRootArityAtEnd)g_container.type_argc=3;
         if(g_changeNonRootNameByteAtEnd && g_mutableNonRootName)
             g_mutableNonRootName[0]='X'; // SAME char address, different bytes
         if(g_changeNonRootNamespaceAtEnd && g_nonRootSemanticDefinition)
@@ -490,6 +513,8 @@ struct Fixture {
     Il2CppTypeDefinition primitiveDefinition{};
     char mutableSecondaryName[7]{'F','r','i','e','n','d','\0'};
     char oversizedSecondaryName[67]{};
+    char mutableRootName[5]{'H','e','r','o','\0'};
+    char oversizedRootName[67]{};
     Il2CppType declaring{};
     Il2CppType genericBase{},genericArg1{},genericArg2{};
     Il2CppType nestedBase{},compositeLeaf{},chain[11]{};
@@ -658,6 +683,10 @@ enum class Mode {
     NonRootPrimitiveGenericIndexChangedAtEnd,
     NonRootArityChangedAtEnd,
     NonRootNameBeyondByteBudget,
+    RootNameBytesChangedAtEnd, RootNamespaceChangedAtEnd,
+    RootDeclaringIndexChangedAtEnd, RootGenericIndexChangedAtEnd,
+    RootGenericArityChangedAtEnd, RootNameBeyondByteBudget,
+    EarlierRootNameChangedDuringLaterTypeKey,
     InterpreterSimpleClass, InterpreterSimpleValueType,
     InterpreterWrongTypeHandle, InterpreterGenericDefinition,
     InterpreterNestedDefinition, InterpreterFirstOwnerAlias,
@@ -743,6 +772,12 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_mutableNonRootName=fixture.mutableSecondaryName;
     g_nonRootSemanticDefinition=&fixture.secondary;
     g_nonRootPrimitiveDefinition=&fixture.primitiveDefinition;
+    g_mutableRootName=fixture.mutableRootName;
+    g_rootSemanticDefinition=&fixture.def;
+    g_changeRootNameByteAtEnd=g_changeRootNamespaceAtEnd=false;
+    g_changeRootDeclaringAtEnd=g_changeRootGenericIndexAtEnd=false;
+    g_changeRootArityAtEnd=g_changeEarlierRootNameDuringLaterTypeKey=false;
+    g_changedEarlierRootName=false;
     g_container.type_argc=2;
     g_changeEarlierRootDuringLaterTypeKey=g_changedEarlierRoot=false;
     g_mutateEarlierClassDuringLaterTypeKey=g_mutatedEarlierClass=false;
@@ -810,7 +845,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
             g_rawCount=1;
         }
     }
-    if(mode==Mode::GenericDefinition)fixture.def.genericContainerIndex=0;
+    if(mode==Mode::GenericDefinition ||
+       mode==Mode::RootGenericIndexChangedAtEnd ||
+       mode==Mode::RootGenericArityChangedAtEnd)
+        fixture.def.genericContainerIndex=0;
     if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument ||
        mode==Mode::GenericArgumentOwnerRemovedAtEnd ||
        mode==Mode::NonRootNameBytesChangedAtEnd ||
@@ -1004,7 +1042,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::TwoClassesReversedPhysicalCallback ||
        mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
        mode==Mode::EarlierRootChangedDuringLaterTypeKey ||
-       mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey) {
+       mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey ||
+       mode==Mode::EarlierRootNameChangedDuringLaterTypeKey) {
         fixture.image.typeCount=2;
         fixture.image.handles[1]=&fixture.secondary;
         g_otherPhysical=&fixture.other;
@@ -1032,10 +1071,12 @@ static void Exercise(Mode mode,src::Error expectedError) {
         fixture.klass.generic_class=&fixture.genericClass;
     if(mode==Mode::NestedType || mode==Mode::WrongNestedOwner ||
        mode==Mode::CyclicNested || mode==Mode::InvalidDeclaringShape ||
-       mode==Mode::StagedNestedIndex) {
+       mode==Mode::StagedNestedIndex ||
+       mode==Mode::RootDeclaringIndexChangedAtEnd) {
         fixture.def.declaringTypeIndex=3;
         fixture.klass.declaringType=&fixture.outer;
-        if(mode==Mode::NestedType) {
+        if(mode==Mode::NestedType ||
+           mode==Mode::RootDeclaringIndexChangedAtEnd) {
             fixture.image.typeCount=2;
             fixture.image.handles[1]=&fixture.outer;
         }
@@ -1073,6 +1114,26 @@ static void Exercise(Mode mode,src::Error expectedError) {
     }
     if(mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey)
         g_changeEarlierIndexedOwnerDuringLaterTypeKey=true;
+    if(mode==Mode::RootNameBytesChangedAtEnd ||
+       mode==Mode::EarlierRootNameChangedDuringLaterTypeKey) {
+        fixture.def.name=fixture.mutableRootName;
+        g_changeRootNameByteAtEnd=(mode==Mode::RootNameBytesChangedAtEnd);
+        g_changeEarlierRootNameDuringLaterTypeKey=
+            (mode==Mode::EarlierRootNameChangedDuringLaterTypeKey);
+    }
+    if(mode==Mode::RootNameBeyondByteBudget) {
+        std::memset(fixture.oversizedRootName,'Q',65);
+        fixture.oversizedRootName[65]='\0';
+        fixture.def.name=fixture.oversizedRootName;
+    }
+    if(mode==Mode::RootNamespaceChangedAtEnd)
+        g_changeRootNamespaceAtEnd=true;
+    if(mode==Mode::RootDeclaringIndexChangedAtEnd)
+        g_changeRootDeclaringAtEnd=true;
+    if(mode==Mode::RootGenericIndexChangedAtEnd)
+        g_changeRootGenericIndexAtEnd=true;
+    if(mode==Mode::RootGenericArityChangedAtEnd)
+        g_changeRootArityAtEnd=true;
     if(mode==Mode::NonRootNameBytesChangedAtEnd) {
         fixture.secondary.name=fixture.mutableSecondaryName;
         g_changeNonRootNameByteAtEnd=true;
@@ -1199,6 +1260,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
        mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
        mode==Mode::EarlierRootChangedDuringLaterTypeKey ||
        mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey ||
+       mode==Mode::EarlierRootNameChangedDuringLaterTypeKey ||
        mode==Mode::CrossImageGeneric ||
        mode==Mode::CrossImageGenericAmbiguous ||
        mode==Mode::CrossImageInterpreter ||
@@ -1209,6 +1271,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
         mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
         mode==Mode::EarlierRootChangedDuringLaterTypeKey ||
         mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey ||
+        mode==Mode::EarlierRootNameChangedDuringLaterTypeKey ||
         mode==Mode::CrossImageGeneric ||
         mode==Mode::CrossImageGenericAmbiguous ||
         mode==Mode::RegisteredAotChanged ||
@@ -1245,6 +1308,16 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.originalV1RootOwnerEndPassLookups>=expectedRows);
         Check(receipt.originalV1NonRootTypeDefOwnersEndPassStable);
         Check(receipt.originalV1NonRootTypeDefContentEndPassStable);
+        Check(receipt.originalV1RootTypeDefContentEndPassStable);
+        Check(receipt.originalV1RootTypeDefContentRecorded>=1);
+        Check(receipt.originalV1RootTypeDefContentMatched==
+              receipt.originalV1RootTypeDefContentRecorded);
+        Check(receipt.originalV1AdmittedTypeDefPairsRecorded==
+              receipt.originalV1AdmittedTypeDefPairsRechecked);
+        Check(receipt.originalV1AdmittedTypeDefPairsRecorded>=
+              receipt.originalV1RootTypeDefContentRecorded);
+        Check(receipt.originalV1AdmittedTypeDefOwnerLookups>=
+              receipt.originalV1AdmittedTypeDefPairsRechecked);
         Check(receipt.originalV1NonRootTypeDefContentMatched==
               receipt.originalV1NonRootTypeDefOwnersRecorded);
         Check(receipt.originalV1NonRootTypeDefOwnersRecorded==
@@ -1446,6 +1519,12 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.originalV1RootOwnerEndPassLookups==0);
         Check(!receipt.originalV1NonRootTypeDefOwnersEndPassStable);
         Check(!receipt.originalV1NonRootTypeDefContentEndPassStable);
+        Check(!receipt.originalV1RootTypeDefContentEndPassStable);
+        Check(receipt.originalV1RootTypeDefContentRecorded==0);
+        Check(receipt.originalV1RootTypeDefContentMatched==0);
+        Check(receipt.originalV1AdmittedTypeDefPairsRecorded==0);
+        Check(receipt.originalV1AdmittedTypeDefPairsRechecked==0);
+        Check(receipt.originalV1AdmittedTypeDefOwnerLookups==0);
         Check(receipt.originalV1NonRootTypeDefContentMatched==0);
         Check(receipt.originalV1NonRootTypeDefOwnersRecorded==0);
         Check(receipt.originalV1NonRootTypeDefOwnersRechecked==0);
@@ -1654,6 +1733,20 @@ int main(){
              src::Error::OriginalV1TypeDefContentChanged);
     Exercise(Mode::NonRootNameBeyondByteBudget,
              src::Error::SourceOutsideBudget);
+    Exercise(Mode::RootNameBytesChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::RootNamespaceChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::RootDeclaringIndexChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::RootGenericIndexChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::RootGenericArityChangedAtEnd,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Exercise(Mode::RootNameBeyondByteBudget,src::Error::SourceOutsideBudget);
+    Exercise(Mode::EarlierRootNameChangedDuringLaterTypeKey,
+             src::Error::OriginalV1TypeDefContentChanged);
+    Check(g_changedEarlierRootName);
     Exercise(Mode::OriginalV1UnregisteredOwner,
              src::Error::OriginalV1OwnerMissing);
     Exercise(Mode::OriginalV1InvalidImage,
