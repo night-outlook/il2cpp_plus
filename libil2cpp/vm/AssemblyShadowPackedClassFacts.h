@@ -20,6 +20,7 @@ class Scratch final {
     size_t used_=0;
 public:
     Scratch() noexcept=default;
+    ~Scratch() noexcept {Scrub();} // Also scrub every early source rejection.
     Scratch(const Scratch&)=delete;
     Scratch& operator=(const Scratch&)=delete;
     Scratch(Scratch&&)=delete;
