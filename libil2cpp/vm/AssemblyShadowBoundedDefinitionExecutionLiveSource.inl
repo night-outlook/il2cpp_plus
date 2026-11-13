@@ -749,6 +749,10 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     parts[depth].simpleName={name.second,nameBytes};
                     parts[depth].arity=arity;
                     if(handle!=klass->typeMetadataHandle) {
+                        if(nameBytes>60)
+                            std::fprintf(stderr,
+                                "R03 B2 source length probe ns=%zu name=%zu cap=%d\\n",
+                                nsBytes,nameBytes,static_cast<int>(NonRootOwnerAudit::kNameBytes));
                         // Do not silently truncate the original declaration:
                         // reject over-budget names before any snapshot read.
                         if(nsBytes>NonRootOwnerAudit::kNameBytes ||
