@@ -757,6 +757,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                         // reject over-budget names before any snapshot read.
                         if(nsBytes>NonRootOwnerAudit::kNameBytes ||
                            nameBytes>NonRootOwnerAudit::kNameBytes) {
+                            std::fprintf(stderr,"R03 B2 BYTE CAP branch name=%zu cap=%d\\n",
+                                         nameBytes,static_cast<int>(NonRootOwnerAudit::kNameBytes));
                             c.error=live::Error::SourceOutsideBudget;return false;
                         }
                         // The original first owner is already authenticated.
@@ -764,6 +766,8 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                                handle,ns,nsBytes,name.second,nameBytes,
                                static_cast<int32_t>(def->genericContainerIndex),
                                static_cast<int32_t>(def->declaringTypeIndex),arity)) {
+                            std::fprintf(stderr,"R03 B2 CAPTURE FAILED name=%zu cap=%d\\n",
+                                         nameBytes,static_cast<int>(NonRootOwnerAudit::kNameBytes));
                             c.error=live::Error::OriginalV1TypeDefContentChanged;
                             return false;
                         }
