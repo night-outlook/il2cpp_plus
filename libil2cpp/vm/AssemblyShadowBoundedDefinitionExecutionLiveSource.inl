@@ -749,16 +749,10 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     parts[depth].simpleName={name.second,nameBytes};
                     parts[depth].arity=arity;
                     if(handle!=klass->typeMetadataHandle) {
-                        if(nameBytes>60)
-                            std::fprintf(stderr,
-                                "R03 B2 source length probe ns=%zu name=%zu cap=%d\\n",
-                                nsBytes,nameBytes,static_cast<int>(NonRootOwnerAudit::kNameBytes));
                         // Do not silently truncate the original declaration:
                         // reject over-budget names before any snapshot read.
                         if(nsBytes>NonRootOwnerAudit::kNameBytes ||
                            nameBytes>NonRootOwnerAudit::kNameBytes) {
-                            std::fprintf(stderr,"R03 B2 BYTE CAP branch name=%zu cap=%d\\n",
-                                         nameBytes,static_cast<int>(NonRootOwnerAudit::kNameBytes));
                             c.error=live::Error::SourceOutsideBudget;return false;
                         }
                         // The original first owner is already authenticated.
@@ -766,8 +760,6 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                                handle,ns,nsBytes,name.second,nameBytes,
                                static_cast<int32_t>(def->genericContainerIndex),
                                static_cast<int32_t>(def->declaringTypeIndex),arity)) {
-                            std::fprintf(stderr,"R03 B2 CAPTURE FAILED name=%zu cap=%d\\n",
-                                         nameBytes,static_cast<int>(NonRootOwnerAudit::kNameBytes));
                             c.error=live::Error::OriginalV1TypeDefContentChanged;
                             return false;
                         }
@@ -1099,6 +1091,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 c.error=live::Error::InvalidRegistry;return;
             }
         },&context);
+        // Preserve the FIRST precise source error. Do not re-enter the
+        // third-pass and non-root metadata checks after a failed TypeKey:
+        // they may observe partial audit pairs and mask the original error.
+        if(context.error!=live::Error::None)
+            return reject(context.error);
         // Third, end-of-collection physical traversal rechecks EVERY
         // previously admitted class, including early rows that a later
         // TypeKey formatter could mutate after their row was copied.
