@@ -56,6 +56,9 @@ struct Receipt {
     size_t originalV1ImageFactsMatched=0; // physical visits, not VM epoch
     bool originalV1ImageFactsTwoPassStable=false; // typeCount/tokens only
     bool originalV1FirstEmplaceOwnerMatched=false; // admitted handles ONLY
+    size_t originalV1RootOwnerEndPassMatched=0; // root-only recheck
+    size_t originalV1RootOwnerEndPassLookups=0; // separate bounded budget
+    bool originalV1RootOwnerEndPassStable=false; // observational only
     bool originalV1CompleteField15Parity=false; // never set by this source
     size_t observedClassFactsMatched=0; // admitted first/second-pass matches
     bool observedClassFactsTwoPassStable=false; // no whole VM epoch
@@ -119,6 +122,9 @@ inline bool Reject(Receipt& receipt,Error reason,
     receipt.originalV1ImageFactsMatched=0;
     receipt.originalV1ImageFactsTwoPassStable=false;
     receipt.originalV1FirstEmplaceOwnerMatched=false;
+    receipt.originalV1RootOwnerEndPassMatched=0;
+    receipt.originalV1RootOwnerEndPassLookups=0;
+    receipt.originalV1RootOwnerEndPassStable=false;
     receipt.originalV1CompleteField15Parity=false;
     receipt.originalV1HandlesMatched=0;
     receipt.observedClassFactsMatched=0;

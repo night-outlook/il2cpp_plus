@@ -978,20 +978,26 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         // values only after successful owned-row publication. Each third-pass
         // callback must be independently unique; missing, duplicated or
         // changed sources reject the entire record before any positive
-        // receipt can be emitted. No TypeKey/metadata handle is dereferenced.
-        // This is only a third observation within the initial Reader and
-        // original g_MetadataLock, not an atomic class/GC/VM epoch.
+        // receipt can be emitted. The end pass repeats the ORIGINAL physical
+        // first-owner lookup of each root metadata handle, using only bounded
+        // indexed metadata API reads (not direct TypeDef dereferences).
+        // This is still an observation under initial Reader/g_MetadataLock,
+        // not an atomic VM epoch or complete metadata handle-table proof.
         if(context.error==live::Error::None &&
            membership.EnumeratorHealthy() && membership.FullyMatched()) {
             struct EndPassFacts {
                 physical::Scratch* membership=nullptr;
                 const PackedFacts* facts=nullptr;
+                const assembly_shadow_observed_images::Inventory<
+                    live::kMaximumOriginalV1Images>* originalV1Images=nullptr;
                 std::array<uint8_t,physical::kSlots> seen{};
                 size_t enumerated=0,matched=0;
+                size_t rootOwnerLookups=0,rootOwnerMatched=0;
                 live::Error error=live::Error::None;
             } endPass{};
             endPass.membership=&membership;
             endPass.facts=&firstPassFacts;
+            endPass.originalV1Images=&originalV1Images;
             il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
                 EndPassFacts& end=*static_cast<EndPassFacts*>(raw);
                 if(end.error!=live::Error::None)return;
@@ -1016,16 +1022,47 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                     end.error=live::Error::InvalidRegistry;return;
                 }
                 const ClassFacts observed=ClassFacts::Read(klass);
-                if(!previous->SameRoot(observed))
-                    end.error=live::Error::ObservedClassRootChanged;
-                else if(!previous->SameClassState(observed))
-                    end.error=live::Error::ObservedClassFactsChanged;
+                if(!previous->SameRoot(observed)) {
+                    end.error=live::Error::ObservedClassRootChanged;return;
+                }
+                if(!previous->SameClassState(observed)) {
+                    end.error=live::Error::ObservedClassFactsChanged;return;
+                }
+                if(!klass->image || !klass->typeMetadataHandle ||
+                   !end.originalV1Images) {
+                    end.error=live::Error::InvalidTypeIdentity;return;
+                }
+                // An indexed TypeDef handle can change after we copied the
+                // owned row, while the class pointer, typeCount and image
+                // tokens remain unchanged. Recheck its ORIGINAL first owner.
+                original_join::Receipt root{};
+                if(!original_join::CheckFirstOwner(
+                       *end.originalV1Images,klass->image,
+                       klass->typeMetadataHandle,
+                       [](const Il2CppImage* image,uint32_t index) {
+                           return MetadataCache::GetAssemblyTypeHandle(image,index);
+                       },end.rootOwnerLookups,
+                       live::kMaximumTotalMetadataLookups,
+                       live::kMaximumAotImageTypes,root)) {
+                    if(root.error==original_join::Error::FirstOwnerDifferent)
+                        end.error=live::Error::OriginalV1FirstOwnerConflict;
+                    else if(root.error==original_join::Error::OwnerNotFound)
+                        end.error=live::Error::OriginalV1OwnerMissing;
+                    else if(root.error==original_join::Error::LookupBudget)
+                        end.error=live::Error::OriginalV1LookupBudget;
+                    else
+                        end.error=live::Error::OriginalV1ImageSourceUnavailable;
+                    return;
+                }
+                ++end.rootOwnerMatched;
             },&endPass);
             if(endPass.error!=live::Error::None)
                 return reject(endPass.error);
             if(endPass.matched!=receipt.registered)
                 return reject(live::Error::UnmatchedClass);
             receipt.observedClassFactsEndPassMatched=endPass.matched;
+            receipt.originalV1RootOwnerEndPassMatched=endPass.rootOwnerMatched;
+            receipt.originalV1RootOwnerEndPassLookups=endPass.rootOwnerLookups;
         }
         // Revisit the SAME raw physical registry under the assembly lock.
         // Ordered identity equality is an observational source fence only,
@@ -1188,8 +1225,14 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
         receipt.originalV1ImageSetStable &&
         receipt.originalV1ImageFactsMatched==receipt.originalV1Images &&
         receipt.originalV1ImageFactsMatched>0;
-    receipt.originalV1FirstEmplaceOwnerMatched=
+    receipt.originalV1RootOwnerEndPassStable=
         receipt.originalV1ImageFactsTwoPassStable &&
+        receipt.originalV1RootOwnerEndPassMatched==receipt.registered &&
+        receipt.originalV1RootOwnerEndPassMatched>0 &&
+        receipt.originalV1RootOwnerEndPassLookups>=
+            receipt.originalV1RootOwnerEndPassMatched;
+    receipt.originalV1FirstEmplaceOwnerMatched=
+        receipt.originalV1RootOwnerEndPassStable &&
         receipt.originalV1HandlesMatched>0;
     // No claim of complete legacy execution field15, only those handles
     // actually used in the restricted rows. Other original V1 source rows,
