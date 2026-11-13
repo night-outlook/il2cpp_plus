@@ -196,6 +196,15 @@ static bool g_changeRootTypeCodeOnEnd=false,g_changeRootDataOnEnd=false;
 static bool g_changeRootGenericOnEnd=false;
 static bool g_removeIndexedRootOwnerAtEnd=false;
 static bool g_aliasEarlierIndexedOwnerAtEnd=false;
+// Non-root TypeDef indexed-owner drift; class roots remain unchanged.
+static bool g_removeGenericArgumentOwnerAtEnd=false;
+static bool g_removeCrossImageArgumentOwnerAtEnd=false;
+static bool g_removePrimitiveArgumentOwnerAtEnd=false;
+static bool g_removeNestedOuterOwnerAtEnd=false;
+static bool g_aliasEarlierGenericArgumentOwnerAtEnd=false;
+static Il2CppImage* g_mainArgumentImage=nullptr;
+static Il2CppImage* g_supportArgumentImage=nullptr;
+static void* g_secondaryArgumentHandle=nullptr;
 static bool g_changeEarlierIndexedOwnerDuringLaterTypeKey=false;
 static bool g_changedEarlierIndexedOwner=false;
 static Il2CppImage* g_earlierOwnerImage=nullptr;
@@ -328,6 +337,17 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
             g_physical->typeMetadataHandle=g_alternateTypeHandle;
     }
     if(g_physical && g_physicalPasses==3) {
+        if(g_removeGenericArgumentOwnerAtEnd && g_mainArgumentImage)
+            g_mainArgumentImage->handles[1]=nullptr;
+        if(g_removeCrossImageArgumentOwnerAtEnd && g_supportArgumentImage)
+            g_supportArgumentImage->handles[0]=nullptr;
+        if(g_removePrimitiveArgumentOwnerAtEnd && g_supportArgumentImage)
+            g_supportArgumentImage->handles[1]=nullptr;
+        if(g_removeNestedOuterOwnerAtEnd && g_mainArgumentImage)
+            g_mainArgumentImage->handles[2]=nullptr;
+        if(g_aliasEarlierGenericArgumentOwnerAtEnd &&
+           g_supportArgumentImage)
+            g_supportArgumentImage->handles[0]=g_secondaryArgumentHandle;
         if(g_removeIndexedRootOwnerAtEnd)
             g_physical->image->handles[0]=nullptr;
         if(g_aliasEarlierIndexedOwnerAtEnd && g_earlierOwnerImage)
@@ -606,6 +626,11 @@ enum class Mode {
     RootIndexedOwnerRemovedAtEnd, RootEarlierOwnerAppearedAtEnd,
     InterpreterOnlyRootIndexedOwnerRemovedAtEnd,
     EarlierRootIndexedOwnerRemovedDuringLaterTypeKey,
+    GenericArgumentOwnerRemovedAtEnd,
+    CrossImageUnobservedArgumentOwnerRemovedAtEnd,
+    PrimitiveArgumentOwnerRemovedAtEnd,
+    NestedDeclarationOwnerRemovedAtEnd,
+    EarlierGenericArgumentOwnerAppearedAtEnd,
     InterpreterSimpleClass, InterpreterSimpleValueType,
     InterpreterWrongTypeHandle, InterpreterGenericDefinition,
     InterpreterNestedDefinition, InterpreterFirstOwnerAlias,
@@ -675,6 +700,14 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_changeEarlierIndexedOwnerDuringLaterTypeKey=false;
     g_changedEarlierIndexedOwner=false;
     g_earlierOwnerImage=nullptr;
+    g_removeGenericArgumentOwnerAtEnd=false;
+    g_removeCrossImageArgumentOwnerAtEnd=false;
+    g_removePrimitiveArgumentOwnerAtEnd=false;
+    g_removeNestedOuterOwnerAtEnd=false;
+    g_aliasEarlierGenericArgumentOwnerAtEnd=false;
+    g_mainArgumentImage=&fixture.image;
+    g_supportArgumentImage=&fixture.supportImage;
+    g_secondaryArgumentHandle=&fixture.secondary;
     g_changeEarlierRootDuringLaterTypeKey=g_changedEarlierRoot=false;
     g_mutateEarlierClassDuringLaterTypeKey=g_mutatedEarlierClass=false;
     g_dropEndPass=g_duplicateEndPass=false;
@@ -743,6 +776,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
     }
     if(mode==Mode::GenericDefinition)fixture.def.genericContainerIndex=0;
     if(mode==Mode::GenericSameImage || mode==Mode::GenericNestedArgument ||
+       mode==Mode::GenericArgumentOwnerRemovedAtEnd ||
+       mode==Mode::NestedDeclarationOwnerRemovedAtEnd ||
+       mode==Mode::EarlierGenericArgumentOwnerAppearedAtEnd ||
+       mode==Mode::PrimitiveArgumentOwnerRemovedAtEnd ||
        mode==Mode::GenericArgumentMissingOwner ||
        mode==Mode::GenericWrongArity || mode==Mode::GenericTooManyArguments ||
        mode==Mode::PrimitiveDefault ||
@@ -777,7 +814,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         fixture.klass.generic_class=&fixture.genericClass;
         if(mode==Mode::GenericArgumentMissingOwner)
             fixture.image.handles[1]=nullptr;
-        if(mode==Mode::GenericNestedArgument) {
+        if(mode==Mode::GenericNestedArgument ||
+           mode==Mode::NestedDeclarationOwnerRemovedAtEnd) {
             fixture.secondary.declaringTypeIndex=3;
             fixture.image.typeCount=3;
             fixture.image.handles[2]=&fixture.outer;
@@ -843,6 +881,7 @@ static void Exercise(Mode mode,src::Error expectedError) {
     }
     if(mode==Mode::CrossImageGeneric ||
        mode==Mode::CrossImageGenericUnobserved ||
+       mode==Mode::CrossImageUnobservedArgumentOwnerRemovedAtEnd ||
        mode==Mode::CrossImageGenericNotRegistered ||
        mode==Mode::CrossImageGenericAmbiguous ||
        mode==Mode::RegisteredAotChanged ||
@@ -859,7 +898,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         if(mode==Mode::RegisteredAotChanged)
             g_dropRegisteredOnSecond=true;
         g_reversePhysicalCallbacks=true;
-        if(mode==Mode::CrossImageGenericUnobserved)
+        if(mode==Mode::CrossImageGenericUnobserved ||
+           mode==Mode::CrossImageUnobservedArgumentOwnerRemovedAtEnd)
             g_otherPhysical=nullptr; // No actual matched callback owner
         if(mode==Mode::CrossImageGenericAmbiguous) {
             fixture.image.typeCount=2;
@@ -987,6 +1027,32 @@ static void Exercise(Mode mode,src::Error expectedError) {
     }
     if(mode==Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey)
         g_changeEarlierIndexedOwnerDuringLaterTypeKey=true;
+    if(mode==Mode::GenericArgumentOwnerRemovedAtEnd)
+        g_removeGenericArgumentOwnerAtEnd=true;
+    if(mode==Mode::CrossImageUnobservedArgumentOwnerRemovedAtEnd)
+        g_removeCrossImageArgumentOwnerAtEnd=true;
+    if(mode==Mode::PrimitiveArgumentOwnerRemovedAtEnd)
+        g_removePrimitiveArgumentOwnerAtEnd=true;
+    if(mode==Mode::NestedDeclarationOwnerRemovedAtEnd)
+        g_removeNestedOuterOwnerAtEnd=true;
+    if(mode==Mode::EarlierGenericArgumentOwnerAppearedAtEnd) {
+        g_aliasEarlierGenericArgumentOwnerAtEnd=true;
+        fixture.supportImage.token=-2;
+        fixture.supportAssembly.interpreter=true;
+        fixture.supportImage.handles[0]=&fixture.primitiveDefinition;
+        g_rawAssemblies[1]=g_rawAssemblies[0];
+        g_rawAssemblies[0]=&fixture.supportAssembly;
+        g_rawCount=2;
+    }
+    if(mode==Mode::PrimitiveArgumentOwnerRemovedAtEnd) {
+        fixture.genericArg1.type=IL2CPP_TYPE_I4;
+        fixture.genericArg1.data.typeHandle=nullptr;
+        fixture.supportImage.typeCount=2;
+        fixture.supportImage.handles[0]=nullptr;
+        fixture.supportImage.handles[1]=&fixture.primitiveDefinition;
+        g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
+        il2cpp_defaults.int32_class=&fixture.primitiveClass;
+    }
     if(mode==Mode::CctorFactsChanged)g_mutateCctorOnSecond=true;
     if(mode==Mode::StaticFactsChanged)g_mutateStaticOnSecond=true;
     if(mode==Mode::CctorFactsDuringTypeKey)g_mutateCctorInsideTypeKey=true;
@@ -1114,6 +1180,21 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.originalV1RootOwnerEndPassStable);
         Check(receipt.originalV1RootOwnerEndPassMatched==expectedRows);
         Check(receipt.originalV1RootOwnerEndPassLookups>=expectedRows);
+        Check(receipt.originalV1NonRootTypeDefOwnersEndPassStable);
+        Check(receipt.originalV1NonRootTypeDefOwnersRecorded==
+              receipt.originalV1NonRootTypeDefOwnersRechecked);
+        Check(receipt.originalV1NonRootTypeDefOwnerLookups>=
+              receipt.originalV1NonRootTypeDefOwnersRechecked);
+        if(mode==Mode::Good || mode==Mode::InterpreterSimpleClass ||
+           mode==Mode::InterpreterOnlySimpleClass)
+            Check(receipt.originalV1NonRootTypeDefOwnersRecorded==0);
+        if(mode==Mode::GenericSameImage ||
+           mode==Mode::CrossImageGenericUnobserved)
+            Check(receipt.originalV1NonRootTypeDefOwnersRecorded>=1);
+        if(mode==Mode::GenericNestedArgument)
+            Check(receipt.originalV1NonRootTypeDefOwnersRecorded>=2);
+        if(mode==Mode::PrimitiveDefault)
+            Check(receipt.originalV1NonRootTypeDefOwnersRecorded>=2);
         Check(receipt.observedClassFactsTwoPassStable);
         Check(receipt.observedClassFactsMatched==expectedRows);
         Check(receipt.observedClassFactsEndPassStable);
@@ -1297,6 +1378,10 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!receipt.originalV1RootOwnerEndPassStable);
         Check(receipt.originalV1RootOwnerEndPassMatched==0);
         Check(receipt.originalV1RootOwnerEndPassLookups==0);
+        Check(!receipt.originalV1NonRootTypeDefOwnersEndPassStable);
+        Check(receipt.originalV1NonRootTypeDefOwnersRecorded==0);
+        Check(receipt.originalV1NonRootTypeDefOwnersRechecked==0);
+        Check(receipt.originalV1NonRootTypeDefOwnerLookups==0);
         Check(!receipt.observedClassFactsTwoPassStable);
         Check(receipt.observedClassFactsMatched==0);
         Check(!receipt.observedClassFactsEndPassStable);
@@ -1479,6 +1564,16 @@ int main(){
     Exercise(Mode::EarlierRootIndexedOwnerRemovedDuringLaterTypeKey,
              src::Error::OriginalV1OwnerMissing);
     Check(g_changedEarlierIndexedOwner);
+    Exercise(Mode::GenericArgumentOwnerRemovedAtEnd,
+             src::Error::OriginalV1OwnerMissing);
+    Exercise(Mode::CrossImageUnobservedArgumentOwnerRemovedAtEnd,
+             src::Error::OriginalV1OwnerMissing);
+    Exercise(Mode::PrimitiveArgumentOwnerRemovedAtEnd,
+             src::Error::OriginalV1OwnerMissing);
+    Exercise(Mode::NestedDeclarationOwnerRemovedAtEnd,
+             src::Error::OriginalV1OwnerMissing);
+    Exercise(Mode::EarlierGenericArgumentOwnerAppearedAtEnd,
+             src::Error::OriginalV1FirstOwnerConflict);
     Exercise(Mode::OriginalV1UnregisteredOwner,
              src::Error::OriginalV1OwnerMissing);
     Exercise(Mode::OriginalV1InvalidImage,
