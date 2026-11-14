@@ -190,6 +190,9 @@ static bool g_changeRevision=false, g_changeCounter=false;
 static bool g_mutateCctorOnSecond=false,g_mutateStaticOnSecond=false;
 static bool g_mutateCctorInsideTypeKey=false,g_mutatedCctorInsideTypeKey=false;
 static bool g_mutateCctorOnEndPass=false,g_mutateStaticOnEndPass=false;
+static bool g_changeAssemblyNameBytesAtEnd=false,g_replaceAssemblyNameAtEnd=false;
+static char* g_mutableAssemblyName=nullptr;
+static const char* g_replacementAssemblyName=nullptr;
 static bool g_changeRootDefinitionOnSecond=false;
 static bool g_changeRootImageOnEnd=false,g_changeRootDefinitionOnEnd=false;
 static bool g_changeRootTypeCodeOnEnd=false,g_changeRootDataOnEnd=false;
@@ -397,6 +400,11 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
             g_physical->image->handles[0]=nullptr;
         if(g_aliasEarlierIndexedOwnerAtEnd && g_earlierOwnerImage)
             g_earlierOwnerImage->handles[0]=g_physical->typeMetadataHandle;
+        if(g_changeAssemblyNameBytesAtEnd && g_mutableAssemblyName)
+            g_mutableAssemblyName[0]='X';
+        if(g_replaceAssemblyNameAtEnd && g_physical->image &&
+           g_physical->image->assembly)
+            g_physical->image->assembly->aname.name=g_replacementAssemblyName;
         if(g_mutateCctorOnEndPass)g_physical->cctor_started=0;
         if(g_mutateStaticOnEndPass)g_physical->static_fields=nullptr;
         if(g_changeRootImageOnEnd)
@@ -523,6 +531,8 @@ struct Fixture {
     char oversizedSecondaryName[67]{};
     char mutableRootName[5]{'H','e','r','o','\0'};
     char oversizedRootName[67]{};
+    char mutableAssemblyName[8]{'M','e','t','h','o','d','s','\0'};
+    char sameAssemblyName[8]{'M','e','t','h','o','d','s','\0'};
     Il2CppType declaring{};
     Il2CppType genericBase{},genericArg1{},genericArg2{};
     Il2CppType nestedBase{},compositeLeaf{},chain[11]{};
@@ -725,6 +735,9 @@ enum class Mode {
     RootByrefChangedAtEnd, RootPinnedChangedAtEnd,
     RootValuetypeChangedAtEnd,
     RootTypeDataChangedAtEnd, RootGenericChangedAtEnd,
+    LogicalAssemblyNameBytesChangedAtEnd,
+    LogicalAssemblyNamePointerChangedAtEnd,
+    LogicalAssemblyNameSameBytesNewPointer,
     EarlierRootChangedDuringLaterTypeKey,
     EarlierClassFactsChangedDuringLaterTypeKey,
     MissingEndPass, DuplicateEndPass,
@@ -759,6 +772,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_mutateCctorOnSecond=g_mutateStaticOnSecond=false;
     g_mutateCctorInsideTypeKey=g_mutatedCctorInsideTypeKey=false;
     g_mutateCctorOnEndPass=g_mutateStaticOnEndPass=false;
+    g_changeAssemblyNameBytesAtEnd=g_replaceAssemblyNameAtEnd=false;
+    g_mutableAssemblyName=fixture.mutableAssemblyName;
+    g_replacementAssemblyName=nullptr;
     g_changeRootDefinitionOnSecond=false;
     g_changeRootImageOnEnd=g_changeRootDefinitionOnEnd=false;
     g_changeRootTypeCodeOnEnd=g_changeRootDataOnEnd=false;
@@ -1195,6 +1211,18 @@ static void Exercise(Mode mode,src::Error expectedError) {
         fixture.supportImage.handles[1]=&fixture.primitiveDefinition;
         g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
         il2cpp_defaults.int32_class=&fixture.primitiveClass;
+    }
+    if(mode==Mode::LogicalAssemblyNameBytesChangedAtEnd) {
+        fixture.assembly.aname.name=fixture.mutableAssemblyName;
+        g_changeAssemblyNameBytesAtEnd=true;
+    }
+    if(mode==Mode::LogicalAssemblyNamePointerChangedAtEnd) {
+        g_replaceAssemblyNameAtEnd=true;
+        g_replacementAssemblyName="Different";
+    }
+    if(mode==Mode::LogicalAssemblyNameSameBytesNewPointer) {
+        g_replaceAssemblyNameAtEnd=true;
+        g_replacementAssemblyName=fixture.sameAssemblyName;
     }
     if(mode==Mode::CctorFactsChanged)g_mutateCctorOnSecond=true;
     if(mode==Mode::StaticFactsChanged)g_mutateStaticOnSecond=true;
@@ -1848,6 +1876,9 @@ int main(){
     Exercise(Mode::RootValuetypeChangedAtEnd,src::Error::ObservedClassRootChanged);
     Exercise(Mode::RootTypeDataChangedAtEnd,src::Error::ObservedClassRootChanged);
     Exercise(Mode::RootGenericChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::LogicalAssemblyNameBytesChangedAtEnd,src::Error::SourceChanged);
+    Exercise(Mode::LogicalAssemblyNamePointerChangedAtEnd,src::Error::SourceChanged);
+    Exercise(Mode::LogicalAssemblyNameSameBytesNewPointer,src::Error::None);
     Exercise(Mode::EarlierRootChangedDuringLaterTypeKey,src::Error::ObservedClassRootChanged);
     Check(g_changedEarlierRoot);
     Exercise(Mode::CctorFactsChanged,src::Error::ObservedClassFactsChanged);

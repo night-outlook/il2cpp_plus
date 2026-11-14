@@ -54,7 +54,9 @@ class Rows final {
     };
     enum class Stage:uint8_t { Fresh, Collecting, Frozen, Failed };
     std::array<Entry,kMaximumRows> entries_{};
-    std::array<uint8_t,kMaximumRegistrationSlots> slots_{};
+    // One-based insertion index while Collecting. Becomes stale on Seal's
+    // sort and MUST NOT be used outside Collecting.
+    std::array<uint16_t,kMaximumRegistrationSlots> slots_{};
     std::array<char,kMaximumTextBytes> text_{};
     size_t textUsed_=0, count_=0, expected_=0;
     Error first_=Error::None;
@@ -153,7 +155,21 @@ public:
         item.slot=static_cast<uint16_t>(registrationSlot);
         item.source=source;
         item.fields=fields;
-        slots_[registrationSlot]=1;++count_;return true;
+        slots_[registrationSlot]=static_cast<uint16_t>(count_+1);
+        ++count_;return true;
+    }
+    // Exact comparison against owned V1 logicalAssembly bytes BEFORE Seal,
+    // when the mapping still identifies insertion-order rows. No heap work
+    // and O(1) lookup even at the 1024-row maximum.
+    bool SameCollectingLogicalAssembly(size_t slot,ByteView source) const noexcept {
+        if(stage_!=Stage::Collecting || slot>=kMaximumRegistrationSlots ||
+           !slots_[slot] || !source.data || !source.size)
+            return false;
+        const size_t index=static_cast<size_t>(slots_[slot]-1);
+        if(index>=count_ || entries_[index].slot!=slot)return false;
+        const ByteView saved=SpanView(entries_[index].assembly);
+        return saved.size==source.size &&
+            std::memcmp(saved.data,source.data,saved.size)==0;
     }
     bool Seal() noexcept {
         if(stage_!=Stage::Collecting || count_!=expected_)
