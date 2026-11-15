@@ -1139,6 +1139,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 physical::Scratch* membership=nullptr;
                 const PackedFacts* facts=nullptr;
                 const owned::Rows* rows=nullptr;
+                const ActiveSnapshot* active=nullptr;
                 const assembly_shadow_observed_images::Inventory<
                     live::kMaximumOriginalV1Images>* originalV1Images=nullptr;
                 std::array<uint8_t,physical::kSlots> seen{};
@@ -1149,6 +1150,7 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
             endPass.membership=&membership;
             endPass.facts=&firstPassFacts;
             endPass.rows=&rows;
+            endPass.active=activeBefore;
             endPass.originalV1Images=&originalV1Images;
             il2cpp_class_for_each([](Il2CppClass* klass,void* raw) {
                 EndPassFacts& end=*static_cast<EndPassFacts*>(raw);
@@ -1198,7 +1200,11 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 // and changed-pointer content both reject).
                 const Il2CppImage* image=klass->image;
                 const Il2CppAssembly* owner=image?image->assembly:nullptr;
-                const char* sourceName=owner?owner->aname.name:nullptr;
+                // The original physical image->assembly backlink is also
+                // checked at both image-inventory scans. Fail before reading
+                // a name from a newly unassociated owner.
+                const char* sourceName=owner && owner->image==image ?
+                    owner->aname.name:nullptr;
                 size_t sourceNameBytes=0;
                 if(!sourceName || !end.rows) {
                     end.error=live::Error::SourceChanged;return;
@@ -1209,6 +1215,18 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                    sourceNameBytes>key::Capture::kCapacity ||
                    !end.rows->SameCollectingLogicalAssembly(
                        slot,{sourceName,sourceNameBytes})) {
+                    end.error=live::Error::SourceChanged;return;
+                }
+                // The original field15 serializer also evaluates three
+                // assembly/snapshot-derived flags. Name equality alone does
+                // not establish their end-pass consistency: the active map
+                // or Interpreter(owner) can differ while strings agree.
+                const bool baseline=end.active &&
+                    end.active->byAssembly.count(owner);
+                const bool shadow=end.active &&
+                    end.active->shadowToBaseline.count(owner);
+                if(!end.rows->SameCollectingV1OwnerFlags(
+                       slot,baseline||shadow,Interpreter(owner),!baseline)) {
                     end.error=live::Error::SourceChanged;return;
                 }
                 if(!klass->image || !klass->typeMetadataHandle ||

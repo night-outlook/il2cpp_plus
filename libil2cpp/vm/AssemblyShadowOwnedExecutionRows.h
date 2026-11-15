@@ -171,6 +171,22 @@ public:
         return saved.size==source.size &&
             std::memcmp(saved.data,source.data,saved.size)==0;
     }
+    // Compare the three original V1 owner-derived row flags using the
+    // same authenticated insertion-slot index as logicalAssembly. These
+    // values are copied primitives, not an assembly/class lifetime ticket.
+    // Valid only before Seal reorders rows; no new heap or scratch buffer.
+    bool SameCollectingV1OwnerFlags(
+            size_t slot,bool interpreterShadow,
+            bool physicalInterpreter,bool isActive) const noexcept {
+        if(stage_!=Stage::Collecting || slot>=kMaximumRegistrationSlots ||
+           !slots_[slot])return false;
+        const size_t index=static_cast<size_t>(slots_[slot]-1);
+        if(index>=count_ || entries_[index].slot!=slot)return false;
+        const Flags& saved=entries_[index].fields;
+        return saved.interpreterShadow==interpreterShadow &&
+               saved.physicalInterpreter==physicalInterpreter &&
+               saved.isActive==isActive;
+    }
     bool Seal() noexcept {
         if(stage_!=Stage::Collecting || count_!=expected_)
             return Fail(Error::CountMismatch);

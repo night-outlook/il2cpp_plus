@@ -191,6 +191,13 @@ static bool g_mutateCctorOnSecond=false,g_mutateStaticOnSecond=false;
 static bool g_mutateCctorInsideTypeKey=false,g_mutatedCctorInsideTypeKey=false;
 static bool g_mutateCctorOnEndPass=false,g_mutateStaticOnEndPass=false;
 static bool g_changeAssemblyNameBytesAtEnd=false,g_replaceAssemblyNameAtEnd=false;
+static bool g_changeOwnerInterpreterAtEnd=false;
+static bool g_removeOwnerBaselineAtEnd=false;
+static bool g_addOwnerShadowAtEnd=false;
+static bool g_changeOwnerBacklinkAtEnd=false;
+static ActiveSnapshot* g_ownerActiveAtEnd=nullptr;
+static Il2CppAssembly* g_roleOwnerAtEnd=nullptr;
+static Il2CppImage* g_wrongOwnerImageAtEnd=nullptr;
 static char* g_mutableAssemblyName=nullptr;
 static const char* g_replacementAssemblyName=nullptr;
 static bool g_changeRootDefinitionOnSecond=false;
@@ -408,6 +415,16 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
         if(g_replaceAssemblyNameAtEnd && g_physical->image &&
            g_physical->image->assembly)
             g_physical->image->assembly->aname.name=g_replacementAssemblyName;
+        if(g_changeOwnerInterpreterAtEnd && g_roleOwnerAtEnd)
+            g_roleOwnerAtEnd->interpreter=true; // image token remains AOT
+        if(g_removeOwnerBaselineAtEnd && g_ownerActiveAtEnd &&
+           g_roleOwnerAtEnd)
+            g_ownerActiveAtEnd->byAssembly.erase(g_roleOwnerAtEnd);
+        if(g_addOwnerShadowAtEnd && g_ownerActiveAtEnd &&
+           g_roleOwnerAtEnd)
+            g_ownerActiveAtEnd->shadowToBaseline.insert(g_roleOwnerAtEnd);
+        if(g_changeOwnerBacklinkAtEnd && g_roleOwnerAtEnd)
+            g_roleOwnerAtEnd->image=g_wrongOwnerImageAtEnd;
         if(g_mutateCctorOnEndPass)g_physical->cctor_started=0;
         if(g_mutateStaticOnEndPass)g_physical->static_fields=nullptr;
         if(g_changeRootImageOnEnd)
@@ -748,6 +765,9 @@ enum class Mode {
     LogicalAssemblyNameBytesChangedAtEnd,
     LogicalAssemblyNamePointerChangedAtEnd,
     LogicalAssemblyNameSameBytesNewPointer,
+    OwnerInterpreterFlagChangedAtEnd, OwnerBaselineChangedAtEnd,
+    OwnerShadowChangedAtEnd, OwnerBacklinkChangedAtEnd,
+    StableActiveShadowOwner,
     EarlierRootChangedDuringLaterTypeKey,
     EarlierClassFactsChangedDuringLaterTypeKey,
     MissingEndPass, DuplicateEndPass,
@@ -783,6 +803,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_mutateCctorInsideTypeKey=g_mutatedCctorInsideTypeKey=false;
     g_mutateCctorOnEndPass=g_mutateStaticOnEndPass=false;
     g_changeAssemblyNameBytesAtEnd=g_replaceAssemblyNameAtEnd=false;
+    g_changeOwnerInterpreterAtEnd=g_removeOwnerBaselineAtEnd=false;
+    g_addOwnerShadowAtEnd=g_changeOwnerBacklinkAtEnd=false;
+    g_ownerActiveAtEnd=&fixture.active;
+    g_roleOwnerAtEnd=&fixture.assembly;
+    g_wrongOwnerImageAtEnd=&fixture.supportImage;
     g_mutableAssemblyName=fixture.mutableAssemblyName;
     g_replacementAssemblyName=nullptr;
     g_changeRootDefinitionOnSecond=false;
@@ -1227,6 +1252,19 @@ static void Exercise(Mode mode,src::Error expectedError) {
         g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
         il2cpp_defaults.int32_class=&fixture.primitiveClass;
     }
+    if(mode==Mode::OwnerInterpreterFlagChangedAtEnd)
+        g_changeOwnerInterpreterAtEnd=true;
+    if(mode==Mode::OwnerBaselineChangedAtEnd)
+        g_removeOwnerBaselineAtEnd=true;
+    if(mode==Mode::OwnerShadowChangedAtEnd ||
+       mode==Mode::StableActiveShadowOwner) {
+        fixture.active.byAssembly.erase(&fixture.assembly);
+        g_addOwnerShadowAtEnd=mode==Mode::OwnerShadowChangedAtEnd;
+        if(mode==Mode::StableActiveShadowOwner)
+            fixture.active.shadowToBaseline.insert(&fixture.assembly);
+    }
+    if(mode==Mode::OwnerBacklinkChangedAtEnd)
+        g_changeOwnerBacklinkAtEnd=true;
     if(mode==Mode::LogicalAssemblyNameBytesChangedAtEnd) {
         fixture.assembly.aname.name=fixture.mutableAssemblyName;
         g_changeAssemblyNameBytesAtEnd=true;
@@ -1492,6 +1530,11 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!receipt.completeExecutionDiagnostics);
         Check(!receipt.coherentVmEpochProven && !receipt.runtimeAcceptance);
         const std::string body(record->Data(),record->Bytes());
+        if(mode==Mode::StableActiveShadowOwner) {
+            Check(body.find("\"interpreterShadow\":true")!=std::string::npos);
+            Check(body.find("\"physicalInterpreter\":false")!=std::string::npos);
+            Check(body.find("\"isActive\":true")!=std::string::npos);
+        }
         const char* key=(mode==Mode::PrimitiveDefault ||
                          mode==Mode::PrimitiveQualified ||
                          mode==Mode::GenericDefinition ||
@@ -1911,6 +1954,11 @@ int main(){
     Exercise(Mode::LogicalAssemblyNameBytesChangedAtEnd,src::Error::SourceChanged);
     Exercise(Mode::LogicalAssemblyNamePointerChangedAtEnd,src::Error::SourceChanged);
     Exercise(Mode::LogicalAssemblyNameSameBytesNewPointer,src::Error::None);
+    Exercise(Mode::OwnerInterpreterFlagChangedAtEnd,src::Error::SourceChanged);
+    Exercise(Mode::OwnerBaselineChangedAtEnd,src::Error::SourceChanged);
+    Exercise(Mode::OwnerShadowChangedAtEnd,src::Error::SourceChanged);
+    Exercise(Mode::OwnerBacklinkChangedAtEnd,src::Error::SourceChanged);
+    Exercise(Mode::StableActiveShadowOwner,src::Error::None);
     Exercise(Mode::EarlierRootChangedDuringLaterTypeKey,src::Error::ObservedClassRootChanged);
     Check(g_changedEarlierRoot);
     Exercise(Mode::CctorFactsChanged,src::Error::ObservedClassFactsChanged);
