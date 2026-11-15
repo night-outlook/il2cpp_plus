@@ -1531,8 +1531,13 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(!receipt.coherentVmEpochProven && !receipt.runtimeAcceptance);
         const std::string body(record->Data(),record->Bytes());
         if(mode==Mode::StableActiveShadowOwner) {
-            Check(body.find("\"interpreterShadow\":true")!=std::string::npos);
-            Check(body.find("\"physicalInterpreter\":false")!=std::string::npos);
+            // Assert the actual original V1 serializer field names, not
+            // the private owned Flags member names.
+            Check(body.find("\"executionModeCode\":1")!=std::string::npos);
+            Check(body.find("\"executionMode\":\"InterpreterShadow\"")!=
+                  std::string::npos);
+            Check(body.find("\"physicalImageKind\":\"Aot\"")!=
+                  std::string::npos);
             Check(body.find("\"isActive\":true")!=std::string::npos);
         }
         const char* key=(mode==Mode::PrimitiveDefault ||
