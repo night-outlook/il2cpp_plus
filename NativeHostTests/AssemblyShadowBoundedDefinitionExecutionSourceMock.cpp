@@ -200,6 +200,9 @@ static bool g_changeRootAttrsOnEnd=false,g_changeRootModsOnEnd=false;
 static bool g_changeRootByrefOnEnd=false,g_changeRootPinnedOnEnd=false;
 static bool g_changeRootValuetypeOnEnd=false;
 static bool g_changeRootGenericOnEnd=false;
+static bool g_changeRankOnEnd=false;
+static bool g_changeInterpreterDeclaringOnEnd=false;
+static bool g_changeInterpreterContainerOnEnd=false;
 static bool g_removeIndexedRootOwnerAtEnd=false;
 static bool g_aliasEarlierIndexedOwnerAtEnd=false;
 // Non-root TypeDef indexed-owner drift; class roots remain unchanged.
@@ -422,6 +425,11 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
             g_physical->byval_arg.data.typeHandle=g_alternateTypeHandle;
         if(g_changeRootGenericOnEnd)
             g_physical->generic_class=g_alternateGenericClass;
+        if(g_changeRankOnEnd)g_physical->rank=1;
+        if(g_changeInterpreterDeclaringOnEnd)
+            g_physical->declaringType=&g_container;
+        if(g_changeInterpreterContainerOnEnd)
+            g_physical->genericContainerHandle=&g_container;
     }
     if(g_emitPhysical && !(g_dropSecondPass && g_physicalPasses==2) &&
        !(g_dropEndPass && g_physicalPasses==3)) {
@@ -735,6 +743,8 @@ enum class Mode {
     RootByrefChangedAtEnd, RootPinnedChangedAtEnd,
     RootValuetypeChangedAtEnd,
     RootTypeDataChangedAtEnd, RootGenericChangedAtEnd,
+    RootRankChangedAtEnd, InterpreterDeclaringChangedAtEnd,
+    InterpreterContainerChangedAtEnd, AotExistingClassShape,
     LogicalAssemblyNameBytesChangedAtEnd,
     LogicalAssemblyNamePointerChangedAtEnd,
     LogicalAssemblyNameSameBytesNewPointer,
@@ -782,6 +792,9 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_changeRootByrefOnEnd=g_changeRootPinnedOnEnd=false;
     g_changeRootValuetypeOnEnd=false;
     g_changeRootGenericOnEnd=false;
+    g_changeRankOnEnd=false;
+    g_changeInterpreterDeclaringOnEnd=false;
+    g_changeInterpreterContainerOnEnd=false;
     g_removeIndexedRootOwnerAtEnd=false;
     g_aliasEarlierIndexedOwnerAtEnd=false;
     g_changeEarlierIndexedOwnerDuringLaterTypeKey=false;
@@ -830,6 +843,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
     const bool interpreterMode=interpreterOnlyMode ||
         mode==Mode::InterpreterSimpleClass ||
         mode==Mode::InterpreterSimpleValueType ||
+        mode==Mode::InterpreterDeclaringChangedAtEnd ||
+        mode==Mode::InterpreterContainerChangedAtEnd ||
         mode==Mode::InterpreterWrongTypeHandle ||
         mode==Mode::InterpreterGenericDefinition ||
         mode==Mode::InterpreterNestedDefinition ||
@@ -1223,6 +1238,17 @@ static void Exercise(Mode mode,src::Error expectedError) {
     if(mode==Mode::LogicalAssemblyNameSameBytesNewPointer) {
         g_replaceAssemblyNameAtEnd=true;
         g_replacementAssemblyName=fixture.sameAssemblyName;
+    }
+    if(mode==Mode::RootRankChangedAtEnd)g_changeRankOnEnd=true;
+    if(mode==Mode::InterpreterDeclaringChangedAtEnd)
+        g_changeInterpreterDeclaringOnEnd=true;
+    if(mode==Mode::InterpreterContainerChangedAtEnd)
+        g_changeInterpreterContainerOnEnd=true;
+    // AOT class shapes were not subjected to the interpreter-only null
+    // declaring/generic-container constraint; preserve this admitted subset.
+    if(mode==Mode::AotExistingClassShape) {
+        fixture.klass.declaringType=&fixture.outer;
+        fixture.klass.genericContainerHandle=&fixture.outer;
     }
     if(mode==Mode::CctorFactsChanged)g_mutateCctorOnSecond=true;
     if(mode==Mode::StaticFactsChanged)g_mutateStaticOnSecond=true;
@@ -1876,6 +1902,12 @@ int main(){
     Exercise(Mode::RootValuetypeChangedAtEnd,src::Error::ObservedClassRootChanged);
     Exercise(Mode::RootTypeDataChangedAtEnd,src::Error::ObservedClassRootChanged);
     Exercise(Mode::RootGenericChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::RootRankChangedAtEnd,src::Error::ObservedClassRootChanged);
+    Exercise(Mode::InterpreterDeclaringChangedAtEnd,
+             src::Error::ObservedClassRootChanged);
+    Exercise(Mode::InterpreterContainerChangedAtEnd,
+             src::Error::ObservedClassRootChanged);
+    Exercise(Mode::AotExistingClassShape,src::Error::None);
     Exercise(Mode::LogicalAssemblyNameBytesChangedAtEnd,src::Error::SourceChanged);
     Exercise(Mode::LogicalAssemblyNamePointerChangedAtEnd,src::Error::SourceChanged);
     Exercise(Mode::LogicalAssemblyNameSameBytesNewPointer,src::Error::None);

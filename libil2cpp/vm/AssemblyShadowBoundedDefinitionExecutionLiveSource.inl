@@ -1180,6 +1180,18 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
                 if(!previous->SameClassState(observed)) {
                     end.error=live::Error::ObservedClassFactsChanged;return;
                 }
+                // Recheck the exact restricted class-shape predicates that
+                // were REQUIRED while copying the second-pass row. They are
+                // not in ClassFacts, so a late change could otherwise leave
+                // the owned TypeKey attached to an inadmissible class shape.
+                // Only plain interpreter classes additionally required null
+                // declaring/generic-container pointers. No new scratch/pass.
+                if(klass->rank ||
+                   (klass->image &&
+                    hybridclr::metadata::IsInterpreterIndex(klass->image->token) &&
+                    (klass->genericContainerHandle || klass->declaringType))) {
+                    end.error=live::Error::ObservedClassRootChanged;return;
+                }
                 // V1 copies owner->aname.name into logicalAssembly. Verify
                 // the exact bytes we owned in the second pass still match
                 // after all later TypeKey callbacks (same-address mutation
