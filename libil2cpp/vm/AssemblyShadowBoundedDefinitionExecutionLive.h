@@ -71,6 +71,11 @@ struct Receipt {
     size_t originalV1AdmittedTypeDefPairsRecorded=0; // roots + other TypeDefs
     size_t originalV1AdmittedTypeDefPairsRechecked=0; // exact distinct handles
     size_t originalV1AdmittedTypeDefOwnerLookups=0; // separate scoped budget
+    // First physical-pass capacity preflight only. This is a capped count
+    // of copied opaque root-handle values, NOT authenticated owner coverage.
+    // It survives Reject solely as a diagnostic when the 128-handle budget
+    // is already impossible; positive source receipts are still scrubbed.
+    size_t originalV1RootDistinctPreflightCapped=0; // <=129, root-only
     size_t originalV1RootTypeDefContentRecorded=0; // distinct captured roots
     size_t originalV1RootTypeDefContentMatched=0; // exact content final read
     bool originalV1RootTypeDefContentEndPassStable=false; // NOT VM epoch
@@ -117,6 +122,8 @@ inline bool Reject(Receipt& receipt,Error reason,
                    physical::Scratch& membership,owned::Rows& rows,
                    frozen::Record& record) noexcept {
     if(receipt.error==Error::None)receipt.error=reason;
+    // Retain only the capped root-count preflight as rejection diagnostics.
+    // It is not a source/owner/epoch proof and never enables positive flags.
     receipt.callbackPhysicalMembershipProven=false;
     receipt.restrictedTypeDefSubsetProven=false;
     receipt.usedCrossImageArgument=false;

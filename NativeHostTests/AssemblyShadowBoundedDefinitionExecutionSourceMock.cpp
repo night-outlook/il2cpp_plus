@@ -64,6 +64,9 @@ struct Il2CppImage {
     int token=0;
     uint32_t typeCount=0;
     void* handles[8]{};
+    // Mock-only table for >8 TypeDefs; does not enlarge every physical image.
+    void* const* extendedHandles=nullptr;
+    uint32_t extendedCount=0;
 };
 struct Il2CppGenericClass;
 struct Il2CppArrayType;
@@ -249,6 +252,8 @@ static bool g_dropEndPass=false,g_duplicateEndPass=false;
 static bool g_publishB1DuringEnumeration=false, g_midB1Published=false;
 static Il2CppClass* g_physical=nullptr;
 static Il2CppClass* g_otherPhysical=nullptr;
+static Il2CppClass* g_manyPhysical=nullptr; // synthetic 128/129-class census
+static size_t g_manyPhysicalCount=0;
 static bool g_reversePhysicalCallbacks=false;
 static Il2CppGenericContainer g_container{};
 static Il2CppType* g_declaringType=nullptr;
@@ -312,7 +317,11 @@ public:
 class MetadataCache {
 public:
     static void* GetAssemblyTypeHandle(const Il2CppImage* image,uint32_t index){
-        return image && index<image->typeCount && index<8 ? image->handles[index]:nullptr;
+        if(!image || index>=image->typeCount)return nullptr;
+        if(image->extendedHandles)
+            return index<image->extendedCount ?
+                image->extendedHandles[index]:nullptr;
+        return index<8?image->handles[index]:nullptr;
     }
 };
 class GlobalMetadata {
@@ -455,6 +464,8 @@ static void il2cpp_class_for_each(void(*callback)(Il2CppClass*,void*),void* cont
         callback(g_physical,context);
         if(!g_reversePhysicalCallbacks && g_otherPhysical)
             callback(g_otherPhysical,context);
+        for(size_t i=0;i<g_manyPhysicalCount;++i)
+            callback(&g_manyPhysical[i],context);
     }
     if(g_duplicate && g_emitPhysical)callback(g_physical,context);
     if(g_duplicateEndPass && g_physicalPasses==3 && g_emitPhysical)
@@ -574,6 +585,9 @@ struct Fixture {
     Il2CppClass klass{};
     Il2CppClass other{};
     Il2CppClass primitiveClass{};
+    std::array<Il2CppTypeDefinition,128> manyDefinitions{};
+    std::array<Il2CppClass,128> manyClasses{};
+    std::array<void*,129> manyHandles{};
     ActiveSnapshot active{};
     Fixture() {
         assembly.aname.name="Methods";
@@ -647,7 +661,8 @@ static void TestParityProbeMock(){
         g_emitPhysical=true;g_duplicate=false;g_physicalPasses=0;
         g_dropSecondPass=false;g_changeRevision=false;g_changeCounter=false;
         g_publishB1DuringEnumeration=false;g_midB1Published=false;
-        g_otherPhysical=nullptr;g_reversePhysicalCallbacks=false;
+        g_otherPhysical=nullptr;g_manyPhysical=nullptr;
+        g_manyPhysicalCount=0;g_reversePhysicalCallbacks=false;
         il2cpp_defaults=Il2CppDefaults{};
         g_physical=&f.klass;s_active.store(&f.active);
         s_state.store(AssemblyShadowState::Committed);
@@ -692,7 +707,8 @@ static void TestParityProbeMock(){
     g_legacyParityMismatch=g_legacyParityUnavailable=false;
 }
 enum class Mode {
-    Good, GenericDefinition, StagedGenericContainer,
+    Good, RootDistinct128, RootDistinct129, SharedRoot129,
+    GenericDefinition, StagedGenericContainer,
     GenericSameImage, GenericRootAlsoArgument,
     GenericNestedArgument, GenericArgumentMissingOwner,
     CrossImageGeneric, CrossImageGenericUnobserved,
@@ -853,7 +869,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
     g_dropEndPass=g_duplicateEndPass=false;
     g_publishB1DuringEnumeration=false;g_midB1Published=false;
     g_declaringType=&fixture.declaring;
-    g_otherPhysical=nullptr;g_reversePhysicalCallbacks=false;
+    g_otherPhysical=nullptr;g_manyPhysical=nullptr;g_manyPhysicalCount=0;
+    g_reversePhysicalCallbacks=false;
     s_active.store(&fixture.active);
     s_state.store(AssemblyShadowState::Committed);
     g_physical=&fixture.klass;
@@ -1372,6 +1389,39 @@ static void Exercise(Mode mode,src::Error expectedError) {
         g_rawAssemblies[g_rawCount++]=&fixture.supportAssembly;
     }
     Register(&fixture.klass);
+    // Genuine distinct TypeDef-handle census boundary (128 admitted vs
+    // 129 rejected) and repeated-root 129 physical classes/one TypeDef.
+    // The mock extended image table does not change the native ABI.
+    const bool manyRoots=
+        mode==Mode::RootDistinct128 ||
+        mode==Mode::RootDistinct129 ||
+        mode==Mode::SharedRoot129;
+    if(manyRoots) {
+        const bool shared=mode==Mode::SharedRoot129;
+        const size_t extra=mode==Mode::RootDistinct128?127u:128u;
+        if(!shared) {
+            fixture.image.typeCount=static_cast<uint32_t>(extra+1);
+            fixture.manyHandles[0]=&fixture.def;
+            fixture.image.extendedHandles=fixture.manyHandles.data();
+            fixture.image.extendedCount=static_cast<uint32_t>(extra+1);
+        }
+        for(size_t i=0;i<extra;++i) {
+            Il2CppTypeDefinition& def=fixture.manyDefinitions[i];
+            def.ns="Demo";def.name="Leaf";
+            Il2CppClass& klass=fixture.manyClasses[i];
+            klass.image=&fixture.image;
+            klass.typeMetadataHandle=shared?
+                static_cast<void*>(&fixture.def):static_cast<void*>(&def);
+            klass.name=shared?fixture.def.name:def.name;
+            klass.namespaze=shared?fixture.def.ns:def.ns;
+            klass.byval_arg.type=IL2CPP_TYPE_CLASS;
+            klass.byval_arg.data.typeHandle=klass.typeMetadataHandle;
+            if(!shared)fixture.manyHandles[i+1]=&def;
+            Register(&klass);
+        }
+        g_manyPhysical=fixture.manyClasses.data();
+        g_manyPhysicalCount=extra;
+    }
     if(mode==Mode::TwoClassesReversedPhysicalCallback ||
        mode==Mode::EarlierClassFactsChangedDuringLaterTypeKey ||
        mode==Mode::EarlierRootChangedDuringLaterTypeKey ||
@@ -1393,7 +1443,8 @@ static void Exercise(Mode mode,src::Error expectedError) {
         mode==Mode::RegisteredAotChanged ||
         mode==Mode::CrossImageInterpreter ||
         mode==Mode::CrossImageNestedArgument;
-    const size_t expectedRows=twoRows?2u:1u;
+    const size_t expectedRows=manyRoots ?
+        (mode==Mode::RootDistinct128?128u:129u):(twoRows?2u:1u);
 
     assembly_shadow_physical_membership::Scratch membership{};
     auto* owned=new rows::Rows();
@@ -1426,6 +1477,12 @@ static void Exercise(Mode mode,src::Error expectedError) {
         Check(receipt.originalV1NonRootTypeDefContentEndPassStable);
         Check(receipt.originalV1RootTypeDefContentEndPassStable);
         Check(receipt.originalV1RootTypeDefContentRecorded>=1);
+        if(mode==Mode::RootDistinct128)
+            Check(receipt.originalV1RootDistinctPreflightCapped==128 &&
+                  receipt.originalV1RootTypeDefContentRecorded==128);
+        if(mode==Mode::SharedRoot129)
+            Check(receipt.originalV1RootDistinctPreflightCapped==1 &&
+                  receipt.originalV1RootTypeDefContentRecorded==1);
         Check(receipt.originalV1RootTypeDefContentMatched==
               receipt.originalV1RootTypeDefContentRecorded);
         Check(receipt.originalV1AdmittedTypeDefPairsRecorded==
@@ -1650,6 +1707,14 @@ static void Exercise(Mode mode,src::Error expectedError) {
 #endif
     } else {
         Check(!success && receipt.error==expectedError);
+        if(mode==Mode::RootDistinct129) {
+            // The first physical pass alone establishes a necessary
+            // root-only limit overflow. No TypeKey rows or second traversal.
+            Check(receipt.originalV1RootDistinctPreflightCapped==129);
+            Check(g_physicalPasses==1);
+            Check(receipt.registered==129);
+            Check(receipt.originalV1MetadataLookups==0);
+        }
         Check(!record->Complete() && record->Data()==nullptr);
         Check(!owned->Complete() && owned->Count()==0);
         Check(!receipt.callbackPhysicalMembershipProven);
@@ -1738,6 +1803,47 @@ static void TestPackedClassFactsScratch() {
     Check(!scratch.Update(2047,value));
     Check(scratch.Insert(2047,value) && scratch.Count()==1);
     scratch.Scrub();
+
+    // Census uses a fixed 257-slot hash scratch for up to 128 distinct
+    // opaque keys. Repeated handles cannot cause a false capacity reject.
+    ++cases;++packedFactsCases;
+    for(size_t i=0;i<1024;++i) {
+        value.identity=8u*257u;
+        Check(scratch.Insert(i,value));
+    }
+    auto repeated=scratch.CountDistinctKeysCapped<128>(
+        [](const Fact& f) noexcept {return f.identity;});
+    Check(repeated.distinctCapped==1 && !repeated.overLimit &&
+          !repeated.missingKey);
+    scratch.Scrub();
+
+    ++cases;++packedFactsCases;
+    for(size_t i=0;i<128;++i) {
+        // Adversarial hash collisions: all keys initially map to bucket 0.
+        value.identity=static_cast<uintptr_t>(i+1)*8u*257u;
+        Check(scratch.Insert(i,value));
+    }
+    auto within=scratch.CountDistinctKeysCapped<128>(
+        [](const Fact& f) noexcept {return f.identity;});
+    Check(within.distinctCapped==128 && !within.overLimit &&
+          !within.missingKey);
+
+    ++cases;++packedFactsCases;
+    value.identity=static_cast<uintptr_t>(129)*8u*257u;
+    Check(scratch.Insert(128,value));
+    auto overflow=scratch.CountDistinctKeysCapped<128>(
+        [](const Fact& f) noexcept {return f.identity;});
+    Check(overflow.distinctCapped==129 && overflow.overLimit &&
+          !overflow.missingKey);
+
+    ++cases;++packedFactsCases;
+    value.identity=0;
+    Check(scratch.Update(0,value));
+    auto missing=scratch.CountDistinctKeysCapped<128>(
+        [](const Fact& f) noexcept {return f.identity;});
+    Check(missing.distinctCapped==128 && !missing.overLimit &&
+          missing.missingKey);
+    scratch.Scrub();
 }
 static void TestPhysicalImageInventoryBounds() {
     namespace physical_images=il2cpp::vm::assembly_shadow_observed_images;
@@ -1807,6 +1913,9 @@ int main(){
     g_container.type_argc=2;
     Check(assembly_shadow_metadata_lifetime::g_MetadataLifetimeGate.OpenAfterInit());
     Exercise(Mode::Good,src::Error::None);
+    Exercise(Mode::RootDistinct128,src::Error::None);
+    Exercise(Mode::RootDistinct129,src::Error::SourceOutsideBudget);
+    Exercise(Mode::SharedRoot129,src::Error::None);
     Exercise(Mode::UnicodeAssembly,src::Error::None);
     Exercise(Mode::UnicodePathVersionAssembly,src::Error::None);
     Exercise(Mode::UnicodeSupplementaryAssembly,src::Error::None);

@@ -502,6 +502,20 @@ bool AssemblyShadow::TryCaptureBoundedDefinitionExecutionLive(
            !imageInventory.Healthy() || !imageInventory.Count())
             return reject(live::Error::UnmatchedClass);
         receipt.admittedPhysicalImages=imageInventory.Count();
+        // Capacity check using only the already COPIED first-pass root
+        // handle values, before expensive TypeKey/first-owner scans.
+        // Distinct non-root TypeDefs may still exceed the shared 128 cap
+        // later, even when this necessary root-only check passes.
+        // A missing handle keeps the original second-pass error precedence.
+        // Scratch: 257 uintptr_t buckets (<=2056 B on a 64-bit ABI),
+        // transient and scrubbed inside the pure CountDistinct helper.
+        const auto rootCensus=firstPassFacts.CountDistinctKeysCapped<
+            live::kMaximumNonRootTypeDefOwnerPairs>(
+                [](const ClassFacts& f) noexcept {return f.definition;});
+        receipt.originalV1RootDistinctPreflightCapped=
+            rootCensus.distinctCapped;
+        if(rootCensus.overLimit && !rootCensus.missingKey)
+            return reject(live::Error::SourceOutsideBudget);
         // Physical iterator #2 consumes *the same* matched registry under
         // the same metadata lock. It can use the complete bounded image list
         // even if the corresponding physical class appears later in order.

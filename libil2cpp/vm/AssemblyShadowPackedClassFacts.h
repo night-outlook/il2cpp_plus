@@ -47,6 +47,47 @@ public:
         return true;
     }
     size_t Count() const noexcept {return used_;}
+    // Read-only capacity preflight for already COPIED primitive class facts.
+    // This counts distinct nonzero projected handles without dereferencing
+    // any metadata pointer. It is NOT owner authentication or a VM epoch.
+    // The fixed 2*Limit+1 open-addressed scratch lives only in this call;
+    // it is scrubbed on all exits and cannot become a persistent index.
+    struct KeyCensus {
+        size_t distinctCapped=0; // exact up to Limit, then Limit+1
+        bool missingKey=false;  // let existing row admission classify this
+        bool overLimit=false;
+    };
+    template<size_t Limit,class KeyOf>
+    KeyCensus CountDistinctKeysCapped(KeyOf keyOf) const noexcept {
+        static_assert(Limit>0 && Limit<=Capacity && Limit*2+1<=4096,
+                      "Invalid bounded root-key preflight capacity");
+        static const size_t kBuckets=Limit*2+1;
+        struct TemporaryKeys {
+            std::array<uintptr_t,kBuckets> values{};
+            ~TemporaryKeys() noexcept {values.fill(0);}
+        } seen{};
+        KeyCensus result{};
+        for(size_t i=0;i<used_;++i) {
+            const uintptr_t key=static_cast<uintptr_t>(keyOf(facts_[i]));
+            if(!key) {result.missingKey=true;continue;}
+            // Once an unavoidable overflow is observed, only check the
+            // remaining entries for missing keys so their existing first
+            // error classification is not shadowed by this preflight.
+            if(result.overLimit)continue;
+            size_t slot=(key>>3)%kBuckets;
+            for(size_t probe=0;probe<kBuckets;++probe) {
+                if(seen.values[slot]==key)break;
+                if(!seen.values[slot]) {
+                    seen.values[slot]=key;
+                    ++result.distinctCapped;
+                    if(result.distinctCapped>Limit)result.overLimit=true;
+                    break;
+                }
+                slot=(slot+1==kBuckets)?0:slot+1;
+            }
+        }
+        return result;
+    }
     void Scrub() noexcept {
         facts_.fill(Fact{});
         slotToIndexPlusOne_.fill(0);
