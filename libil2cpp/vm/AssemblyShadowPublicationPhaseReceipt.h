@@ -4,7 +4,10 @@
 // NOT wired to AssemblyShadow::CommitTransaction, the HybridCLR Runtime, or
 // Player. D2-D4 must separately review native lock/lifetime and failure policy.
 //
-// One writer owns a transaction; concurrent readers may observe Read().
+// ONE receipt per publication ATTEMPT, not one reusable receipt per transaction.
+// A proved pre-codec rejection may leave the transaction Validated, but a
+// later attempt must construct a FRESH receipt. No Reset() is intentional.
+// One writer owns each attempt; readers must finish before it is destroyed.
 // This source contains no dynamic allocation, managed VM call, logging, or
 // exception. Atomic reads publish one coherent {phase, outcome, reason} word.
 // It does NOT independently authenticate caller-provided rollback evidence.
@@ -140,7 +143,9 @@ public:
     }
 
     // Unknown outcomes, including exceptions after entering CodecAttempted,
-    // remain terminal. The first terminal reason is preserved.
+    // remain terminal. The first terminal reason is preserved *within the
+    // attempt*. Complete and RejectedBeforeCodec are absorbing; post-Complete
+    // process-wide fatal failures require the existing separate terminal guard.
     void MarkTerminal(Reason reason) noexcept
     {
         if (reason == Reason::None || reason == Reason::ProvenPreCodecRejection)
@@ -188,6 +193,14 @@ public:
     bool IsComplete() const noexcept
     {
         return Read().outcome == Outcome::Complete;
+    }
+
+    // Exposes the target-specific atomic implementation property; noexcept
+    // alone does NOT imply lock-free or bounded-time metadata publication.
+    // D2/D3 must explicitly admit or reject a non-lock-free native target.
+    bool IsLockFreeOnThisTarget() const noexcept
+    {
+        return word_.is_lock_free();
     }
 
 private:
