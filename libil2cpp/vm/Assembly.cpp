@@ -267,21 +267,46 @@ namespace vm
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
     bool Assembly::PublishShadowBatch(const AssemblyVector& assemblies,
-        bool (*tryBegin)(void*), bool (*publish)(void*), void* context)
+        bool (*tryBegin)(void*), bool (*publish)(void*),
+        void (*onAbandon)(void*), void* context)
     {
+        if (!tryBegin || !publish || !onAbandon) return false;
         os::FastAutoLock lock(&s_assemblyLock);
         s_Assemblies.reserve(s_Assemblies.size() + assemblies.size());
-        if (!tryBegin(context)) return false;
-        // From here to publish there are only reserved pointer appends/stores.
-        // A reader cannot observe half a batch or a batch with the old mapping.
-        const size_t originalSize = s_Assemblies.size();
-        for (const Il2CppAssembly* assembly : assemblies) s_Assemblies.push_back(assembly);
-        if (!publish(context))
+
+        // Constructed AFTER s_assemblyLock: on any callback exception the
+        // inner CLI registry scope unwinds first, then we release UsageLock
+        // and truncate physical entries BEFORE s_assemblyLock unwinds.
+        // In no case does this undo a committed interpreter metadata index.
+        struct ScopedPhysicalRollback
         {
-            s_Assemblies.resize(originalSize);
-            return false;
-        }
+            AssemblyVector& entries;
+            size_t previousSize;
+            void (*abandon)(void*);
+            void* context;
+            bool committed;
+
+            ScopedPhysicalRollback(AssemblyVector& list, void (*release)(void*),
+                void* opaque) noexcept
+                : entries(list), previousSize(list.size()),
+                  abandon(release), context(opaque), committed(false) {}
+
+            ~ScopedPhysicalRollback() noexcept
+            {
+                if (!committed)
+                {
+                    abandon(context); // idempotent; only an owned usage lease.
+                    entries.resize(previousSize); // shrink pre-reserved pointers.
+                }
+            }
+        } rollback(s_Assemblies, onAbandon, context);
+
+        if (!tryBegin(context)) return false;
+        // Both registries are still protected by the existing ordered locks.
+        for (const Il2CppAssembly* assembly : assemblies) s_Assemblies.push_back(assembly);
+        if (!publish(context)) return false;
         ++s_assemblyVersion;
+        rollback.committed = true;
         return true;
     }
 
