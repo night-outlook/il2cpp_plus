@@ -209,8 +209,12 @@ namespace vm
         static void PrepareInterpreterAssemblyRegistration(Il2CppAssembly* assembly);
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
         static const Il2CppAssembly* GetAotAssemblyByNamePhysical(const char* name);
+        // onAbandon is a noexcept/idempotent usage-lease cleanup callback.
+        // The inner assembly scope invokes it before its lock unwinds on
+        // normal rejection or an exceptional exit. Codec rollback is NOT implied.
         static bool PublishInterpreterAssembliesBatch(const std::vector<Il2CppAssembly*>& assemblies,
-            bool (*tryBegin)(void*), bool (*publishActive)(void*), void* context);
+            bool (*tryBegin)(void*), bool (*publishActive)(void*),
+            void (*onAbandon)(void*), void* context);
 #endif
         static const Il2CppAssembly* LoadAssemblyFromBytes(const char* assemblyBytes, size_t length, const char* rawSymbolStoreBytes, size_t rawSymbolStoreLength);
         static const Il2CppGenericMethod* FindGenericMethod(std::function<bool(const Il2CppGenericMethod*)> predic);
