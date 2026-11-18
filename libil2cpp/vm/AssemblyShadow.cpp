@@ -347,7 +347,7 @@ namespace {
     {
         while (s_usageLock.test_and_set(std::memory_order_acquire)) std::this_thread::yield();
     }
-    void UnlockUsage() { s_usageLock.clear(std::memory_order_release); }
+    void UnlockUsage() noexcept { s_usageLock.clear(std::memory_order_release); }
     struct UsageLock
     {
         UsageLock() { LockUsage(); }
@@ -698,7 +698,19 @@ namespace {
         std::vector<uint32_t> imageIndices;
         Candidate* used = nullptr;
         bool runtimePublicationFailed = false;
+        bool usageHeld = false; // only accessed under the nested assembly lock
     };
+
+    // Idempotent callback custody. Assembly::PublishShadowBatch calls this
+    // before unwinding s_assemblyLock on all non-successful exits (including
+    // an exceptional exit from a nested native publisher).
+    void ReleasePublicationUsage(void* context) noexcept
+    {
+        auto& publication = *static_cast<Publication*>(context);
+        if (!publication.usageHeld) return;
+        publication.usageHeld = false;
+        UnlockUsage();
+    }
 
     bool TryBeginPublication(void* context)
     {
@@ -706,8 +718,9 @@ namespace {
         // Called with transaction -> metadata -> assembly locks held. No hook
         // takes those locks after taking usage, so there is no reverse edge.
         LockUsage();
+        publication.usageHeld = true;
         publication.used = UsedClosureMember(*publication.transaction);
-        if (publication.used) { UnlockUsage(); return false; }
+        if (publication.used) { ReleasePublicationUsage(context); return false; }
         return true; // Keep the short lock through the release-store below.
     }
 
@@ -717,13 +730,13 @@ namespace {
         if (!InterpreterAssembly::PublishStagedImagesBatch(publication.imageIndices))
         {
             publication.runtimePublicationFailed = true;
-            UnlockUsage();
+            ReleasePublicationUsage(context);
             return false;
         }
         for (const auto& member : publication.transaction->closure)
             member.staged->published = true;
         s_active.store(publication.snapshot, std::memory_order_release);
-        UnlockUsage();
+        ReleasePublicationUsage(context);
         return true;
     }
 
@@ -1239,8 +1252,40 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
         publication.imageIndices.push_back(member.staged->interpreterImage
             ? member.staged->interpreterImage->GetIndex() : 0);
     s_state.store(AssemblyShadowState::Committing, std::memory_order_release);
-    if (!MetadataCache::PublishInterpreterAssembliesBatch(assemblies, TryBeginPublication, PublishActive, &publication))
+    // A boolean publication refusal is distinct from an exceptional exit.
+    // The nested registry scopes first release UsageLock and restore vectors;
+    // only then does this no-throw guard mark the process terminal on unwind.
+    // It does NOT certify rollback of a Codec publication attempt (D3).
+    bool published = false;
     {
+        struct ScopedUnexpectedPublicationExit
+        {
+            bool returned;
+            ScopedUnexpectedPublicationExit() noexcept : returned(false) {}
+            ~ScopedUnexpectedPublicationExit() noexcept
+            {
+                if (returned) return;
+                static const char reason[] =
+                    "Unexpected native assembly publication exit; restart required.";
+                s_firstFailureV2.TryFreeze(
+                    static_cast<int32_t>(AssemblyShadowError::InternalError),
+                    assembly_shadow_first_failure_v2::Origin::UnexpectedFailure,
+                    reason, sizeof(reason) - 1);
+                s_unexpectedFailure.store(true, std::memory_order_release);
+                s_state.store(s_active.load(std::memory_order_acquire) ?
+                    AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
+                    std::memory_order_release);
+            }
+        } exceptionalExit;
+        published = MetadataCache::PublishInterpreterAssembliesBatch(
+            assemblies, TryBeginPublication, PublishActive,
+            ReleasePublicationUsage, &publication);
+        exceptionalExit.returned = true;
+    }
+    if (!published)
+    {
+        // D3 must replace this legacy normal-return classification with
+        // a receipt authenticated before the actual Codec attempt.
         s_state.store(AssemblyShadowState::Validated, std::memory_order_release);
         return publication.runtimePublicationFailed
             ? Result(transaction, AssemblyShadowError::InternalError, "Sparse metadata publication failed before activation.")
