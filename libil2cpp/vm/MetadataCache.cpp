@@ -1111,6 +1111,7 @@ namespace
         const std::vector<Il2CppAssembly*>* assemblies;
         bool (*tryBegin)(void*);
         bool (*publishActive)(void*);
+        void (*onAbandon)(void*);
         void* context;
     };
 
@@ -1120,30 +1121,54 @@ namespace
         return publication->tryBegin(publication->context);
     }
 
+    // Called by the physical registry's rollback scope while it still owns
+    // s_assemblyLock (and the outer caller still owns g_MetadataLock).
+    void AbandonShadowPublication(void* opaque) noexcept
+    {
+        auto* publication = static_cast<ShadowPublicationContext*>(opaque);
+        publication->onAbandon(publication->context);
+    }
+
     bool PublishShadowRegistries(void* opaque)
     {
         auto* publication = static_cast<ShadowPublicationContext*>(opaque);
-        const size_t originalSize = s_cliAssemblies.size();
+        // Owns the CLI vector rollback even when push_back or publishActive
+        // unwinds exceptionally. Do not classify this as Codec rollback.
+        struct ScopedCliRollback
+        {
+            size_t previousSize;
+            bool committed;
+            explicit ScopedCliRollback(size_t original) noexcept
+                : previousSize(original), committed(false) {}
+            ~ScopedCliRollback() noexcept
+            {
+                if (!committed)
+                    s_cliAssemblies.resize_uninitialized(previousSize);
+            }
+        } rollback(s_cliAssemblies.size());
+
         for (Il2CppAssembly* assembly : *publication->assemblies) s_cliAssemblies.push_back(assembly);
         if (!publication->publishActive(publication->context))
-        {
-            s_cliAssemblies.resize_uninitialized(originalSize);
             return false;
-        }
+        rollback.committed = true;
         return true;
     }
 }
 
 bool il2cpp::vm::MetadataCache::PublishInterpreterAssembliesBatch(
     const std::vector<Il2CppAssembly*>& assemblies,
-    bool (*tryBegin)(void*), bool (*publishActive)(void*), void* context)
+    bool (*tryBegin)(void*), bool (*publishActive)(void*),
+    void (*onAbandon)(void*), void* context)
 {
+    if (!tryBegin || !publishActive || !onAbandon) return false;
     il2cpp::os::FastAutoLock lock(&il2cpp::vm::g_MetadataLock);
     s_cliAssemblies.reserve(s_cliAssemblies.size() + assemblies.size());
     il2cpp::vm::AssemblyVector physical(assemblies.begin(), assemblies.end());
-    ShadowPublicationContext publication{ &assemblies, tryBegin, publishActive, context };
+    ShadowPublicationContext publication{ &assemblies, tryBegin, publishActive,
+        onAbandon, context };
     return il2cpp::vm::Assembly::PublishShadowBatch(physical,
-        BeginShadowPublication, PublishShadowRegistries, &publication);
+        BeginShadowPublication, PublishShadowRegistries,
+        AbandonShadowPublication, &publication);
 }
 #endif
 
