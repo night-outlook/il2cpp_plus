@@ -42,11 +42,14 @@ namespace vm
         static const Il2CppAssembly* GetLoadedAssemblyPhysical(const char* name,
             PhysicalAssemblyPreference preference = PhysicalAssemblyPreference::AnyNewest);
         static const Il2CppAssembly* LoadOriginal(const char* name);
-        // Caller owns transaction -> metadata locks. Both callbacks are native,
-        // nonthrowing and must not allocate or enter managed code. Storage is
-        // reserved before tryBegin; publication and version bump share one lock.
+        // Caller owns transaction -> metadata locks. Storage is reserved
+        // before tryBegin; publication and version bump share the assembly lock.
+        // onAbandon MUST be noexcept and idempotent. It releases the usage lease
+        // before s_assemblyLock unwinds on a false return or C++ exception.
+        // Registry cleanup does NOT prove the HybridCLR Codec was rolled back.
         static bool PublishShadowBatch(const AssemblyVector& assemblies,
-            bool (*tryBegin)(void*), bool (*publish)(void*), void* context);
+            bool (*tryBegin)(void*), bool (*publish)(void*),
+            void (*onAbandon)(void*), void* context);
         static uint64_t CaptureShadowEnumeration(AssemblyVector& assemblies);
         // R03 B2 INACTIVE: synchronously visit the ORIGINAL registered AOT
         // physical image table under s_assemblyLock. The caller MUST hold
