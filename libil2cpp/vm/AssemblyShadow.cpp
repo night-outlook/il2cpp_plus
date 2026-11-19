@@ -26,6 +26,7 @@
 #include "AssemblyShadowFirstFailureV2.h"
 #include "AssemblyShadowPublicationPhaseReceipt.h"
 #include "AssemblyShadowPublicationD3Decision.h"
+#include "AssemblyShadowProcessSnapshotOwner.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -131,6 +132,9 @@ namespace {
 
     struct Transaction
     {
+        // Current() heap-allocates Transaction once and deliberately never
+        // destroys it: this owner outlives every native active-snapshot reader.
+        assembly_shadow_publication::ProcessSnapshotOwner<ActiveSnapshot> activeOwner;
         std::mutex mutex;
         std::thread::id owner;
         std::string baselineBuildId;
@@ -707,6 +711,7 @@ namespace {
     {
         Transaction* transaction;
         ActiveSnapshot* snapshot;
+        std::unique_ptr<ActiveSnapshot>* pendingSnapshot = nullptr;
         assembly_shadow_publication::PublicationPhaseReceipt* phaseReceipt = nullptr;
         std::vector<uint32_t> imageIndices;
         Candidate* used = nullptr;
@@ -834,13 +839,74 @@ namespace {
         }
         for (const auto& member : publication.transaction->closure)
             member.staged->published = true;
-        s_active.store(publication.snapshot, std::memory_order_release);
-        // No throw is possible between the active store and this owned
-        // success designation; D4 separately owns snapshot lifetime transfer.
+        // The process-lifetime Transaction becomes the real owner BEFORE the
+        // release-store. Both actions are noexcept; a failed precondition does
+        // not move pending ownership or publish a pointer. D2 rollback on a
+        // later failure never claims to reverse an already-published Codec.
+        if (!publication.pendingSnapshot ||
+            publication.pendingSnapshot->get() != publication.snapshot ||
+            !publication.transaction->activeOwner.TryPublish(
+                *publication.pendingSnapshot, s_active))
+        {
+            publication.runtimePublicationFailed = true;
+            publication.normalFailure = true;
+            ReleasePublicationUsage(context);
+            return false;
+        }
+        // P5 witnesses the actual public pointer store, not just a promise
+        // to publish. Failure now is terminal with a process-owned snapshot.
+        if (!publication.phaseReceipt->Advance(
+                assembly_shadow_publication::Phase::ActiveSnapshotPublished))
+        {
+            publication.runtimePublicationFailed = true;
+            publication.normalFailure = true;
+            ReleasePublicationUsage(context);
+            return false;
+        }
         publication.leaseExit = PublicationLeaseExit::ActivePublished;
         ReleasePublicationUsage(context);
         return true;
     }
+
+    // Every unexpected exit after public snapshot activation is process
+    // terminal. The guard is armed before diagnostics and module initializers
+    // can allocate or throw; handled failures explicitly disarm only after
+    // their original Result() has completed. Never destroys the snapshot.
+    struct ScopedPostActiveExit
+    {
+        assembly_shadow_publication::PublicationPhaseReceipt* phaseReceipt;
+        bool handled = false;
+        explicit ScopedPostActiveExit(
+            assembly_shadow_publication::PublicationPhaseReceipt& receipt) noexcept
+            : phaseReceipt(&receipt) {}
+        ScopedPostActiveExit(const ScopedPostActiveExit&) = delete;
+        ScopedPostActiveExit& operator=(const ScopedPostActiveExit&) = delete;
+
+        void Seal(assembly_shadow_publication::Reason phaseReason) noexcept
+        {
+            if (handled) return;
+            phaseReceipt->MarkTerminal(phaseReason);
+            static const char reason[] =
+                "Unexpected post-active publication exit; restart required.";
+            s_firstFailureV2.TryFreeze(
+                static_cast<int32_t>(AssemblyShadowError::InternalError),
+                assembly_shadow_first_failure_v2::Origin::UnexpectedFailure,
+                reason, sizeof(reason) - 1);
+            s_unexpectedFailure.store(true, std::memory_order_release);
+            s_state.store(AssemblyShadowState::FailedAfterCommit,
+                std::memory_order_release);
+            handled = true;
+        }
+
+        ~ScopedPostActiveExit() noexcept
+        {
+            if (handled) return;
+            Seal(phaseReceipt->Read().phase >=
+                    assembly_shadow_publication::Phase::InitializersRunning
+                ? assembly_shadow_publication::Reason::InitializerFailure
+                : assembly_shadow_publication::Reason::NativePublicationFailure);
+        }
+    };
 
     void CopyDetail(char* destination, size_t capacity, const char* source)
     {
@@ -1352,6 +1418,7 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
     Publication publication;
     publication.transaction = &transaction;
     publication.snapshot = snapshot.get();
+    publication.pendingSnapshot = &snapshot;
     publication.phaseReceipt = &publicationPhase;
     publication.imageIndices.reserve(transaction.closure.size());
     for (const auto& member : transaction.closure)
@@ -1359,18 +1426,22 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
             ? member.staged->interpreterImage->GetIndex() : 0);
     s_state.store(AssemblyShadowState::Committing, std::memory_order_release);
     // A boolean publication refusal is distinct from an exceptional exit.
-    // The nested registry scopes first release UsageLock and restore vectors;
-    // only then does this no-throw guard mark the process terminal on unwind.
-    // It does NOT certify rollback of a Codec publication attempt (D3).
+    // D3 seals any unknown lease while it is STILL held, before the D2
+    // registry scopes unwind. This guard additionally covers exceptional
+    // exits after the active snapshot has been published and usage released.
     bool published = false;
     {
         struct ScopedUnexpectedPublicationExit
         {
             bool returned;
-            ScopedUnexpectedPublicationExit() noexcept : returned(false) {}
+            assembly_shadow_publication::PublicationPhaseReceipt& phase;
+            explicit ScopedUnexpectedPublicationExit(
+                assembly_shadow_publication::PublicationPhaseReceipt& receipt) noexcept
+                : returned(false), phase(receipt) {}
             ~ScopedUnexpectedPublicationExit() noexcept
             {
                 if (returned) return;
+                phase.MarkTerminal(assembly_shadow_publication::Reason::NativePublicationFailure);
                 static const char reason[] =
                     "Unexpected native assembly publication exit; restart required.";
                 s_firstFailureV2.TryFreeze(
@@ -1382,7 +1453,7 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
                     AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
                     std::memory_order_release);
             }
-        } exceptionalExit;
+        } exceptionalExit(publicationPhase);
         published = MetadataCache::PublishInterpreterAssembliesBatch(
             assemblies, TryBeginPublication, PublishActive,
             ReleasePublicationUsage, &publication);
@@ -1414,9 +1485,30 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
             std::memory_order_release);
         return Result(transaction, AssemblyShadowError::InternalError, reason);
     }
-    snapshot.release(); // Immutable active mapping is process-lifetime.
+    // PublishActive has already moved the unique_ptr into Transaction's
+    // never-destroyed process-lifetime owner BEFORE release-storing s_active.
+    // There is no later release() or dangling local snapshot on an exception.
+    ScopedPostActiveExit postActiveExit(publicationPhase);
+    if (publicationPhase.Read().phase !=
+            assembly_shadow_publication::Phase::ActiveSnapshotPublished ||
+        publicationPhase.Read().outcome !=
+            assembly_shadow_publication::Outcome::InProgress ||
+        transaction.activeOwner.get() != s_active.load(std::memory_order_acquire))
+    {
+        postActiveExit.Seal(assembly_shadow_publication::Reason::SnapshotOwnershipUnverified);
+        return Result(transaction, AssemblyShadowError::InternalError,
+            "Post-active snapshot ownership or phase witness is invalid; restart required.");
+    }
     Event(transaction, "active-published");
-    // This is the managed-execution boundary. Do not move initializers above it.
+    // P6 is recorded immediately before dropping the transaction lock and
+    // allowing managed initializer execution; no managed code runs at P5.
+    if (!publicationPhase.Advance(
+            assembly_shadow_publication::Phase::InitializersRunning))
+    {
+        postActiveExit.Seal(assembly_shadow_publication::Reason::InvalidPhaseTransition);
+        return Result(transaction, AssemblyShadowError::InternalError,
+            "Initializer phase transition failed after active publication; restart required.");
+    }
     lock.unlock();
     for (const auto& member : transaction.closure)
     {
@@ -1426,9 +1518,13 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
             lock.lock();
             s_state.store(AssemblyShadowState::FailedAfterCommit, std::memory_order_release);
             const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
-            return Result(transaction, failure ? failure->error : (s_referenceViolation.load() ?
-                AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::BaselineAlreadyUsed),
+            publicationPhase.MarkTerminal(assembly_shadow_publication::Reason::NativePublicationFailure);
+            const auto outcome = Result(transaction,
+                failure ? failure->error : (s_referenceViolation.load() ?
+                    AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::BaselineAlreadyUsed),
                 failure ? failure->detail : "A guarded failure raced activation; restart is required.");
+            postActiveExit.handled = true;
+            return outcome;
         }
         {
             std::lock_guard<std::mutex> record(transaction.mutex);
@@ -1443,9 +1539,13 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
                 s_state.store(AssemblyShadowState::FailedAfterCommit, std::memory_order_release);
                 Event(transaction, "initializer-failed", member.candidate->name);
                 const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
-                return Result(transaction, failure ? failure->error : (s_referenceViolation.load(std::memory_order_acquire) ?
-                    AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::ModuleInitializerFailed),
+                publicationPhase.MarkTerminal(assembly_shadow_publication::Reason::InitializerFailure);
+                const auto outcome = Result(transaction,
+                    failure ? failure->error : (s_referenceViolation.load(std::memory_order_acquire) ?
+                        AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::ModuleInitializerFailed),
                     failure ? failure->detail : detail);
+                postActiveExit.handled = true;
+                return outcome;
             }
             transaction.commitOrder.push_back(member.candidate->name);
             Event(transaction, "initializer-complete", member.candidate->name);
@@ -1456,12 +1556,26 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
     if (!s_state.compare_exchange_strong(expected, AssemblyShadowState::Committed, std::memory_order_acq_rel))
     {
         const TypeFailure* failure = s_typeFailure.load(std::memory_order_acquire);
-        return Result(transaction, failure ? failure->error : (s_referenceViolation.load(std::memory_order_acquire) ?
-            AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::BaselineAlreadyUsed),
+        publicationPhase.MarkTerminal(assembly_shadow_publication::Reason::InitializerFailure);
+        const auto outcome = Result(transaction,
+            failure ? failure->error : (s_referenceViolation.load(std::memory_order_acquire) ?
+                AssemblyShadowError::ReferenceEscapesClosure : AssemblyShadowError::BaselineAlreadyUsed),
             failure ? failure->detail : "A guarded failure raced initializers; restart is required.");
+        postActiveExit.handled = true;
+        return outcome;
     }
     Event(transaction, "transaction-committed");
-    return Result(transaction, AssemblyShadowError::Success);
+    const auto outcome = Result(transaction, AssemblyShadowError::Success);
+    // Only the completed, committed initializer path seals a successful
+    // attempt. An invalid transition cannot return a misleading success.
+    if (!publicationPhase.Complete())
+    {
+        postActiveExit.Seal(assembly_shadow_publication::Reason::InvalidPhaseTransition);
+        return Result(transaction, AssemblyShadowError::InternalError,
+            "Publication receipt could not complete; restart required.");
+    }
+    postActiveExit.handled = true;
+    return outcome;
 }
 
 AssemblyShadowError AssemblyShadow::AbortTransaction()
