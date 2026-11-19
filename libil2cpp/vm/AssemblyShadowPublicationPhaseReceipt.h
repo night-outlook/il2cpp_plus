@@ -1,8 +1,9 @@
 #pragma once
 
-// R03 B2 / D1: inert publication phase-receipt contract.
-// NOT wired to AssemblyShadow::CommitTransaction, the HybridCLR Runtime, or
-// Player. D2-D4 must separately review native lock/lifetime and failure policy.
+// R03 B2 D1–D4: bounded, synchronous publication phase receipt.
+// D3 wires P1–P4 into the actual Runtime/Codec/native chain; D4 wires P5/P6
+// and success completion. This is not full Unity/IL2CPP Player acceptance.
+// Native lock/lifetime and first-error behavior require independent review.
 //
 // ONE receipt per publication ATTEMPT, not one reusable receipt per transaction.
 // A proved pre-codec rejection may leave the transaction Validated, but a
