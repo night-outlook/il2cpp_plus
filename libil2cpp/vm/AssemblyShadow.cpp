@@ -24,6 +24,7 @@
 #include "AssemblyShadowObservedTypeShapeCensus.h"
 #include "AssemblyShadowObservedTypeShapeJson.h"
 #include "AssemblyShadowFirstFailureV2.h"
+#include "AssemblyShadowPublicationPhaseReceipt.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -695,11 +696,29 @@ namespace {
     {
         Transaction* transaction;
         ActiveSnapshot* snapshot;
+        assembly_shadow_publication::PublicationPhaseReceipt* phaseReceipt = nullptr;
         std::vector<uint32_t> imageIndices;
         Candidate* used = nullptr;
         bool runtimePublicationFailed = false;
         bool usageHeld = false; // only accessed under the nested assembly lock
     };
+
+    // Executed synchronously by the actual HybridCLR Runtime at the exact
+    // boundary before Codec::PublishBatch and after group.active.store.
+    // No metadata/transaction lock acquisition, allocation or managed code.
+    bool ObserveCodecAttempt(void* context) noexcept
+    {
+        auto& publication = *static_cast<Publication*>(context);
+        return publication.phaseReceipt && publication.phaseReceipt->Advance(
+            assembly_shadow_publication::Phase::CodecAttempted);
+    }
+
+    bool ObserveRuntimeGroupPublished(void* context) noexcept
+    {
+        auto& publication = *static_cast<Publication*>(context);
+        return publication.phaseReceipt && publication.phaseReceipt->Advance(
+            assembly_shadow_publication::Phase::RuntimeGroupPublished);
+    }
 
     // Idempotent callback custody. Assembly::PublishShadowBatch calls this
     // before unwinding s_assemblyLock on all non-successful exits (including
@@ -721,13 +740,34 @@ namespace {
         publication.usageHeld = true;
         publication.used = UsedClosureMember(*publication.transaction);
         if (publication.used) { ReleasePublicationUsage(context); return false; }
+        if (!publication.phaseReceipt || !publication.phaseReceipt->Advance(
+                assembly_shadow_publication::Phase::UsageAdmitted))
+        {
+            ReleasePublicationUsage(context);
+            return false;
+        }
         return true; // Keep the short lock through the release-store below.
     }
 
     bool PublishActive(void* context)
     {
         auto& publication = *static_cast<Publication*>(context);
-        if (!InterpreterAssembly::PublishStagedImagesBatch(publication.imageIndices))
+        // Called only after BOTH registries were appended under their locks.
+        if (!publication.phaseReceipt || !publication.phaseReceipt->Advance(
+                assembly_shadow_publication::Phase::RegistriesAppended))
+        {
+            publication.runtimePublicationFailed = true;
+            ReleasePublicationUsage(context);
+            return false;
+        }
+        hybridclr::metadata::InterpreterMetadataIndexRuntime::PublicationObserver observer = {
+            ObserveCodecAttempt, ObserveRuntimeGroupPublished, context
+        };
+        if (!InterpreterAssembly::PublishStagedImagesBatch(publication.imageIndices, &observer) ||
+            publication.phaseReceipt->Read().phase !=
+                assembly_shadow_publication::Phase::RuntimeGroupPublished ||
+            publication.phaseReceipt->Read().outcome !=
+                assembly_shadow_publication::Outcome::InProgress)
         {
             publication.runtimePublicationFailed = true;
             ReleasePublicationUsage(context);
@@ -1244,9 +1284,13 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
         snapshot->shadowToBaseline.emplace(shadow, baseline);
         assemblies.push_back(shadow);
     }
+    // Fresh D1 receipt for THIS publication attempt. D3 records P0-P4;
+    // D4 separately owns the P5/P6 active-snapshot lifetime completion.
+    assembly_shadow_publication::PublicationPhaseReceipt publicationPhase;
     Publication publication;
     publication.transaction = &transaction;
     publication.snapshot = snapshot.get();
+    publication.phaseReceipt = &publicationPhase;
     publication.imageIndices.reserve(transaction.closure.size());
     for (const auto& member : transaction.closure)
         publication.imageIndices.push_back(member.staged->interpreterImage
@@ -1284,13 +1328,45 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
     }
     if (!published)
     {
-        // D3 must replace this legacy normal-return classification with
-        // a receipt authenticated before the actual Codec attempt.
-        s_state.store(AssemblyShadowState::Validated, std::memory_order_release);
-        return publication.runtimePublicationFailed
-            ? Result(transaction, AssemblyShadowError::InternalError, "Sparse metadata publication failed before activation.")
-            : Result(transaction, AssemblyShadowError::BaselineAlreadyUsed,
-                publication.used ? publication.used->name : "Candidate use changed before publication.");
+        const auto observed = publicationPhase.Read();
+        // The only permitted retryable refusal is the exact used-closure
+        // branch BEFORE registry appends, with UsageLock already released by
+        // the idempotent callback. No Codec entry is possible in that branch.
+        // All other normal false returns fail closed, including failures
+        // that a Runtime precheck may have rejected before the Codec itself.
+        if (publication.used &&
+            observed.phase == assembly_shadow_publication::Phase::Prepared &&
+            observed.outcome == assembly_shadow_publication::Outcome::InProgress &&
+            !publication.usageHeld && !publication.runtimePublicationFailed)
+        {
+            const assembly_shadow_publication::PreCodecCleanupProof proof = {
+                true, true, true, true // no registry append, no Codec, usage released
+            };
+            if (publicationPhase.RejectBeforeCodec(proof))
+            {
+                s_state.store(AssemblyShadowState::Validated, std::memory_order_release);
+                return Result(transaction, AssemblyShadowError::BaselineAlreadyUsed,
+                    publication.used->name);
+            }
+        }
+
+        const bool codecAttempted =
+            static_cast<uint8_t>(observed.phase) >=
+            static_cast<uint8_t>(assembly_shadow_publication::Phase::CodecAttempted);
+        publicationPhase.MarkTerminal(codecAttempted
+            ? assembly_shadow_publication::Reason::CodecOutcomeUnknown
+            : assembly_shadow_publication::Reason::MissingCleanupProof);
+        static const char reason[] =
+            "Native publication rejected without proven pre-Codec cleanup; restart required.";
+        s_firstFailureV2.TryFreeze(
+            static_cast<int32_t>(AssemblyShadowError::InternalError),
+            assembly_shadow_first_failure_v2::Origin::TransactionTerminal,
+            reason, sizeof(reason) - 1);
+        s_unexpectedFailure.store(true, std::memory_order_release);
+        s_state.store(s_active.load(std::memory_order_acquire) ?
+            AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
+            std::memory_order_release);
+        return Result(transaction, AssemblyShadowError::InternalError, reason);
     }
     snapshot.release(); // Immutable active mapping is process-lifetime.
     Event(transaction, "active-published");
