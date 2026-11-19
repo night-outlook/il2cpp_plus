@@ -25,6 +25,7 @@
 #include "AssemblyShadowObservedTypeShapeJson.h"
 #include "AssemblyShadowFirstFailureV2.h"
 #include "AssemblyShadowPublicationPhaseReceipt.h"
+#include "AssemblyShadowPublicationD3Decision.h"
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -1328,34 +1329,18 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
     }
     if (!published)
     {
-        const auto observed = publicationPhase.Read();
-        // The only permitted retryable refusal is the exact used-closure
-        // branch BEFORE registry appends, with UsageLock already released by
-        // the idempotent callback. No Codec entry is possible in that branch.
-        // All other normal false returns fail closed, including failures
-        // that a Runtime precheck may have rejected before the Codec itself.
-        if (publication.used &&
-            observed.phase == assembly_shadow_publication::Phase::Prepared &&
-            observed.outcome == assembly_shadow_publication::Outcome::InProgress &&
-            !publication.usageHeld && !publication.runtimePublicationFailed)
+        // Actual callback outcome is interpreted by the same C++11 helper
+        // compiled by the D3 source-host tests. The only permitted return to
+        // Validated is a used-closure rejection before any registry mutation.
+        if (assembly_shadow_publication::ClassifyFailedNativeBatch(
+                publicationPhase, publication.used != nullptr,
+                publication.usageHeld, publication.runtimePublicationFailed) ==
+            assembly_shadow_publication::D3Disposition::ProvenUsedRejection)
         {
-            const assembly_shadow_publication::PreCodecCleanupProof proof = {
-                true, true, true, true // no registry append, no Codec, usage released
-            };
-            if (publicationPhase.RejectBeforeCodec(proof))
-            {
-                s_state.store(AssemblyShadowState::Validated, std::memory_order_release);
-                return Result(transaction, AssemblyShadowError::BaselineAlreadyUsed,
-                    publication.used->name);
-            }
+            s_state.store(AssemblyShadowState::Validated, std::memory_order_release);
+            return Result(transaction, AssemblyShadowError::BaselineAlreadyUsed,
+                publication.used->name);
         }
-
-        const bool codecAttempted =
-            static_cast<uint8_t>(observed.phase) >=
-            static_cast<uint8_t>(assembly_shadow_publication::Phase::CodecAttempted);
-        publicationPhase.MarkTerminal(codecAttempted
-            ? assembly_shadow_publication::Reason::CodecOutcomeUnknown
-            : assembly_shadow_publication::Reason::MissingCleanupProof);
         static const char reason[] =
             "Native publication rejected without proven pre-Codec cleanup; restart required.";
         s_firstFailureV2.TryFreeze(
