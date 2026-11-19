@@ -693,6 +693,16 @@ namespace {
         return CheckExternalReferences(transaction, registry);
     }
 
+    // This record belongs to a single synchronous publication attempt.
+    // Only the two exact source-backed nonfailure branches may release usage
+    // without a terminal marker. Unknown includes native exceptional exits.
+    enum class PublicationLeaseExit : uint8_t
+    {
+        Unknown = 0,
+        UsedBeforeAppend = 1,
+        ActivePublished = 2
+    };
+
     struct Publication
     {
         Transaction* transaction;
@@ -702,6 +712,8 @@ namespace {
         Candidate* used = nullptr;
         bool runtimePublicationFailed = false;
         bool usageHeld = false; // only accessed under the nested assembly lock
+        PublicationLeaseExit leaseExit = PublicationLeaseExit::Unknown;
+        bool normalFailure = false; // distinguishes an ordinary false from unwind
     };
 
     // Executed synchronously by the actual HybridCLR Runtime at the exact
@@ -721,13 +733,50 @@ namespace {
             assembly_shadow_publication::Phase::RuntimeGroupPublished);
     }
 
-    // Idempotent callback custody. Assembly::PublishShadowBatch calls this
-    // before unwinding s_assemblyLock on all non-successful exits (including
-    // an exceptional exit from a nested native publisher).
+    // The terminal intent must be release-visible BEFORE UsageLock becomes
+    // available to a concurrent baseline-method guard. FirstErrorV2, the
+    // D1 receipt and atomic flags are fixed-storage, noexcept operations;
+    // never allocate, run managed code or acquire a new lock in this scope.
+    void SealFailedPublicationBeforeUsageUnlock(Publication& publication) noexcept
+    {
+        if (publication.phaseReceipt)
+        {
+            const auto observed = publication.phaseReceipt->Read();
+            publication.phaseReceipt->MarkTerminal(
+                static_cast<uint8_t>(observed.phase) >=
+                    static_cast<uint8_t>(assembly_shadow_publication::Phase::CodecAttempted)
+                    ? assembly_shadow_publication::Reason::CodecOutcomeUnknown
+                    : assembly_shadow_publication::Reason::MissingCleanupProof);
+        }
+        static const char normalReason[] =
+            "Native publication rejected before UsageLock release; restart required.";
+        static const char unexpectedReason[] =
+            "Unexpected native publication exit before UsageLock release; restart required.";
+        const char* reason = publication.normalFailure ? normalReason : unexpectedReason;
+        const size_t size = publication.normalFailure
+            ? sizeof(normalReason) - 1 : sizeof(unexpectedReason) - 1;
+        s_firstFailureV2.TryFreeze(
+            static_cast<int32_t>(AssemblyShadowError::InternalError),
+            publication.normalFailure
+                ? assembly_shadow_first_failure_v2::Origin::TransactionTerminal
+                : assembly_shadow_first_failure_v2::Origin::UnexpectedFailure,
+            reason, size);
+        s_unexpectedFailure.store(true, std::memory_order_release);
+        s_state.store(s_active.load(std::memory_order_acquire)
+            ? AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
+            std::memory_order_release);
+    }
+
+    // Idempotent cross-callback custody. On every unproven failure this
+    // callback seals the process while it STILL owns UsageLock, then releases
+    // the lease before the native assembly and metadata locks unwind.
+    // The D2 rollback scopes call it again after normal false returns.
     void ReleasePublicationUsage(void* context) noexcept
     {
         auto& publication = *static_cast<Publication*>(context);
         if (!publication.usageHeld) return;
+        if (publication.leaseExit == PublicationLeaseExit::Unknown)
+            SealFailedPublicationBeforeUsageUnlock(publication);
         publication.usageHeld = false;
         UnlockUsage();
     }
@@ -740,10 +789,17 @@ namespace {
         LockUsage();
         publication.usageHeld = true;
         publication.used = UsedClosureMember(*publication.transaction);
-        if (publication.used) { ReleasePublicationUsage(context); return false; }
+        if (publication.used)
+        {
+            // Directly witnessed while usage is held, before any append.
+            publication.leaseExit = PublicationLeaseExit::UsedBeforeAppend;
+            ReleasePublicationUsage(context);
+            return false;
+        }
         if (!publication.phaseReceipt || !publication.phaseReceipt->Advance(
                 assembly_shadow_publication::Phase::UsageAdmitted))
         {
+            publication.normalFailure = true;
             ReleasePublicationUsage(context);
             return false;
         }
@@ -758,6 +814,7 @@ namespace {
                 assembly_shadow_publication::Phase::RegistriesAppended))
         {
             publication.runtimePublicationFailed = true;
+            publication.normalFailure = true;
             ReleasePublicationUsage(context);
             return false;
         }
@@ -771,12 +828,16 @@ namespace {
                 assembly_shadow_publication::Outcome::InProgress)
         {
             publication.runtimePublicationFailed = true;
+            publication.normalFailure = true;
             ReleasePublicationUsage(context);
             return false;
         }
         for (const auto& member : publication.transaction->closure)
             member.staged->published = true;
         s_active.store(publication.snapshot, std::memory_order_release);
+        // No throw is possible between the active store and this owned
+        // success designation; D4 separately owns snapshot lifetime transfer.
+        publication.leaseExit = PublicationLeaseExit::ActivePublished;
         ReleasePublicationUsage(context);
         return true;
     }
