@@ -1412,8 +1412,8 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
         snapshot->shadowToBaseline.emplace(shadow, baseline);
         assemblies.push_back(shadow);
     }
-    // Fresh D1 receipt for THIS publication attempt. D3 records P0-P4;
-    // D4 separately owns the P5/P6 active-snapshot lifetime completion.
+    // Fresh D1 receipt for THIS publication attempt: D3 witnesses P1-P4,
+    // D4 witnesses P5/P6 and seals success only after initializers return.
     assembly_shadow_publication::PublicationPhaseReceipt publicationPhase;
     Publication publication;
     publication.transaction = &transaction;
