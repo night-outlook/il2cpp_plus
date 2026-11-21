@@ -1,0 +1,4 @@
+D5-B test-only window feature GitHub Connector write smoke
+Repository: night-outlook/il2cpp_plus
+Base: 3e3d2ab9c0f7cd68f0a98c6f6677a4ab0e64a699
+Disposable: codex/smoke-d5b-window-20261120-il2cpp_plus-b01
