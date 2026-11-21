@@ -27,6 +27,11 @@
 #include "AssemblyShadowPublicationPhaseReceipt.h"
 #include "AssemblyShadowPublicationD3Decision.h"
 #include "AssemblyShadowProcessSnapshotOwner.h"
+// Experimental D5 C10-only observability. Default and feature-OFF
+// builds do not reference any probe code or change method admission.
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+#include "AssemblyShadowD5WindowProbe.h"
+#endif
 
 #if HYBRIDCLR_ENABLE_ASSEMBLY_SHADOW
 #include "AssemblyShadowMetadataLifetime.h"
@@ -1500,6 +1505,30 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
             "Post-active snapshot ownership or phase witness is invalid; restart required.");
     }
     Event(transaction, "active-published");
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+    // Test-only P5→P6 witness, never enabled in production. The P5/Codec
+    // publication scopes have already released metadata, assembly and usage
+    // locks. Briefly drop the transaction lock too while the bounded test
+    // observation window is open, then restore normal P6 sequencing.
+    // This widens the window under test and is NOT production timing proof.
+    auto& d5Window = assembly_shadow_d5::WindowProbe::Instance();
+    d5Window.AtP5();
+    if (d5Window.Read().phase ==
+            static_cast<int32_t>(assembly_shadow_d5::WindowPhase::AtP5))
+    {
+        lock.unlock();
+        d5Window.HoldP5Bounded(); // <= 2000ms; no VM, locks or callbacks.
+        lock.lock();
+        if (s_state.load(std::memory_order_acquire) !=
+                AssemblyShadowState::Committing)
+        {
+            postActiveExit.Seal(
+                assembly_shadow_publication::Reason::NativePublicationFailure);
+            return Result(transaction, AssemblyShadowError::InternalError,
+                "D5 window observed an unexpected terminal publication state.");
+        }
+    }
+#endif
     // P6 is recorded immediately before dropping the transaction lock and
     // allowing managed initializer execution; no managed code runs at P5.
     if (!publicationPhase.Advance(
@@ -1509,6 +1538,9 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
         return Result(transaction, AssemblyShadowError::InternalError,
             "Initializer phase transition failed after active publication; restart required.");
     }
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+    assembly_shadow_d5::WindowProbe::Instance().AtP6();
+#endif
     lock.unlock();
     for (const auto& member : transaction.closure)
     {
@@ -1575,6 +1607,9 @@ AssemblyShadowError AssemblyShadow::CommitTransaction()
             "Publication receipt could not complete; restart required.");
     }
     postActiveExit.handled = true;
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+    assembly_shadow_d5::WindowProbe::Instance().Complete();
+#endif
     return outcome;
 }
 
@@ -2289,6 +2324,11 @@ void AssemblyShadow::RecordBaselineUse(const Il2CppAssembly* assembly, BaselineU
 bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* site) noexcept
 {
     s_methodChecks.fetch_add(1, std::memory_order_relaxed);
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+    const int32_t d5EntryPhase =
+        assembly_shadow_d5::WindowProbe::Instance().MethodBegin();
+    bool d5ShadowMethod = false;
+#endif
     // Terminal execution is denied before observing, allocating, or mutating
     // method/candidate records. A valid current MethodInfo is not an escape.
     if (TerminalMethodDenied(method)) return false;
@@ -2339,7 +2379,12 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
         if (active && active->byAssembly.count(owners[0])) rejected = method;
         else if (active && active->byAssembly.count(owners[1])) rejected = definition;
         if (active && (active->shadowToBaseline.count(owners[0]) || active->shadowToBaseline.count(owners[1])))
+        {
             s_shadowMethodChecks.fetch_add(1, std::memory_order_release);
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+            d5ShadowMethod = true;
+#endif
+        }
         if (rejected)
         {
             error = AssemblyShadowError::BaselineMethodExecution;
@@ -2368,7 +2413,15 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
         }
     }
     // Cover terminal publication racing the ownership/generic checks.
-    if (error == AssemblyShadowError::Success) return !TerminalMethodDenied(method);
+    if (error == AssemblyShadowError::Success)
+    {
+        const bool allowed = !TerminalMethodDenied(method);
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+        assembly_shadow_d5::WindowProbe::Instance().MethodResult(
+            d5EntryPhase, d5ShadowMethod, allowed);
+#endif
+        return allowed;
+    }
 
     // No managed exception or metadata query is allowed in this boolean hook.
     // Failure strings allocate only on rejection, outside usage/observation locks.
@@ -2401,6 +2454,10 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
     }
     s_state.store(s_active.load(std::memory_order_acquire) ? AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
         std::memory_order_release);
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+    assembly_shadow_d5::WindowProbe::Instance().MethodResult(
+        d5EntryPhase, d5ShadowMethod, false);
+#endif
     return false;
 }
 
