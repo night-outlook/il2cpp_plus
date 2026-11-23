@@ -2382,7 +2382,17 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
         {
             s_shadowMethodChecks.fetch_add(1, std::memory_order_release);
 #if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
-            d5ShadowMethod = true;
+            // C10 must count the exact R03.Node.Keep body target. A guarded
+            // constructor or other Methods method is NOT Keep evidence.
+            const Il2CppAssembly* d5Owner = owners[0];
+            d5ShadowMethod = active->shadowToBaseline.count(d5Owner) != 0 &&
+                d5Owner && d5Owner->aname.name &&
+                std::strcmp(d5Owner->aname.name, "Methods") == 0 &&
+                method && method->klass && method->klass->namespaze &&
+                method->klass->name && method->name &&
+                std::strcmp(method->klass->namespaze, "R03") == 0 &&
+                std::strcmp(method->klass->name, "Node") == 0 &&
+                std::strcmp(method->name, "Keep") == 0;
 #endif
         }
         if (rejected)

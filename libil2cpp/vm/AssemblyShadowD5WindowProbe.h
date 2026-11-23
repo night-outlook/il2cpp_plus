@@ -24,6 +24,8 @@ struct WindowSnapshot
     int32_t p6Count;
     int32_t releaseCount;
     int32_t timedOut;
+    // C10 counters are scoped by AssemblyShadow.cpp to exact Methods/R03.Node.Keep.
+    // Constructors, unrelated methods and synthetic host booleans are not Player proof.
     int32_t shadowMethodAttemptsInP5;
     int32_t shadowMethodAllowedInP5;
     int32_t shadowMethodDeniedInP5;
@@ -126,8 +128,9 @@ public:
         return phase_.load(std::memory_order_acquire);
     }
 
-    // Observe only a REAL active-shadow MethodInfo admitted by the actual
-    // AssertMethodIsActive path, never a fabricated method or host substitute.
+    // In a real Player the caller passes target=true ONLY for the exact
+    // active-shadow Methods/R03.Node.Keep MethodInfo. Host tests use synthetic
+    // booleans to exercise accounting, never as real method-entry evidence.
     void MethodResult(int32_t begunPhase, bool shadow, bool allowed) noexcept
     {
         if (!shadow ||
