@@ -2327,6 +2327,14 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
 #if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
     const int32_t d5EntryPhase =
         assembly_shadow_d5::WindowProbe::Instance().MethodBegin();
+    // State and first-error are sampled at this exact native guard entry,
+    // before its first TerminalMethodDenied decision, not inferred from a
+    // later asynchronous collector snapshot. The test-only witness itself
+    // checks the previously armed exact TLS MethodInfo identity.
+    assembly_shadow_d5::WindowProbe::Instance().TargetGuardEntry(
+        d5EntryPhase, method,
+        static_cast<int32_t>(s_state.load(std::memory_order_acquire)),
+        static_cast<int32_t>(s_firstFailureV2.status()));
     bool d5ShadowMethod = false;
 #endif
     // Terminal execution is denied before observing, allocating, or mutating

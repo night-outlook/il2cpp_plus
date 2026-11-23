@@ -167,6 +167,34 @@ public:
             targetArmCount_.load(std::memory_order_acquire) == 1;
     }
 
+    // C10 v2: snapshot the exact TLS-bound Keep method guard *entry* before
+    // the production terminal policy is consulted. This is a test-only,
+    // single-writer publication. No metadata resolution, GC, allocation,
+    // locks, managed callbacks or disk I/O occur on the method-entry path.
+    void TargetGuardEntry(int32_t begunPhase, const void* methodIdentity,
+                          int32_t stateAtEntry, int32_t firstErrorAtEntry) noexcept
+    {
+        if (begunPhase != static_cast<int32_t>(WindowPhase::AtP5) ||
+            !MatchesTargetOnCurrentThread(methodIdentity) ||
+            targetEntryReady_.load(std::memory_order_relaxed) != 0)
+            return;
+        targetEntryState_.store(stateAtEntry, std::memory_order_relaxed);
+        targetEntryFirstError_.store(firstErrorAtEntry, std::memory_order_relaxed);
+        // Release publishes both fields before either a concurrent collector
+        // or downstream receipt parser can claim a target entry was seen.
+        targetEntryReady_.store(1, std::memory_order_release);
+    }
+
+    bool TryReadTargetGuardEntry(int32_t& stateAtEntry,
+                                 int32_t& firstErrorAtEntry) const noexcept
+    {
+        if (targetEntryReady_.load(std::memory_order_acquire) != 1)
+            return false;
+        stateAtEntry = targetEntryState_.load(std::memory_order_relaxed);
+        firstErrorAtEntry = targetEntryFirstError_.load(std::memory_order_relaxed);
+        return true;
+    }
+
     int32_t TargetArmCount() const noexcept
     {
         return targetArmCount_.load(std::memory_order_acquire);
@@ -236,6 +264,9 @@ private:
         return token;
     }
     std::atomic<int32_t> targetArmCount_{0};
+    std::atomic<int32_t> targetEntryState_{-1};
+    std::atomic<int32_t> targetEntryFirstError_{-1};
+    std::atomic<int32_t> targetEntryReady_{0};
     std::atomic<int32_t> targetDecision_{0};
     std::atomic<int32_t> phase_{0};
     std::atomic<int32_t> maximumWaitMs_{0};
