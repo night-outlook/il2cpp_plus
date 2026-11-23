@@ -2392,7 +2392,9 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
                 method->klass->name && method->name &&
                 std::strcmp(method->klass->namespaze, "R03") == 0 &&
                 std::strcmp(method->klass->name, "Node") == 0 &&
-                std::strcmp(method->name, "Keep") == 0;
+                std::strcmp(method->name, "Keep") == 0 &&
+                assembly_shadow_d5::WindowProbe::Instance().
+                    MatchesTargetOnCurrentThread(method);
 #endif
         }
         if (rejected)

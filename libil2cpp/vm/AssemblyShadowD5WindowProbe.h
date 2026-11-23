@@ -128,24 +128,70 @@ public:
         return phase_.load(std::memory_order_acquire);
     }
 
-    // In a real Player the caller passes target=true ONLY for the exact
-    // active-shadow Methods/R03.Node.Keep MethodInfo. Host tests use synthetic
-    // booleans to exercise accounting, never as real method-entry evidence.
-    void MethodResult(int32_t begunPhase, bool shadow, bool allowed) noexcept
+    // Exactly one source-bound worker invokes ArmTargetForCurrentThread after
+    // binding the live Node instance and the real Class::GetMethodFromName
+    // MethodInfo. Thread-local correlation prevents a second Keep caller from
+    // satisfying the intended worker's method result; identity is exact pointer,
+    // not only assembly/type/name. All operations in the actual guard are
+    // bounded atomic/TLS operations (no metadata lookup/GC/locks/allocations).
+    bool ArmTargetForCurrentThread(const void* methodIdentity) noexcept
     {
-        if (!shadow ||
+        if (!methodIdentity ||
+            phase_.load(std::memory_order_acquire) !=
+                static_cast<int32_t>(WindowPhase::AtP5))
+            return false;
+        int32_t expected = 0;
+        if (!targetArmCount_.compare_exchange_strong(expected, 1,
+                std::memory_order_acq_rel))
+            return false;
+        ThreadAttempt& token = CurrentThreadAttempt();
+        token.owner = this;
+        token.method = methodIdentity;
+        token.active = 1;
+        return true;
+    }
+
+    bool MatchesTargetOnCurrentThread(const void* methodIdentity) const noexcept
+    {
+        const ThreadAttempt& token = CurrentThreadAttempt();
+        return token.owner == this && token.active == 1 &&
+            token.method == methodIdentity &&
+            targetArmCount_.load(std::memory_order_acquire) == 1;
+    }
+
+    int32_t TargetArmCount() const noexcept
+    {
+        return targetArmCount_.load(std::memory_order_acquire);
+    }
+
+    // 0=no observed guard, 1=admitted at P5, 2=denied at P5, 3=raced P6.
+    int32_t TargetDecision() const noexcept
+    {
+        return targetDecision_.load(std::memory_order_acquire);
+    }
+
+    void MethodResult(int32_t begunPhase, bool target, bool allowed) noexcept
+    {
+        if (!target ||
             begunPhase != static_cast<int32_t>(WindowPhase::AtP5))
             return;
+        ThreadAttempt& token = CurrentThreadAttempt();
+        if (token.owner != this || token.active != 1 ||
+            targetArmCount_.load(std::memory_order_acquire) != 1)
+            return; // a competing thread cannot claim this worker's receipt
+        token.active = 0; // one attempt, no second guard/replay
         if (phase_.load(std::memory_order_acquire) !=
                 static_cast<int32_t>(WindowPhase::AtP5))
         {
             methodResultRacedP6_.fetch_add(1, std::memory_order_relaxed);
+            targetDecision_.store(3, std::memory_order_release);
             return;
         }
         shadowMethodAttemptsInP5_.fetch_add(1, std::memory_order_relaxed);
         (allowed ? shadowMethodAllowedInP5_ :
                    shadowMethodDeniedInP5_).fetch_add(1,
                        std::memory_order_relaxed);
+        targetDecision_.store(allowed ? 1 : 2, std::memory_order_release);
     }
 
     WindowSnapshot Read() const noexcept
@@ -170,6 +216,19 @@ public:
     }
 
 private:
+    struct ThreadAttempt
+    {
+        const WindowProbe* owner = nullptr;
+        const void* method = nullptr;
+        int32_t active = 0;
+    };
+    static ThreadAttempt& CurrentThreadAttempt() noexcept
+    {
+        static thread_local ThreadAttempt token;
+        return token;
+    }
+    std::atomic<int32_t> targetArmCount_{0};
+    std::atomic<int32_t> targetDecision_{0};
     std::atomic<int32_t> phase_{0};
     std::atomic<int32_t> maximumWaitMs_{0};
     std::atomic<int32_t> armed_{0};
