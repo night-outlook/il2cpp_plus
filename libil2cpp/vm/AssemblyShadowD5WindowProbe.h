@@ -93,6 +93,14 @@ public:
         }
     }
 
+    // ReleaseP5 performs a release CAS after the worker's body/finally.
+    // Unlike releaseCount_ (relaxed metrics), this acquire read establishes
+    // a happens-before relation for the pinned primitive canary observer.
+    bool HasWorkerCompletedP5Acquire() const noexcept
+    {
+        return release_.load(std::memory_order_acquire) != 0;
+    }
+
     bool ReleaseP5() noexcept
     {
         if (phase_.load(std::memory_order_acquire) !=

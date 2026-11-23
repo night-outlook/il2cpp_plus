@@ -2331,7 +2331,19 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
 #endif
     // Terminal execution is denied before observing, allocating, or mutating
     // method/candidate records. A valid current MethodInfo is not an escape.
-    if (TerminalMethodDenied(method)) return false;
+    if (TerminalMethodDenied(method))
+    {
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+        // C10 test-only: a terminal rejection occurs BEFORE baseline/owner
+        // metadata resolution. Consume only the exact previously armed TLS
+        // method pointer, without metadata lookup, VM locks or allocation.
+        // Keep the original production denial policy and return unchanged.
+        auto& c10 = assembly_shadow_d5::WindowProbe::Instance();
+        c10.MethodResult(d5EntryPhase,
+            c10.MatchesTargetOnCurrentThread(method), false);
+#endif
+        return false;
+    }
     const MethodInfo* definition = method && method->is_inflated && method->genericMethod ?
         method->genericMethod->methodDefinition : method;
     const Il2CppAssembly* owners[2] = {PhysicalMethodAssembly(method), PhysicalMethodAssembly(definition)};
