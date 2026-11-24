@@ -265,10 +265,10 @@ namespace {
         s_droppedClassObservations.fetch_add(1,std::memory_order_relaxed);
     }
 
-    void RecordFirstGuardFailure(AssemblyShadowError error, const std::string& detail,
+    bool RecordFirstGuardFailure(AssemblyShadowError error, const std::string& detail,
         assembly_shadow_first_failure_v2::Origin origin = assembly_shadow_first_failure_v2::Origin::Guard)
     {
-        if (s_typeFailure.load(std::memory_order_acquire)) return;
+        if (s_typeFailure.load(std::memory_order_acquire)) return false;
         std::unique_ptr<TypeFailure> failure(new TypeFailure{error, detail});
         const TypeFailure* expected = nullptr;
         if (s_typeFailure.compare_exchange_strong(expected, failure.get(), std::memory_order_acq_rel))
@@ -277,7 +277,7 @@ namespace {
             // Bind the B1 record to the winner of the EXISTING V1 type-failure
             // publication. An unsuccessful guard writer must not capture a
             // different "first" error before the original CAS is resolved.
-            s_firstFailureV2.TryFreeze(static_cast<int32_t>(error), origin,
+            const bool frozeFirst = s_firstFailureV2.TryFreeze(static_cast<int32_t>(error), origin,
                 detail.data(), detail.size());
             // First-writer-only native evidence; no managed ToString/logger.
             // Original recovery facts stay immutable. Never infer a Player PASS
@@ -285,7 +285,9 @@ namespace {
             std::fprintf(stderr, "[AssemblyShadowFirstFailure] code=%d detail=%.*s truncated=%d\n",
                 static_cast<int32_t>(error), 4096, detail.c_str(), detail.size() > 4096 ? 1 : 0);
             std::fflush(stderr);
+            return frozeFirst;
         }
+        return false;
     }
 
     // A diagnostic throw constructs fixed corelib exception objects by invoking
@@ -322,13 +324,28 @@ namespace {
             !std::strcmp(name, "SystemException") || !std::strcmp(name, "InvalidOperationException");
     }
 
-    bool TerminalMethodDenied(const MethodInfo* method) noexcept
+    struct MethodTerminalPolicy
+    {
+        int32_t state;
+        bool durable;
+    };
+
+    // The probe and production decision use exactly the same terminal inputs.
+    MethodTerminalPolicy ReadMethodTerminalPolicy() noexcept
     {
         const int32_t state = static_cast<int32_t>(s_state.load(std::memory_order_acquire));
         const bool durable = s_typeFailure.load(std::memory_order_acquire) != nullptr ||
             s_unexpectedFailure.load(std::memory_order_acquire) ||
             s_lateBaselineUse.load(std::memory_order_acquire) ||
             s_referenceViolation.load(std::memory_order_acquire);
+        return {state, durable};
+    }
+
+    bool TerminalMethodDenied(const MethodInfo* method) noexcept
+    {
+        const auto observed = ReadMethodTerminalPolicy();
+        const int32_t state = observed.state;
+        const bool durable = observed.durable;
         if (!assembly_shadow_terminal::TerminalForBusiness(state, durable))
             return false; // Healthy calls do not inspect names or class metadata.
         return assembly_shadow_terminal::RejectMethod(state, durable,
@@ -2327,14 +2344,21 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
 #if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
     const int32_t d5EntryPhase =
         assembly_shadow_d5::WindowProbe::Instance().MethodBegin();
-    // State and first-error are sampled at this exact native guard entry,
-    // before its first TerminalMethodDenied decision, not inferred from a
-    // later asynchronous collector snapshot. The test-only witness itself
-    // checks the previously armed exact TLS MethodInfo identity.
-    assembly_shadow_d5::WindowProbe::Instance().TargetGuardEntry(
-        d5EntryPhase, method,
-        static_cast<int32_t>(s_state.load(std::memory_order_acquire)),
-        static_cast<int32_t>(s_firstFailureV2.status()));
+    // Bracket the exact target entry with two samples of the production
+    // terminal inputs and first-error. A changed sample is unknown/raced;
+    // an already-published durable failure is terminal even before B1 freezes.
+    if (assembly_shadow_d5::WindowProbe::Instance().MatchesTargetOnCurrentThread(method))
+    {
+        const auto before = ReadMethodTerminalPolicy();
+        const int32_t first = static_cast<int32_t>(s_firstFailureV2.status());
+        const auto after = ReadMethodTerminalPolicy();
+        const int32_t firstAfter = static_cast<int32_t>(s_firstFailureV2.status());
+        assembly_shadow_d5::WindowProbe::Instance().TargetGuardEntry(
+            d5EntryPhase, method, before.state, first,
+            assembly_shadow_d5::ClassifyGuardEntry(
+                {before.state, first, before.durable},
+                {after.state, firstAfter, after.durable}));
+    }
     bool d5ShadowMethod = false;
 #endif
     // Terminal execution is denied before observing, allocating, or mutating
@@ -2348,7 +2372,7 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
         // Keep the original production denial policy and return unchanged.
         auto& c10 = assembly_shadow_d5::WindowProbe::Instance();
         c10.MethodResult(d5EntryPhase,
-            c10.MatchesTargetOnCurrentThread(method), false);
+            c10.MatchesTargetOnCurrentThread(method), false, 1 /* terminal policy */);
 #endif
         return false;
     }
@@ -2450,13 +2474,21 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
         const bool allowed = !TerminalMethodDenied(method);
 #if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
         assembly_shadow_d5::WindowProbe::Instance().MethodResult(
-            d5EntryPhase, d5ShadowMethod, allowed);
+            d5EntryPhase, d5ShadowMethod, allowed, allowed ? 0 : 1 /* terminal policy */);
 #endif
         return allowed;
     }
 
     // No managed exception or metadata query is allowed in this boolean hook.
     // Failure strings allocate only on rejection, outside usage/observation locks.
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+    // A denial owned by a different failure writer is not healthy P5 policy proof.
+    const auto d5BeforeFailure = ReadMethodTerminalPolicy();
+    const bool d5HealthyBeforeFailure = d5BeforeFailure.state == 5 &&
+        !d5BeforeFailure.durable &&
+        static_cast<int32_t>(s_firstFailureV2.status()) == 0;
+    bool d5OwnFrozenFailure = false;
+#endif
     try
     {
         const MethodInfo* detailMethod = rejected ? rejected : method;
@@ -2473,7 +2505,11 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
             detail += std::string(" CapturedArgumentAssembly=") +
                 (argumentFailure.candidate ? argumentFailure.candidate->name : "<none>") +
                 " Context=" + argumentFailure.context + " TypePath=" + argumentFailure.path + " Reason=" + argumentFailure.reason;
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+        d5OwnFrozenFailure = RecordFirstGuardFailure(error, detail);
+#else
         RecordFirstGuardFailure(error, detail);
+#endif
     }
     catch (...)
     {
@@ -2484,11 +2520,18 @@ bool AssemblyShadow::AssertMethodIsActive(const MethodInfo* method, const char* 
             failureReason, sizeof failureReason - 1);
         s_unexpectedFailure.store(true, std::memory_order_release);
     }
+#if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
+    const bool d5OwnDenial = d5HealthyBeforeFailure && d5OwnFrozenFailure &&
+        s_state.load(std::memory_order_acquire) == AssemblyShadowState::Committing &&
+        !s_unexpectedFailure.load(std::memory_order_acquire) &&
+        !s_lateBaselineUse.load(std::memory_order_acquire) &&
+        !s_referenceViolation.load(std::memory_order_acquire);
+#endif
     s_state.store(s_active.load(std::memory_order_acquire) ? AssemblyShadowState::FailedAfterCommit : AssemblyShadowState::Failed,
         std::memory_order_release);
 #if defined(HYBRIDCLR_R03_D5_WINDOW_PROBE) && HYBRIDCLR_R03_D5_WINDOW_PROBE
     assembly_shadow_d5::WindowProbe::Instance().MethodResult(
-        d5EntryPhase, d5ShadowMethod, false);
+        d5EntryPhase, d5ShadowMethod, false, d5OwnDenial ? 0 : 2 /* unowned/raced */);
 #endif
     return false;
 }

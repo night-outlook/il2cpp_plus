@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <thread>
+#include "AssemblyShadowTerminalExecution.h"
 
 namespace il2cpp { namespace vm { namespace assembly_shadow_d5 {
 
@@ -14,6 +15,27 @@ enum class WindowPhase : int32_t
 {
     Idle = 0, Armed = 1, AtP5 = 2, AtP6 = 3, Complete = 4
 };
+
+// Wire v3 policy classification. Two equal samples are only an observed
+// precondition, not a transaction-wide atomic snapshot. Terminal decisions
+// reached later are separately recorded as raced/unowned.
+struct GuardPolicySample
+{
+    int32_t state;
+    int32_t firstError;
+    bool durable;
+};
+inline int32_t ClassifyGuardEntry(const GuardPolicySample& before,
+                                 const GuardPolicySample& after) noexcept
+{
+    if (before.state != after.state || before.firstError != after.firstError ||
+        before.durable != after.durable)
+        return 3; // mixed / raced
+    if (assembly_shadow_terminal::TerminalForBusiness(before.state, before.durable) ||
+        before.firstError != 0)
+        return 2; // preexisting terminal or first-error
+    return before.state == 5 ? 1 : 3; // observed healthy Committing or unknown
+}
 
 struct WindowSnapshot
 {
@@ -93,7 +115,7 @@ public:
         }
     }
 
-    // ReleaseP5 performs a release CAS after the worker's body/finally.
+    // ReleaseP5 is a same-token release CAS at the isolated fixture's post-Invoke finally.
     // Unlike releaseCount_ (relaxed metrics), this acquire read establishes
     // a happens-before relation for the pinned primitive canary observer.
     bool HasWorkerCompletedP5Acquire() const noexcept
@@ -106,6 +128,12 @@ public:
         if (phase_.load(std::memory_order_acquire) !=
                 static_cast<int32_t>(WindowPhase::AtP5))
             return false;
+        const ThreadAttempt& token = CurrentThreadAttempt();
+        const int32_t decision = TargetDecision();
+        if (token.owner != this || token.active != 0 || !token.method ||
+            targetEntryReady_.load(std::memory_order_acquire) != 1 ||
+            (decision != 1 && decision != 2))
+            return false; // no early, foreign or unobserved completion
         int32_t expected = 0;
         if (!release_.compare_exchange_strong(expected, 1,
                 std::memory_order_acq_rel))
@@ -167,12 +195,13 @@ public:
             targetArmCount_.load(std::memory_order_acquire) == 1;
     }
 
-    // C10 v2: snapshot the exact TLS-bound Keep method guard *entry* before
+    // C10 v3: snapshot the exact TLS-bound Keep method guard *entry* before
     // the production terminal policy is consulted. This is a test-only,
     // single-writer publication. No metadata resolution, GC, allocation,
     // locks, managed callbacks or disk I/O occur on the method-entry path.
     void TargetGuardEntry(int32_t begunPhase, const void* methodIdentity,
-                          int32_t stateAtEntry, int32_t firstErrorAtEntry) noexcept
+                          int32_t stateAtEntry, int32_t firstErrorAtEntry,
+                          int32_t entryPolicy) noexcept
     {
         if (begunPhase != static_cast<int32_t>(WindowPhase::AtP5) ||
             !MatchesTargetOnCurrentThread(methodIdentity) ||
@@ -180,18 +209,21 @@ public:
             return;
         targetEntryState_.store(stateAtEntry, std::memory_order_relaxed);
         targetEntryFirstError_.store(firstErrorAtEntry, std::memory_order_relaxed);
-        // Release publishes both fields before either a concurrent collector
+        targetEntryPolicy_.store(entryPolicy, std::memory_order_relaxed);
+        // Release publishes all fields before either a concurrent collector
         // or downstream receipt parser can claim a target entry was seen.
         targetEntryReady_.store(1, std::memory_order_release);
     }
 
     bool TryReadTargetGuardEntry(int32_t& stateAtEntry,
-                                 int32_t& firstErrorAtEntry) const noexcept
+                                 int32_t& firstErrorAtEntry,
+                                 int32_t& entryPolicy) const noexcept
     {
         if (targetEntryReady_.load(std::memory_order_acquire) != 1)
             return false;
         stateAtEntry = targetEntryState_.load(std::memory_order_relaxed);
         firstErrorAtEntry = targetEntryFirstError_.load(std::memory_order_relaxed);
+        entryPolicy = targetEntryPolicy_.load(std::memory_order_relaxed);
         return true;
     }
 
@@ -206,7 +238,13 @@ public:
         return targetDecision_.load(std::memory_order_acquire);
     }
 
-    void MethodResult(int32_t begunPhase, bool target, bool allowed) noexcept
+    int32_t TargetDenialKind() const noexcept
+    {
+        return targetDenialKind_.load(std::memory_order_acquire);
+    }
+
+    void MethodResult(int32_t begunPhase, bool target, bool allowed,
+                      int32_t denialKind = 0) noexcept
     {
         if (!target ||
             begunPhase != static_cast<int32_t>(WindowPhase::AtP5))
@@ -227,6 +265,7 @@ public:
         (allowed ? shadowMethodAllowedInP5_ :
                    shadowMethodDeniedInP5_).fetch_add(1,
                        std::memory_order_relaxed);
+        targetDenialKind_.store(denialKind, std::memory_order_relaxed);
         targetDecision_.store(allowed ? 1 : 2, std::memory_order_release);
     }
 
@@ -267,6 +306,8 @@ private:
     std::atomic<int32_t> targetEntryState_{-1};
     std::atomic<int32_t> targetEntryFirstError_{-1};
     std::atomic<int32_t> targetEntryReady_{0};
+    std::atomic<int32_t> targetEntryPolicy_{0};
+    std::atomic<int32_t> targetDenialKind_{0};
     std::atomic<int32_t> targetDecision_{0};
     std::atomic<int32_t> phase_{0};
     std::atomic<int32_t> maximumWaitMs_{0};
