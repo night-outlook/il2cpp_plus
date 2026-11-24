@@ -1,0 +1,5 @@
+Disposable Connector write transport verification.
+Repository: night-outlook/il2cpp_plus
+Intended base: codex/assembly-shadow at 1268dd417ffe9090fcd9ea2d49542c97ed3cccb3
+Branch: codex/assembly-shadow-smoke-20261124-primary-bootstrap-27a6d4
+Only this disposable branch may contain this file.
